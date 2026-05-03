@@ -21,19 +21,68 @@ import AppKit
 @MainActor
 final class KinClawSupervisor: ObservableObject {
 
-    /// Where kinclaw could be installed. First match wins.
+    /// Where kinclaw could be installed, plus the matching working
+    /// directory and souls/ location for each. First found wins.
     /// `Resources/` will get populated in M6 when we ship the
     /// embedded binary inside the .app bundle.
-    private static let candidatePaths: [String] = {
-        var paths = [String]()
-        if let bundled = Bundle.main.url(forResource: "kinclaw", withExtension: nil) {
-            paths.append(bundled.path)
+    struct KinClawInstall {
+        let binary: String
+        let workingDir: String?    // for relative `souls/...` paths
+        let soulsDir: String?
+    }
+
+    private static var candidates: [KinClawInstall] {
+        let home = NSHomeDirectory()
+        var c = [KinClawInstall]()
+
+        // 1. Embedded inside the .app (M6 will populate)
+        if let bundled = Bundle.main.url(forResource: "kinclaw",
+                                          withExtension: nil) {
+            c.append(.init(
+                binary: bundled.path,
+                workingDir: bundled.deletingLastPathComponent().path,
+                soulsDir: bundled.deletingLastPathComponent()
+                    .appendingPathComponent("souls").path))
         }
-        paths.append("/opt/homebrew/bin/kinclaw")
-        paths.append("/usr/local/bin/kinclaw")
-        paths.append((NSHomeDirectory() as NSString).appendingPathComponent("go/bin/kinclaw"))
-        return paths
-    }()
+
+        // 2. Local dev repo — most common case for KinClaw devs
+        let devRepo = "\(home)/Documents/Workspace/kinclaw"
+        if FileManager.default.isExecutableFile(atPath: "\(devRepo)/kinclaw") {
+            c.append(.init(
+                binary: "\(devRepo)/kinclaw",
+                workingDir: devRepo,
+                soulsDir: "\(devRepo)/souls"))
+        }
+
+        // 3. Homebrew (Apple Silicon)
+        if FileManager.default.isExecutableFile(
+            atPath: "/opt/homebrew/bin/kinclaw") {
+            c.append(.init(
+                binary: "/opt/homebrew/bin/kinclaw",
+                workingDir: nil,
+                soulsDir: "/opt/homebrew/share/kinclaw/souls"))
+        }
+
+        // 4. Homebrew (Intel) / manual install
+        if FileManager.default.isExecutableFile(
+            atPath: "/usr/local/bin/kinclaw") {
+            c.append(.init(
+                binary: "/usr/local/bin/kinclaw",
+                workingDir: nil,
+                soulsDir: "/usr/local/share/kinclaw/souls"))
+        }
+
+        // 5. `go install` — requires souls to exist somewhere else
+        let goBin = "\(home)/go/bin/kinclaw"
+        if FileManager.default.isExecutableFile(atPath: goBin) {
+            c.append(.init(
+                binary: goBin,
+                workingDir: nil,
+                soulsDir: "\(home)/.localkin/souls"))
+        }
+
+        return c
+    }
 
     enum State: Equatable {
         case stopped
@@ -80,26 +129,60 @@ final class KinClawSupervisor: ObservableObject {
             return
         }
 
-        // 2. Locate the binary.
-        guard let binaryPath = Self.findKinClawBinary() else {
+        // 2. Locate a kinclaw install (binary + matching souls dir).
+        guard let install = Self.findInstall() else {
             state = .notInstalled
-            print("[KinClawSupervisor] kinclaw binary not found in:")
-            for p in Self.candidatePaths { print("  - \(p)") }
+            print("[KinClawSupervisor] kinclaw binary not found.")
             return
         }
-        print("[KinClawSupervisor] using binary at \(binaryPath)")
+        print("[KinClawSupervisor] install: \(install.binary)")
+        if let wd = install.workingDir {
+            print("[KinClawSupervisor] working dir: \(wd)")
+        }
+        if let sd = install.soulsDir {
+            print("[KinClawSupervisor] souls dir: \(sd)")
+        }
 
         // 3. Spawn.
         state = .starting
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: binaryPath)
-        p.arguments = [
+        p.executableURL = URL(fileURLWithPath: install.binary)
+
+        // Working dir matters: dev-build kinclaw uses relative
+        // `souls/pilot.soul.md` paths in its default soul lookup.
+        if let wd = install.workingDir {
+            p.currentDirectoryURL = URL(fileURLWithPath: wd)
+        }
+
+        var args = [
             "serve",
             "-port", "\(port)",
             // -no-record: don't write JSONL session log; user can
             // opt into recording via Settings (M5+) if they want.
             "-no-record",
         ]
+        // -soul: pick the default Pilot soul if we can find one.
+        // Looks in the install's souls/ dir first, then ~/.localkin/
+        // souls/ as a user-level fallback.
+        if let soulPath = Self.defaultSoulPath(install: install) {
+            args.append(contentsOf: ["-soul", soulPath])
+            print("[KinClawSupervisor] soul: \(soulPath)")
+        }
+        p.arguments = args
+
+        // Inherit env, then layer our defaults. SEARXNG_ENDPOINT is
+        // the big one — when running .app via Launch Services,
+        // shell-set env vars don't propagate, so users were having
+        // to start kinclaw serve manually with the env to get
+        // web_search working through SearXNG.
+        var env = ProcessInfo.processInfo.environment
+        if env["SEARXNG_ENDPOINT"] == nil {
+            // Container at :8080 is the conventional default; if it's
+            // not running, kinclaw's web_search falls back to DDG.
+            env["SEARXNG_ENDPOINT"] = "http://localhost:8080"
+        }
+        p.environment = env
+
         // Pipe stdout / stderr through to ours so the dev sees
         // kinclaw's logs in Console / Terminal during development.
         p.standardOutput = FileHandle.standardOutput
@@ -196,15 +279,31 @@ final class KinClawSupervisor: ObservableObject {
         return false
     }
 
-    /// First-match search through the candidate paths. The kinclaw
-    /// binary needs to be executable, so we check the access bit
-    /// rather than just existence.
-    private static func findKinClawBinary() -> String? {
-        let fm = FileManager.default
-        for path in candidatePaths {
-            if fm.isExecutableFile(atPath: path) {
-                return path
+    /// First-match search through known install layouts. Each
+    /// candidate carries its expected workingDir + souls dir so the
+    /// spawned subprocess gets the right context.
+    private static func findInstall() -> KinClawInstall? {
+        for c in candidates {
+            if FileManager.default.isExecutableFile(atPath: c.binary) {
+                return c
             }
+        }
+        return nil
+    }
+
+    /// Resolve a sensible default `-soul` path for the given install.
+    /// Looks for Pilot first (the dock's marquee soul), then any
+    /// soul in the install's souls/ dir, then user-level
+    /// ~/.localkin/souls/. nil means "let kinclaw use its built-in
+    /// default", which is also fine.
+    private static func defaultSoulPath(install: KinClawInstall) -> String? {
+        let fm = FileManager.default
+        let userSouls = (NSHomeDirectory() as NSString)
+            .appendingPathComponent(".localkin/souls")
+        let dirs = [install.soulsDir, userSouls].compactMap { $0 }
+        for dir in dirs {
+            let pilot = "\(dir)/pilot.soul.md"
+            if fm.fileExists(atPath: pilot) { return pilot }
         }
         return nil
     }
