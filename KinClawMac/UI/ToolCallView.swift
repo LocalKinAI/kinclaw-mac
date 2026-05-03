@@ -1,0 +1,128 @@
+import SwiftUI
+
+/// Inline collapsible widget for a single `tool_call` + matching
+/// `tool_result` event pair from a local kinclaw turn. Renders below
+/// the assistant text so the conversational thread reads cleanly,
+/// with the tool detail expandable on demand.
+///
+/// Default state: collapsed. Header shows the tool name + a status
+/// dot (yellow = running, green = done, red = error from output).
+/// Click the header to toggle the expanded body, which shows
+/// params (key=value lines) and output (mono code block).
+struct ToolCallView: View {
+    let call: ToolCall
+
+    @State private var expanded = false
+
+    private var status: Status {
+        guard let out = call.output else { return .running }
+        let lower = out.lowercased()
+        if lower.contains("error") || lower.hasPrefix("err ") {
+            return .error
+        }
+        return .done
+    }
+
+    enum Status {
+        case running, done, error
+
+        var color: Color {
+            switch self {
+            case .running: return .yellow
+            case .done:    return .green
+            case .error:   return .red
+            }
+        }
+
+        var label: String {
+            switch self {
+            case .running: return "running…"
+            case .done:    return "done"
+            case .error:   return "error"
+            }
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header — always visible, click to toggle
+            Button {
+                withAnimation(.easeOut(duration: 0.12)) {
+                    expanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: expanded ? "chevron.down"
+                                                : "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundColor(.secondary)
+                    Image(systemName: "wrench.and.screwdriver.fill")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                    Text(call.name)
+                        .font(.system(size: 11, weight: .semibold,
+                                      design: .monospaced))
+                    Circle()
+                        .fill(status.color)
+                        .frame(width: 5, height: 5)
+                    Text(status.label)
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    if !expanded, let out = call.output, !out.isEmpty {
+                        Text(out
+                            .replacingOccurrences(of: "\n", with: " ")
+                            .prefix(40))
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundColor(.secondary.opacity(0.7))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if expanded {
+                expandedBody
+                    .transition(.opacity)
+            }
+        }
+        .background(Color.platformTertiaryBackground.opacity(0.5))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    @ViewBuilder
+    private var expandedBody: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if !call.params.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(Array(call.params.keys.sorted()), id: \.self) { k in
+                        HStack(alignment: .top, spacing: 4) {
+                            Text("\(k):")
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundColor(.secondary)
+                            Text(call.params[k] ?? "")
+                                .font(.system(size: 10, design: .monospaced))
+                                .textSelection(.enabled)
+                                .lineLimit(3)
+                        }
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+            }
+            if let out = call.output, !out.isEmpty {
+                Text(out)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(.primary.opacity(0.9))
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.platformTertiaryBackground.opacity(0.7))
+                    .textSelection(.enabled)
+            }
+        }
+    }
+}

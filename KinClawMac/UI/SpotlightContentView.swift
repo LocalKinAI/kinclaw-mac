@@ -436,16 +436,20 @@ struct SpotlightContentView: View {
         return HStack(alignment: .top, spacing: 8) {
             if msg.isUser {
                 Spacer(minLength: 30)
-                Text(msg.content)
-                    .font(.system(size: 13))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Color.green.opacity(0.18))
-                    .foregroundColor(.primary)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                    .textSelection(.enabled)
+                BubbleWithCopy(content: msg.content) {
+                    Text(msg.content)
+                        .font(.system(size: 13))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Color.green.opacity(0.18))
+                        .foregroundColor(.primary)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .textSelection(.enabled)
+                }
             } else {
-                assistantBubble(msg, showCursor: isLastAssistantWhileStreaming)
+                BubbleWithCopy(content: msg.content) {
+                    assistantBubble(msg, showCursor: isLastAssistantWhileStreaming)
+                }
                 Spacer(minLength: 30)
             }
         }
@@ -453,20 +457,44 @@ struct SpotlightContentView: View {
 
     private func assistantBubble(_ msg: ChatMessage,
                                  showCursor: Bool) -> some View {
-        // Use TimelineView at 2Hz so the cursor blinks without a
-        // standing Timer. Only the streaming bubble pays the cost;
-        // settled messages re-render once and stop.
-        TimelineView(.periodic(from: .now, by: 0.5)) { context in
-            let cursorVisible = showCursor
-                && Int(context.date.timeIntervalSinceReferenceDate * 2) % 2 == 0
-            Text(msg.content + (cursorVisible ? " █" : "   "))
-                .font(.system(size: 13))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(Color.platformSecondaryBackground.opacity(0.6))
-                .foregroundColor(.primary)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .textSelection(.enabled)
+        // Renders Markdown body + any tool-call widgets attached to
+        // this message. Streaming cursor sits at the end of the
+        // text portion only; tool widgets render below.
+        VStack(alignment: .leading, spacing: 6) {
+            if !msg.content.isEmpty || showCursor {
+                streamingMarkdownText(msg, showCursor: showCursor)
+            }
+            ForEach(msg.toolCalls) { call in
+                ToolCallView(call: call)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(maxWidth: 320, alignment: .leading)
+        .background(Color.platformSecondaryBackground.opacity(0.6))
+        .foregroundColor(.primary)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    @ViewBuilder
+    private func streamingMarkdownText(_ msg: ChatMessage,
+                                        showCursor: Bool) -> some View {
+        if showCursor {
+            // Streaming bubble — TimelineView drives the blink without
+            // a standing Timer. We pay the redraw cost only on the
+            // active bubble; settled messages render once and stop.
+            TimelineView(.periodic(from: .now, by: 0.5)) { context in
+                let on = Int(context.date.timeIntervalSinceReferenceDate * 2) % 2 == 0
+                VStack(alignment: .leading, spacing: 6) {
+                    MarkdownView(text: msg.content)
+                    Text(on ? "█" : " ")
+                        .font(.system(size: 13, design: .monospaced))
+                        .foregroundColor(.green.opacity(0.7))
+                        .frame(height: 14, alignment: .leading)
+                }
+            }
+        } else {
+            MarkdownView(text: msg.content)
         }
     }
 
@@ -729,28 +757,106 @@ struct SpotlightContentView: View {
                 scrollTrigger += 1
             }
         case .toolCall:
-            if let name = event.name {
-                messages[assistantIndex].content += "\n\n*🔧 \(name)*"
-                scrollTrigger += 1
-            }
+            // Append a new ToolCall to the message — output stays
+            // nil until the matching tool_result lands. The
+            // ToolCallView renders "running…" while output == nil.
+            guard let name = event.name else { break }
+            let id = event.id ?? UUID().uuidString
+            messages[assistantIndex].toolCalls.append(ToolCall(
+                id: id,
+                name: name,
+                params: event.params ?? [:],
+                output: nil
+            ))
+            scrollTrigger += 1
         case .toolResult:
-            if let output = event.output, !output.isEmpty {
-                let preview = output.count > 400
-                    ? String(output.prefix(400)) + "…"
-                    : output
-                messages[assistantIndex].content += "\n```\n\(preview)\n```"
-                scrollTrigger += 1
+            // Match by id (when the server provides one) or by the
+            // most-recent uncompleted call. handles the common case
+            // where IDs round-trip cleanly + falls back gracefully
+            // when the server omits the id field on results.
+            guard let output = event.output else { break }
+            if let evID = event.id,
+               let idx = messages[assistantIndex].toolCalls
+                   .firstIndex(where: { $0.id == evID }) {
+                messages[assistantIndex].toolCalls[idx].output = output
+            } else if let idx = messages[assistantIndex].toolCalls
+                   .lastIndex(where: { $0.output == nil }) {
+                messages[assistantIndex].toolCalls[idx].output = output
+            } else {
+                // Tool result with no matching call — render it as a
+                // synthetic one so the user still sees the output
+                // rather than us silently swallowing it.
+                messages[assistantIndex].toolCalls.append(ToolCall(
+                    id: UUID().uuidString,
+                    name: event.name ?? "result",
+                    params: [:],
+                    output: output
+                ))
             }
+            scrollTrigger += 1
         case .error:
-            let msg = event.message ?? "kinclaw reported an error"
+            let m = event.message ?? "kinclaw reported an error"
             if !messages[assistantIndex].content.isEmpty {
                 messages[assistantIndex].content += "\n\n"
             }
-            messages[assistantIndex].content += "[error: \(msg)]"
+            messages[assistantIndex].content += "**Error:** \(m)"
             scrollTrigger += 1
         case .hello, .userMessage, .turnDone,
              .screenFrame, .recordDone, .soulSwitched, .none:
             break
+        }
+    }
+}
+
+// MARK: - Hover-to-copy bubble wrapper
+
+/// Wraps any chat bubble view in an overlay that surfaces a copy
+/// button on hover. Click → content goes to NSPasteboard.general
+/// and the icon flashes to a checkmark for 1.2s as confirmation.
+private struct BubbleWithCopy<Content: View>: View {
+    let content: String
+    /// Renamed from `body` to avoid colliding with View.body.
+    @ViewBuilder let bubbleContent: () -> Content
+
+    @State private var hovering = false
+    @State private var copied = false
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            bubbleContent()
+            if hovering {
+                Button {
+                    copy()
+                } label: {
+                    Image(systemName: copied ? "checkmark.circle.fill"
+                                              : "doc.on.doc")
+                        .font(.system(size: 11))
+                        .foregroundColor(copied ? .green : .secondary)
+                        .padding(4)
+                        .background(
+                            Circle()
+                                .fill(Color.black.opacity(0.4))
+                        )
+                }
+                .buttonStyle(.plain)
+                .offset(x: 4, y: -4)
+                .transition(.opacity)
+            }
+        }
+        .onHover { isHovering in
+            withAnimation(.easeOut(duration: 0.1)) {
+                hovering = isHovering
+            }
+        }
+    }
+
+    private func copy() {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(content, forType: .string)
+        copied = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            copied = false
         }
     }
 }
