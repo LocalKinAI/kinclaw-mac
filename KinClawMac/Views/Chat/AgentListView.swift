@@ -30,6 +30,10 @@ struct AgentListView: View {
                 return (domain, sorted)
             }
             .sorted { a, b in
+                // Local KinClaw souls always lead — that's the
+                // marquee surface on a Mac dock.
+                if a.0 == "kinclaw" { return true }
+                if b.0 == "kinclaw" { return false }
                 if a.0 == "core" { return true }
                 if b.0 == "core" { return false }
                 return a.0 < b.0
@@ -185,6 +189,7 @@ struct AgentListView: View {
 
     static func domainIcon(_ domain: String) -> String {
         switch domain {
+        case "kinclaw": return "laptopcomputer"
         case "core": return "star.fill"
         case "board": return "building.columns.fill"
         case "bible": return "book.fill"
@@ -211,6 +216,7 @@ struct AgentListView: View {
 
     static func domainColor(_ domain: String) -> Color {
         switch domain {
+        case "kinclaw": return .green
         case "core": return .yellow
         case "board": return .blue
         case "bible": return .orange
@@ -431,12 +437,38 @@ struct AgentListView: View {
     private func loadAgents() async {
         isLoading = agents.isEmpty
         errorMessage = nil
-        do {
-            agents = try await APIClient.shared.fetchAgents()
-        } catch {
-            if agents.isEmpty {
-                errorMessage = "Could not reach api.localkin.dev"
+
+        // Two sources, one list. Fetch in parallel so a slow cloud
+        // doesn't delay the local list (or vice versa) — each branch
+        // swallows its own errors and just contributes an empty array
+        // on failure. We only surface a top-level errorMessage if
+        // BOTH branches came back empty, which means nothing useful
+        // can be displayed.
+        async let cloudTask: [Agent] = {
+            do {
+                return try await APIClient.shared.fetchAgents()
+            } catch {
+                return []
             }
+        }()
+
+        async let localTask: [Agent] = {
+            do {
+                let souls = try await KinClawAPIClient.default.fetchSouls()
+                return souls.map(\.asAgent)
+            } catch {
+                return []
+            }
+        }()
+
+        let cloud = await cloudTask
+        let local = await localTask
+        // Local first — KinClaw souls are the headline feature on
+        // this dock; cloud agents are the long tail.
+        agents = local + cloud
+
+        if agents.isEmpty {
+            errorMessage = "No agents available — make sure kinclaw is running locally, or check your internet connection."
         }
         isLoading = false
     }
