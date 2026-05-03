@@ -202,21 +202,14 @@ struct SpotlightContentView: View {
                 }
             }
 
-            // ── LocalKin Solo agents (3 today, from
-            //     ~/.localkin/souls/) — standalone individual chat
-            //     souls (Claude / Cloud / default), distinct from
-            //     KinClaw's computer-use roles. ──
-            if !localKinSouls.isEmpty {
-                Menu("🤖  Solo agents  (\(localKinSouls.count))") {
-                    ForEach(localKinSouls) { agentMenuRow($0) }
-                }
-            }
+            // (Solo agents group removed — those generic LocalKin
+            // souls under ~/.localkin/souls/ are now filtered out
+            // at loadAgents and don't reach the picker.)
 
-            // ── Core — api.localkin.dev/ landing page headliners.
-            //     6 general-audience agents (Guyon / English /
-            //     TCM / Citizen / Chinese-tutor / Spanish). Some
-            //     overlap with Selah / Heal (guyon, tcm) — Core is
-            //     where they're surfaced as featured entries. ──
+            // ── Core — `localkin/scripts/serve.sh` AGENTS array,
+            //     17 publicly tunneled agents at *.localkin.dev.
+            //     Some overlap with Selah / Heal (guyon, tcm) but
+            //     Core is the entry-point group that surfaces them. ──
             if !coreAgents.isEmpty {
                 Menu("⭐  Core  (\(coreAgents.count))") {
                     ForEach(coreAgents) { agentMenuRow($0) }
@@ -588,7 +581,13 @@ struct SpotlightContentView: View {
         async let localTask: [Agent] = {
             do {
                 let souls = try await KinClawAPIClient.default.fetchSouls()
-                return souls.map(\.asAgent)
+                // Drop the generic "LocalKin Claude / Cloud / default"
+                // souls under ~/.localkin/souls/ — they're not the
+                // dock's audience. Only show KinClaw branded souls
+                // here. Per Jacky 2026-05-03.
+                return souls
+                    .filter { $0.name.hasPrefix("KinClaw") }
+                    .map(\.asAgent)
             } catch { return [] }
         }()
 
