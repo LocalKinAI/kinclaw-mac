@@ -476,6 +476,7 @@ struct ChatView: View {
 
         client.startStreaming(
             hostname: hostname,
+            agentSlug: agent.slug,
             messages: apiMessages
         )
     }

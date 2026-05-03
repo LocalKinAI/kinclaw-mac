@@ -1,0 +1,144 @@
+import Foundation
+
+/// Static catalog of cloud LocalKin agents — the spiritual + TCM
+/// masters served by `api.localkin.dev/v1/chat?agent=<slug>`.
+///
+/// Why static and not /v1/agents discovery: the cloud no longer
+/// exposes a public agent-list endpoint (it returned 404 as of
+/// 2026-05-03). Each vertical app — faith.localkin.ai, heal.localkin.ai
+/// — ships its OWN hardcoded master list inside the Next.js bundle
+/// (see `localkin-player/src/app/{selah,heal}/masters.ts`). KinClaw
+/// Mac mirrors that pattern: a baked-in catalog refreshed on each
+/// release rather than a live fetch.
+///
+/// Generated 2026-05-03 from localkin-player commit at the time;
+/// 42 spiritual + 39 TCM = 81 masters total.
+struct CloudMaster: Codable, Identifiable, Hashable {
+    let slug: String
+    let nameZh: String
+    let nameEn: String
+    let era: String
+    let avatar: String
+    let domain: String
+
+    var id: String { slug }
+}
+
+extension CloudMaster {
+    /// Bridge to the existing `Agent` model so AgentListView /
+    /// SpotlightContentView render cloud masters without a parallel
+    /// rendering path.
+    var asAgent: Agent {
+        Agent(
+            name: nameEn,
+            slug: slug,
+            port: nil,
+            model: nil,
+            online: true,
+            // Marker — the new chat URL is built from this hostname
+            // plus the slug query param in SSEClient.
+            hostname: "api.localkin.dev",
+            domain: domain,
+            // nil tells ChatView/SpotlightContentView to use the
+            // cloud transport.
+            localSoulPath: nil
+        )
+    }
+}
+
+enum CloudAgentCatalog {
+    /// All baked-in cloud masters. Order: Selah first, then Heal.
+    static let all: [CloudMaster] = [
+        // ── Selah / Faith — spiritual (42 masters) ──
+        .init(slug: "irenaeus", nameZh: "爱任纽", nameEn: "Irenaeus", era: "130-202", avatar: "📜", domain: "spiritual"),
+        .init(slug: "athanasius", nameZh: "亚他那修", nameEn: "Athanasius", era: "296-373", avatar: "⚔️", domain: "spiritual"),
+        .init(slug: "chrysostom", nameZh: "金口约翰", nameEn: "John Chrysostom", era: "347-407", avatar: "🎙️", domain: "spiritual"),
+        .init(slug: "guyon", nameZh: "盖恩夫人", nameEn: "Madame Guyon", era: "1648-1717", avatar: "🕊", domain: "spiritual"),
+        .init(slug: "murray", nameZh: "慕安德烈", nameEn: "Andrew Murray", era: "1828-1917", avatar: "🔥", domain: "spiritual"),
+        .init(slug: "lawrence", nameZh: "劳伦斯弟兄", nameEn: "Brother Lawrence", era: "1614-1691", avatar: "☕", domain: "spiritual"),
+        .init(slug: "john_cross", nameZh: "十字若望", nameEn: "St. John of the Cross", era: "1542-1591", avatar: "🌙", domain: "spiritual"),
+        .init(slug: "teresa_avila", nameZh: "大德兰", nameEn: "St. Teresa of Avila", era: "1515-1582", avatar: "🏰", domain: "spiritual"),
+        .init(slug: "therese", nameZh: "小德兰", nameEn: "St. Thérèse of Lisieux", era: "1873-1897", avatar: "🌹", domain: "spiritual"),
+        .init(slug: "molinos", nameZh: "莫利诺斯", nameEn: "Miguel de Molinos", era: "1628-1696", avatar: "🕌", domain: "spiritual"),
+        .init(slug: "cloud_author", nameZh: "不知之云", nameEn: "Cloud of Unknowing", era: "14世纪", avatar: "☁", domain: "spiritual"),
+        .init(slug: "charles_spurgeon", nameZh: "司布真", nameEn: "Charles Spurgeon", era: "1834-1892", avatar: "👑", domain: "spiritual"),
+        .init(slug: "dl_moody", nameZh: "慕迪", nameEn: "D.L. Moody", era: "1837-1899", avatar: "📢", domain: "spiritual"),
+        .init(slug: "aw_tozer", nameZh: "陶恕", nameEn: "A.W. Tozer", era: "1897-1963", avatar: "🔥", domain: "spiritual"),
+        .init(slug: "jonathan_edwards", nameZh: "爱德华兹", nameEn: "Jonathan Edwards", era: "1703-1758", avatar: "🔥", domain: "spiritual"),
+        .init(slug: "martyn_lloyd_jones", nameZh: "钟马田", nameEn: "Martyn Lloyd-Jones", era: "1899-1981", avatar: "📖", domain: "spiritual"),
+        .init(slug: "charles_finney", nameZh: "芬尼", nameEn: "Charles Finney", era: "1792-1875", avatar: "💥", domain: "spiritual"),
+        .init(slug: "john_wesley", nameZh: "卫斯理", nameEn: "John Wesley", era: "1703-1791", avatar: "❤️", domain: "spiritual"),
+        .init(slug: "dietrich_bonhoeffer", nameZh: "潘霍华", nameEn: "Dietrich Bonhoeffer", era: "1906-1945", avatar: "✝️", domain: "spiritual"),
+        .init(slug: "martin_luther", nameZh: "路德", nameEn: "Martin Luther", era: "1483-1546", avatar: "📜", domain: "spiritual"),
+        .init(slug: "augustine", nameZh: "奥古斯丁", nameEn: "Augustine", era: "354-430", avatar: "📚", domain: "spiritual"),
+        .init(slug: "watchman_nee", nameZh: "倪柝声", nameEn: "Watchman Nee", era: "1903-1972", avatar: "🕎", domain: "spiritual"),
+        .init(slug: "wang_mingdao", nameZh: "王明道", nameEn: "Wang Mingdao", era: "1900-1991", avatar: "🏰", domain: "spiritual"),
+        .init(slug: "song_shangjie", nameZh: "宋尚节", nameEn: "John Sung", era: "1901-1944", avatar: "💧", domain: "spiritual"),
+        .init(slug: "john_calvin", nameZh: "加尔文", nameEn: "John Calvin", era: "1509-1564", avatar: "📖", domain: "spiritual"),
+        .init(slug: "john_bunyan", nameZh: "本仁约翰", nameEn: "John Bunyan", era: "1628-1688", avatar: "🛡️", domain: "spiritual"),
+        .init(slug: "george_whitefield", nameZh: "怀特腓", nameEn: "George Whitefield", era: "1714-1770", avatar: "🔥", domain: "spiritual"),
+        .init(slug: "zinzendorf", nameZh: "辛生道夫", nameEn: "Nikolaus von Zinzendorf", era: "1700-1760", avatar: "💘", domain: "spiritual"),
+        .init(slug: "george_muller", nameZh: "慕勒", nameEn: "George Müller", era: "1805-1898", avatar: "🍽️", domain: "spiritual"),
+        .init(slug: "hudson_taylor", nameZh: "戴德生", nameEn: "Hudson Taylor", era: "1832-1905", avatar: "🌾", domain: "spiritual"),
+        .init(slug: "jonathan_goforth", nameZh: "古约翰", nameEn: "Jonathan Goforth", era: "1859-1936", avatar: "💨", domain: "spiritual"),
+        .init(slug: "amy_carmichael", nameZh: "賈艾梅", nameEn: "Amy Carmichael", era: "1867-1951", avatar: "🌺", domain: "spiritual"),
+        .init(slug: "evan_roberts", nameZh: "罗伯斯", nameEn: "Evan Roberts", era: "1878-1951", avatar: "⛰️", domain: "spiritual"),
+        .init(slug: "jessie_penn_lewis", nameZh: "宾路易师母", nameEn: "Jessie Penn-Lewis", era: "1861-1927", avatar: "✝️", domain: "spiritual"),
+        .init(slug: "kempis", nameZh: "肯培多默", nameEn: "Thomas à Kempis", era: "1380-1471", avatar: "📖", domain: "spiritual"),
+        .init(slug: "desales", nameZh: "方济各·沙雷氏", nameEn: "Francis de Sales", era: "1567-1622", avatar: "🍯", domain: "spiritual"),
+        .init(slug: "austin_sparks", nameZh: "史百克", nameEn: "T. Austin-Sparks", era: "1885-1971", avatar: "📕", domain: "spiritual"),
+        .init(slug: "cranmer", nameZh: "克兰麦", nameEn: "Thomas Cranmer", era: "1489-1556", avatar: "📜", domain: "spiritual"),
+        .init(slug: "hooker", nameZh: "胡克", nameEn: "Richard Hooker", era: "1554-1600", avatar: "📘", domain: "spiritual"),
+        .init(slug: "andrewes", nameZh: "安德鲁斯", nameEn: "Lancelot Andrewes", era: "1555-1626", avatar: "📙", domain: "spiritual"),
+        .init(slug: "george_herbert", nameZh: "乔治·赫伯特", nameEn: "George Herbert", era: "1593-1633", avatar: "📝", domain: "spiritual"),
+        .init(slug: "newman", nameZh: "纽曼", nameEn: "John Henry Newman", era: "1801-1890", avatar: "🕯", domain: "spiritual"),
+
+        // ── Heal / 岐黄 — TCM (39 masters) ──
+        .init(slug: "huang_di", nameZh: "黄帝", nameEn: "Huang Di", era: "~2500 BC", avatar: "👑", domain: "tcm"),
+        .init(slug: "zhang_zhongjing", nameZh: "张仲景", nameEn: "Zhang Zhongjing", era: "150-219 AD", avatar: "📜", domain: "tcm"),
+        .init(slug: "hua_tuo", nameZh: "华佗", nameEn: "Hua Tuo", era: "145-208 AD", avatar: "⚗️", domain: "tcm"),
+        .init(slug: "huangfu_mi", nameZh: "皇甫谧", nameEn: "Huangfu Mi", era: "215-282 AD", avatar: "📍", domain: "tcm"),
+        .init(slug: "sun_simiao", nameZh: "孙思邈", nameEn: "Sun Simiao", era: "581-682 AD", avatar: "💐", domain: "tcm"),
+        .init(slug: "liu_wansu", nameZh: "刘完素", nameEn: "Liu Wansu", era: "1110-1200", avatar: "❄️", domain: "tcm"),
+        .init(slug: "zhang_zihe", nameZh: "张子和", nameEn: "Zhang Zihe", era: "1156-1228", avatar: "⛃", domain: "tcm"),
+        .init(slug: "li_dongyuan", nameZh: "李东垣", nameEn: "Li Dongyuan", era: "1180-1251", avatar: "🌾", domain: "tcm"),
+        .init(slug: "zhu_danxi", nameZh: "朱丹溪", nameEn: "Zhu Danxi", era: "1281-1358", avatar: "💧", domain: "tcm"),
+        .init(slug: "li_shizhen", nameZh: "李时珍", nameEn: "Li Shizhen", era: "1518-1593", avatar: "🌿", domain: "tcm"),
+        .init(slug: "zhang_jingyue", nameZh: "张景岳", nameEn: "Zhang Jingyue", era: "1563-1640", avatar: "🔥", domain: "tcm"),
+        .init(slug: "wu_jutong", nameZh: "吴鞠通", nameEn: "Wu Jutong", era: "1758-1836", avatar: "🌡️", domain: "tcm"),
+        .init(slug: "ye_tianshi", nameZh: "叶天士", nameEn: "Ye Tianshi", era: "1667-1746", avatar: "📖", domain: "tcm"),
+        .init(slug: "wang_qingren", nameZh: "王清任", nameEn: "Wang Qingren", era: "1768-1831", avatar: "🩸", domain: "tcm"),
+        .init(slug: "huang_yuanyu", nameZh: "黄元御", nameEn: "Huang Yuanyu", era: "1705-1758", avatar: "🔄", domain: "tcm"),
+        .init(slug: "fu_qingzhu", nameZh: "傅青主", nameEn: "Fu Qingzhu", era: "1607-1684", avatar: "🌹", domain: "tcm"),
+        .init(slug: "zheng_qinan", nameZh: "郑钦安", nameEn: "Zheng Qinan", era: "1824-1911", avatar: "🔥", domain: "tcm"),
+        .init(slug: "zhang_xichun", nameZh: "张锡纯", nameEn: "Zhang Xichun", era: "1860-1933", avatar: "🌏", domain: "tcm"),
+        .init(slug: "cao_yingfu", nameZh: "曹颖甫", nameEn: "Cao Yingfu", era: "1866-1938", avatar: "⚜️", domain: "tcm"),
+        .init(slug: "lu_yuanlei", nameZh: "陆渊雷", nameEn: "Lu Yuanlei", era: "1894-1955", avatar: "🔬", domain: "tcm"),
+        .init(slug: "pu_fuzhou", nameZh: "蒲辅周", nameEn: "Pu Fuzhou", era: "1888-1975", avatar: "🌟", domain: "tcm"),
+        .init(slug: "ding_ganren", nameZh: "丁甘仁", nameEn: "Ding Ganren", era: "1866-1926", avatar: "🌸", domain: "tcm"),
+        .init(slug: "hu_xishu", nameZh: "胡希恕", nameEn: "Hu Xishu", era: "1898-1984", avatar: "📚", domain: "tcm"),
+        .init(slug: "liu_duzhou", nameZh: "刘渡舟", nameEn: "Liu Duzhou", era: "1917-2001", avatar: "🎓", domain: "tcm"),
+        .init(slug: "huang_huang", nameZh: "黄煌", nameEn: "Huang Huang", era: "1954-", avatar: "🧬", domain: "tcm"),
+        .init(slug: "fan_zhonglin", nameZh: "范中林", nameEn: "Fan Zhonglin", era: "1895-1989", avatar: "🔥", domain: "tcm"),
+        .init(slug: "liu_lihong", nameZh: "刘力红", nameEn: "Liu Lihong", era: "1958-", avatar: "📖", domain: "tcm"),
+        .init(slug: "ni_haixia", nameZh: "倪海厦", nameEn: "Ni Haixia", era: "1954-2012", avatar: "🎬", domain: "tcm"),
+        .init(slug: "hao_wanshan", nameZh: "郝万山", nameEn: "Hao Wanshan", era: "1944-", avatar: "🏫", domain: "tcm"),
+        .init(slug: "deng_tietao", nameZh: "邓铁涛", nameEn: "Deng Tietao", era: "1916-2019", avatar: "❤️", domain: "tcm"),
+        .init(slug: "zhu_liangchun", nameZh: "朱良春", nameEn: "Zhu Liangchun", era: "1917-2015", avatar: "🕸️", domain: "tcm"),
+        .init(slug: "jiao_shude", nameZh: "焦树德", nameEn: "Jiao Shude", era: "1922-2008", avatar: "🦴", domain: "tcm"),
+        .init(slug: "yan_dexin", nameZh: "颜德馨", nameEn: "Yan Dexin", era: "1920-2017", avatar: "🍃", domain: "tcm"),
+        .init(slug: "zhou_zhongying", nameZh: "周仲瑛", nameEn: "Zhou Zhongying", era: "1928-", avatar: "🚨", domain: "tcm"),
+        .init(slug: "wang_qi", nameZh: "王琦", nameEn: "Wang Qi", era: "1943-", avatar: "🧬", domain: "tcm"),
+        .init(slug: "lu_zhizheng", nameZh: "路志正", nameEn: "Lu Zhizheng", era: "1920-2023", avatar: "🌱", domain: "tcm"),
+        .init(slug: "ren_jixue", nameZh: "任继学", nameEn: "Ren Jixue", era: "1926-2010", avatar: "🧠", domain: "tcm"),
+        .init(slug: "gan_zuwang", nameZh: "干祖望", nameEn: "Gan Zuwang", era: "1912-2015", avatar: "👂", domain: "tcm"),
+        .init(slug: "qiu_peiran", nameZh: "裘沛然", nameEn: "Qiu Peiran", era: "1913-2010", avatar: "🧩", domain: "tcm"),
+    ]
+
+    /// Lookup by slug. nil if the catalog doesn't include this slug
+    /// (typical for new masters added cloud-side after our last
+    /// release).
+    static func master(for slug: String) -> CloudMaster? {
+        all.first { $0.slug == slug }
+    }
+}

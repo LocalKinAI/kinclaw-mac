@@ -11,8 +11,15 @@ class SSEClient: NSObject, URLSessionDataDelegate {
     var onComplete: (() -> Void)?
     var onError: ((Error) -> Void)?
 
+    /// `agentSlug` is required for the cloud gateway — chat is now
+    /// addressed by `?agent=<slug>` query parameter rather than
+    /// per-agent hostnames. See `selah-chat.ts` in localkin-player
+    /// for the canonical reference. Pass `nil` only when you have
+    /// upgraded an old call site and a slug isn't available yet
+    /// (the cloud will reject the request, surfacing the gap).
     func startStreaming(
         hostname: String,
+        agentSlug: String?,
         messages: [APIMessage],
         token: String? = nil
     ) {
@@ -24,17 +31,35 @@ class SSEClient: NSObject, URLSessionDataDelegate {
             } else {
                 authToken = await TokenManager.shared.token(for: hostname)
             }
-            self.beginRequest(hostname: hostname, messages: messages, authToken: authToken)
+            self.beginRequest(hostname: hostname,
+                              agentSlug: agentSlug,
+                              messages: messages,
+                              authToken: authToken)
         }
     }
 
-    private func beginRequest(hostname: String, messages: [APIMessage], authToken: String) {
-        let url = URL(string: "https://\(hostname)/v1/chat")!
+    private func beginRequest(hostname: String, agentSlug: String?,
+                              messages: [APIMessage], authToken: String) {
+        // 2026-04: cloud gateway switched to single endpoint with
+        // `?agent=<slug>` selector. Older /v1/chat without the
+        // selector returns 404. We URL-encode defensively even
+        // though slugs are always plain ASCII underscores today.
+        var components = URLComponents(string: "https://\(hostname)/v1/chat")!
+        if let slug = agentSlug, !slug.isEmpty {
+            components.queryItems = [URLQueryItem(name: "agent", value: slug)]
+        }
+        let url = components.url!
+
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
+        // X-Lang lets the gateway pick the right localized greeting
+        // / refusal message. zh is the default for the Selah / Heal
+        // bilingual masters; cloud agents transparently honor en
+        // when the user types in English.
+        request.setValue("zh", forHTTPHeaderField: "X-Lang")
 
         let body = ChatRequest(messages: messages, stream: true, noHistory: true)
         request.httpBody = try? JSONEncoder().encode(body)

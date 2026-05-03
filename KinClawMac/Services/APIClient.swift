@@ -18,11 +18,22 @@ actor APIClient {
 
     // MARK: - Agent Discovery
 
-    /// Fetch all online agents from api.localkin.dev
+    /// Return the cloud LocalKin agent catalog.
+    ///
+    /// **Why static, not /v1/agents:** as of 2026-05-03 the cloud
+    /// gateway returns 404 + `{"error":"unknown agent"}` for the
+    /// previously-public `/v1/agents` endpoint. Each vertical app
+    /// (faith.localkin.ai, heal.localkin.ai) ships its own hardcoded
+    /// master list — see `localkin-player/src/app/{selah,heal}/
+    /// masters.ts`. We mirror that pattern: bake the catalog at
+    /// build time, refresh on each release.
+    ///
+    /// `async throws` is preserved (rather than turning this into a
+    /// pure synchronous getter) so call sites — and a future
+    /// re-introduction of a real /v1/agents endpoint — don't change
+    /// shape.
     func fetchAgents() async throws -> [Agent] {
-        let url = URL(string: "https://api.localkin.dev/v1/agents")!
-        let (data, _) = try await session.data(from: url)
-        return try decoder.decode([Agent].self, from: data)
+        return CloudAgentCatalog.all.map(\.asAgent)
     }
 
     /// Check health of a specific agent

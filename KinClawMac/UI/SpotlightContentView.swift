@@ -536,7 +536,9 @@ struct SpotlightContentView: View {
             isStreaming = false
             sseClient = nil
         }
-        client.startStreaming(hostname: hostname, messages: apiMessages)
+        client.startStreaming(hostname: hostname,
+                              agentSlug: agent.slug,
+                              messages: apiMessages)
     }
 
     private func sendLocal(text: String, assistantIndex: Int) {
