@@ -325,8 +325,8 @@ struct SpotlightContentView: View {
                         }
                     }
                     if isStreaming {
-                        HStack(spacing: 6) {
-                            ProgressView().scaleEffect(0.55)
+                        HStack(spacing: 8) {
+                            StreamingDots()
                             Text("thinking…")
                                 .font(.system(size: 11))
                                 .foregroundColor(.secondary)
@@ -486,7 +486,7 @@ struct SpotlightContentView: View {
         return HStack(alignment: .top, spacing: 6) {
             if msg.isUser {
                 Spacer(minLength: 24)
-                BubbleWithCopy(content: msg.content) {
+                BubbleWithCopy(content: msg.content, timestamp: msg.timestamp) {
                     Text(msg.content)
                         .font(.system(size: 13))
                         .padding(.horizontal, 12)
@@ -507,7 +507,7 @@ struct SpotlightContentView: View {
                         .frame(width: 22, height: 22, alignment: .top)
                         .padding(.top, 4)
                 }
-                BubbleWithCopy(content: msg.content) {
+                BubbleWithCopy(content: msg.content, timestamp: msg.timestamp) {
                     assistantBubble(msg, showCursor: isLastAssistantWhileStreaming)
                 }
                 Spacer(minLength: 24)
@@ -558,6 +558,8 @@ struct SpotlightContentView: View {
 
     private var inputBar: some View {
         HStack(spacing: 8) {
+            // Mic + (when recording) live audio level meter. Click
+            // toggles record/cancel.
             Button {
                 if recorder.isRecording {
                     recorder.cancelRecording()
@@ -565,14 +567,21 @@ struct SpotlightContentView: View {
                     recorder.startRecording(hostname: hostname)
                 }
             } label: {
-                Image(systemName: recorder.isRecording
-                                  ? "stop.circle.fill"
-                                  : "mic")
-                    .font(.system(size: 14))
-                    .foregroundColor(recorder.isRecording ? .red : .secondary)
+                if recorder.isRecording {
+                    HStack(spacing: 4) {
+                        Image(systemName: "stop.circle.fill")
+                            .font(.system(size: 14))
+                            .foregroundColor(.red)
+                        AudioLevelMeter(level: recorder.audioLevel)
+                    }
+                } else {
+                    Image(systemName: "mic")
+                        .font(.system(size: 14))
+                        .foregroundColor(.secondary)
+                }
             }
             .buttonStyle(.plain)
-            .help("Voice input")
+            .help(recorder.isRecording ? "Stop recording" : "Voice input")
 
             TextField(
                 selectedAgent.map { "Message \($0.displayName)…" }
@@ -882,39 +891,73 @@ private struct BlinkingCursor: View {
     }
 }
 
+// File-private singleton — Swift forbids `static let` on generic
+// types (BubbleWithCopy is generic), so the formatter lives here
+// at file scope. Reused across every bubble; cheap.
+private let relativeTimestampFormatter: RelativeDateTimeFormatter = {
+    let f = RelativeDateTimeFormatter()
+    f.unitsStyle = .abbreviated
+    return f
+}()
+
 // MARK: - Hover-to-copy bubble wrapper
 
 /// Wraps any chat bubble view in an overlay that surfaces a copy
-/// button on hover. Click → content goes to NSPasteboard.general
-/// and the icon flashes to a checkmark for 1.2s as confirmation.
+/// button + relative timestamp on hover. Click → content goes to
+/// NSPasteboard.general; the icon flashes to a checkmark for 1.2s
+/// as confirmation. The timestamp ("3 min ago") sits below the
+/// bubble at low opacity so it doesn't compete with the message.
 private struct BubbleWithCopy<Content: View>: View {
     let content: String
+    let timestamp: Date?
     /// Renamed from `body` to avoid colliding with View.body.
     @ViewBuilder let bubbleContent: () -> Content
+
+    init(content: String,
+         timestamp: Date? = nil,
+         @ViewBuilder bubbleContent: @escaping () -> Content) {
+        self.content = content
+        self.timestamp = timestamp
+        self.bubbleContent = bubbleContent
+    }
 
     @State private var hovering = false
     @State private var copied = false
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
-            bubbleContent()
-            if hovering {
-                Button {
-                    copy()
-                } label: {
-                    Image(systemName: copied ? "checkmark.circle.fill"
-                                              : "doc.on.doc")
-                        .font(.system(size: 11))
-                        .foregroundColor(copied ? .green : .secondary)
-                        .padding(4)
-                        .background(
-                            Circle()
-                                .fill(Color.black.opacity(0.4))
-                        )
+        VStack(alignment: .leading, spacing: 2) {
+            ZStack(alignment: .topTrailing) {
+                bubbleContent()
+                if hovering {
+                    Button {
+                        copy()
+                    } label: {
+                        Image(systemName: copied
+                              ? "checkmark.circle.fill"
+                              : "doc.on.doc")
+                            .font(.system(size: 11))
+                            .foregroundColor(copied ? .green : .secondary)
+                            .padding(4)
+                            .background(
+                                Circle()
+                                    .fill(Color.black.opacity(0.4))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .offset(x: 4, y: -4)
+                    .transition(.opacity)
                 }
-                .buttonStyle(.plain)
-                .offset(x: 4, y: -4)
-                .transition(.opacity)
+            }
+            // Relative timestamp on hover. Lives outside the bubble
+            // so a long markdown body doesn't push it around when
+            // re-flowing during streaming.
+            if hovering, let ts = timestamp {
+                Text(relativeTimestampFormatter.localizedString(
+                    for: ts, relativeTo: Date()))
+                    .font(.system(size: 9))
+                    .foregroundColor(.secondary.opacity(0.55))
+                    .padding(.leading, 4)
+                    .transition(.opacity)
             }
         }
         .onHover { isHovering in

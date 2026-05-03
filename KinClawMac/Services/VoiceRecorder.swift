@@ -7,6 +7,11 @@ class VoiceRecorder: NSObject, ObservableObject {
     @Published var isTranscribing = false
     @Published var transcript = ""
     @Published var error: String?
+    /// Normalized audio level 0...1 — UI binds to this for the
+    /// recording waveform / level bar. Updated at 10Hz from the
+    /// silence-detection timer; smoothed via a small EMA so the
+    /// bars don't jitter on tiny mic noise.
+    @Published var audioLevel: Double = 0
 
     private var audioRecorder: AVAudioRecorder?
     private var recordingURL: URL?
@@ -60,6 +65,7 @@ class VoiceRecorder: NSObject, ObservableObject {
 
         guard isRecording else { return }
         isRecording = false
+        audioLevel = 0
 
         guard let url = recordingURL else {
             onNoSpeech?()
@@ -89,6 +95,7 @@ class VoiceRecorder: NSObject, ObservableObject {
         audioRecorder?.stop()
         isRecording = false
         isTranscribing = false
+        audioLevel = 0
     }
 
     // MARK: - Private
@@ -148,6 +155,15 @@ class VoiceRecorder: NSObject, ObservableObject {
 
             recorder.updateMeters()
             let avgPower = recorder.averagePower(forChannel: 0)
+
+            // averagePower is dB (typically -160 silence → 0 max).
+            // Map to 0...1 for UI binding. -60 dB feels like a
+            // useful noise floor; clamp to that. Then EMA smooth
+            // (alpha 0.5) so the level meter doesn't jitter.
+            let normalized = max(0, min(1, (Double(avgPower) + 60) / 60))
+            DispatchQueue.main.async {
+                self.audioLevel = self.audioLevel * 0.5 + normalized * 0.5
+            }
 
             // Detect if user has started speaking
             if avgPower > -35 {
