@@ -33,6 +33,12 @@ struct KinClawMacApp: App {
 /// lifetime matches the process. Storing AppState here (rather than
 /// `@StateObject` on the App struct) lets the AppKit-native window
 /// path access it without going through SwiftUI's environment.
+///
+/// `@MainActor` because every property and method here touches AppKit
+/// or SwiftUI state — AppKit guarantees delegate calls land on main,
+/// and the @MainActor isolation lets us own a @MainActor-isolated
+/// KinClawSupervisor without async hops in `applicationWillTerminate`.
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Single source of truth for trial / license / counters. Both
     /// the spotlight panel's SwiftUI tree and the Settings scene
@@ -44,6 +50,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 🦞 NSStatusItem in the menubar.
     private(set) var menuBar: MenuBarController!
+
+    /// Local kinclaw subprocess manager.
+    let supervisor = KinClawSupervisor()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // 1. Build the floating spotlight panel.
@@ -78,6 +87,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 5. Cloud auth refresh — same as the iOS version did at launch.
         Task { await TokenManager.shared.refreshFromRemote() }
+
+        // 6. Bring up the local kinclaw subprocess (or adopt an
+        //    existing one on :5001). Runs async so the UI doesn't
+        //    block on the boot probe.
+        Task { await supervisor.start() }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        // Clean shutdown of our owned kinclaw subprocess. Adopted
+        // external kinclaws are left alone — they belong to the user.
+        supervisor.stop()
     }
 
     /// Opens (or focuses) the SwiftUI Settings scene. The legacy
