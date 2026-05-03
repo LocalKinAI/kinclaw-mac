@@ -1,19 +1,69 @@
 import SwiftUI
+import AppKit
+
+// MARK: - App entry
+//
+// KinClaw Mac is a menubar-only app (LSUIElement = true in Info.plist).
+// We don't ship a `WindowGroup` — instead AppDelegate constructs a
+// single floating `SpotlightWindow` whose content is the SwiftUI tree
+// previously hosted in the iOS WindowGroup. The Settings scene gives
+// the user the standard ⌘, hotkey for preferences.
+//
+// M3 will add the global hotkey + menubar; for now the panel just
+// shows on launch.
 
 @main
-struct LocalKinApp: App {
-    @StateObject private var appState = AppState()
+struct KinClawMacApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        WindowGroup {
-            ContentView()
-                .environmentObject(appState)
+        Settings {
+            SettingsView()
+                .environmentObject(appDelegate.appState)
                 .preferredColorScheme(.dark)
-                .task {
-                    // Refresh auth tokens from remote config on launch
-                    await TokenManager.shared.refreshFromRemote()
-                }
         }
+    }
+}
+
+// MARK: - App Delegate
+
+/// Owns the spotlight window + AppState singleton-ish instance.
+/// AppDelegate is wired via `@NSApplicationDelegateAdaptor` so its
+/// lifetime matches the process. Storing AppState here (rather than
+/// `@StateObject` on the App struct) lets the AppKit-native window
+/// path access it without going through SwiftUI's environment.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Single source of truth for trial / license / counters. Both
+    /// the spotlight panel's SwiftUI tree and the Settings scene
+    /// observe it via `.environmentObject`.
+    let appState = AppState()
+
+    /// The one floating chat panel.
+    private(set) var spotlightWindow: SpotlightWindow!
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // Build the panel with the existing SwiftUI ContentView as
+        // its body. M3+ will swap ContentView for a Spotlight-shape
+        // single-column UX; for now we want to validate the panel
+        // hosts our existing views correctly.
+        spotlightWindow = SpotlightWindow {
+            ContentView()
+                .environmentObject(self.appState)
+                .preferredColorScheme(.dark)
+        }
+        // Show on launch. Once M3 lands the global hotkey we'll
+        // start hidden and let ⌘⌥K do the summoning.
+        spotlightWindow.show()
+
+        // Cloud auth refresh — same as the iOS version did at launch.
+        Task { await TokenManager.shared.refreshFromRemote() }
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        // Menubar-only app: closing the spotlight window must NOT
+        // quit the process. Quit comes from the menubar (M3) or
+        // ⌘Q while the panel is key.
+        false
     }
 }
 
