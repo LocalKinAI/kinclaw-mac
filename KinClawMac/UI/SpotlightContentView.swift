@@ -31,6 +31,10 @@ struct SpotlightContentView: View {
     @State private var allAgents: [Agent] = []
     @State private var loadError: String?
     @State private var isLoadingAgents = true
+    /// Set when the cloud /v1/agents fetch fails or returns nothing
+    /// — shown in the picker so users see a real signal rather than
+    /// a silently-empty section.
+    @State private var cloudErrorReason: String?
 
     // Active conversation.
     @State private var selectedAgent: Agent?
@@ -149,14 +153,20 @@ struct SpotlightContentView: View {
     private var agentMenu: some View {
         Menu {
             if !localAgents.isEmpty {
-                Section("Local KinClaw") {
+                Section("Local KinClaw  (\(localAgents.count))") {
                     ForEach(localAgents) { agent in
                         agentMenuRow(agent)
                     }
                 }
+            } else if !isLoadingAgents {
+                Section("Local KinClaw") {
+                    Text("kinclaw not running locally")
+                        .foregroundColor(.secondary)
+                }
             }
+
             if !cloudAgents.isEmpty {
-                Section("Cloud LocalKin") {
+                Section("Cloud LocalKin  (\(cloudAgents.count))") {
                     ForEach(cloudAgents.prefix(50)) { agent in
                         agentMenuRow(agent)
                     }
@@ -165,7 +175,13 @@ struct SpotlightContentView: View {
                             .foregroundColor(.secondary)
                     }
                 }
+            } else if !isLoadingAgents {
+                Section("Cloud LocalKin") {
+                    Text(cloudErrorReason ?? "0 agents online")
+                        .foregroundColor(.secondary)
+                }
             }
+
             if isLoadingAgents {
                 Text("Loading…").foregroundColor(.secondary)
             }
@@ -424,11 +440,28 @@ struct SpotlightContentView: View {
     private func loadAgents() async {
         isLoadingAgents = allAgents.isEmpty
         loadError = nil
+        cloudErrorReason = nil
 
-        async let cloudTask: [Agent] = {
-            do { return try await APIClient.shared.fetchAgents() }
-            catch { return [] }
+        // Cloud fetch with explicit error capture so the dropdown can
+        // explain WHY the cloud section is empty (network down vs
+        // 0 agents online vs API moved).
+        async let cloudTask: (agents: [Agent], reason: String?) = {
+            do {
+                let agents = try await APIClient.shared.fetchAgents()
+                if agents.isEmpty {
+                    return ([], "0 agents online")
+                }
+                return (agents, nil)
+            } catch let error as URLError where error.code == .notConnectedToInternet {
+                return ([], "Offline")
+            } catch {
+                // Decode failure (404 with non-array JSON) lands here
+                // too, so the user gets a useful "cloud unreachable"
+                // signal rather than an empty section.
+                return ([], "Cloud unreachable")
+            }
         }()
+
         async let localTask: [Agent] = {
             do {
                 let souls = try await KinClawAPIClient.default.fetchSouls()
@@ -436,10 +469,11 @@ struct SpotlightContentView: View {
             } catch { return [] }
         }()
 
-        let cloud = await cloudTask
+        let (cloud, cloudReason) = await cloudTask
         let local = await localTask
         let merged = local + cloud
         allAgents = merged
+        cloudErrorReason = cloud.isEmpty ? cloudReason : nil
 
         if merged.isEmpty {
             loadError = "No agents available — start kinclaw locally or check your internet."

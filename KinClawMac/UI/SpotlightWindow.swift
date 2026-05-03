@@ -36,9 +36,16 @@ final class SpotlightWindow: NSPanel {
     init<Content: View>(@ViewBuilder content: () -> Content) {
         let initialFrame = Self.savedFrame ?? Self.centeredFrame()
 
+        // .titled (rather than .borderless) gives us the standard
+        // edge-resize hit zones — borderless panels are technically
+        // resizable but the cursor doesn't change at edges, which
+        // makes the affordance invisible. We hide the titlebar's
+        // visual chrome below and let .fullSizeContentView push the
+        // SwiftUI tree up under it; the result looks identical to
+        // borderless but resize works the way users expect.
         super.init(
             contentRect: initialFrame,
-            styleMask: [.borderless, .resizable, .nonactivatingPanel,
+            styleMask: [.titled, .resizable, .nonactivatingPanel,
                         .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -101,7 +108,10 @@ final class SpotlightWindow: NSPanel {
         self.contentView = visualEffect
 
         // Hard floor so the chat doesn't collapse to unreadable.
-        self.minSize = NSSize(width: 320, height: 380)
+        // 280×280 lets users tuck the panel into a corner of a small
+        // laptop screen as a "command stripe" while still keeping
+        // the input + at least two message bubbles visible.
+        self.minSize = NSSize(width: 280, height: 280)
 
         // Persist position + size as the user drags / resizes.
         let nc = NotificationCenter.default
