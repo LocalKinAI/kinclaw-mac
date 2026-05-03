@@ -55,10 +55,42 @@ struct SpotlightContentView: View {
 
     @FocusState private var inputFocused: Bool
 
-    // MARK: - Derived
+    // MARK: - Derived (4 group buckets surfaced in the picker)
+    //
+    // Local souls are split into KinClaw computer-use agents (the
+    // dock's marquee surface) vs the generic LocalKin chat souls
+    // that happen to live under ~/.localkin/souls/. They share the
+    // local-soul transport but are conceptually different products
+    // and group differently in the picker.
+    //
+    // Cloud agents are split by their published vertical — Faith /
+    // Selah (spiritual masters) and Heal / 岐黄 (TCM masters) —
+    // matching the way faith.localkin.ai / heal.localkin.ai present
+    // them.
 
     private var localAgents: [Agent] { allAgents.filter { $0.isLocal } }
     private var cloudAgents: [Agent] { allAgents.filter { !$0.isLocal } }
+
+    private var kinClawSouls: [Agent] {
+        // Names emitted by kinclaw's soul list start with "KinClaw "
+        // (Pilot / Coder / Critic / Curator / Eye / Marketer /
+        // Researcher = 7 today).
+        localAgents.filter { $0.name.hasPrefix("KinClaw") }
+    }
+    private var localKinSouls: [Agent] {
+        // The rest — souls under ~/.localkin/souls/ that aren't
+        // KinClaw branded (Claude / Cloud / default = 3 today).
+        localAgents.filter { !$0.name.hasPrefix("KinClaw") }
+    }
+    private var spiritualAgents: [Agent] {
+        cloudAgents.filter { $0.domain == "spiritual" }
+    }
+    private var tcmAgents: [Agent] {
+        cloudAgents.filter { $0.domain == "tcm" }
+    }
+    private var otherCloudAgents: [Agent] {
+        cloudAgents.filter { $0.domain != "spiritual" && $0.domain != "tcm" }
+    }
 
     private var hostname: String {
         selectedAgent?.hostname ?? "api.localkin.dev"
@@ -152,39 +184,63 @@ struct SpotlightContentView: View {
 
     private var agentMenu: some View {
         Menu {
-            if !localAgents.isEmpty {
-                Section("Local KinClaw  (\(localAgents.count))") {
-                    ForEach(localAgents) { agent in
-                        agentMenuRow(agent)
-                    }
-                }
-            } else if !isLoadingAgents {
-                Section("Local KinClaw") {
-                    Text("kinclaw not running locally")
-                        .foregroundColor(.secondary)
+            // Nested submenus = collapsed-by-default groups. The
+            // top-level dropdown shows just the 4 group titles +
+            // their counts; users click / hover to expand each.
+
+            // ── KinClaw computer-use souls (7 today) ──
+            if !kinClawSouls.isEmpty {
+                Menu("🦞  KinClaw  (\(kinClawSouls.count))") {
+                    ForEach(kinClawSouls) { agentMenuRow($0) }
                 }
             }
 
-            if !cloudAgents.isEmpty {
-                Section("Cloud LocalKin  (\(cloudAgents.count))") {
-                    ForEach(cloudAgents.prefix(50)) { agent in
-                        agentMenuRow(agent)
-                    }
-                    if cloudAgents.count > 50 {
-                        Text("…and \(cloudAgents.count - 50) more")
-                            .foregroundColor(.secondary)
-                    }
-                }
-            } else if !isLoadingAgents {
-                Section("Cloud LocalKin") {
-                    Text(cloudErrorReason ?? "0 agents online")
-                        .foregroundColor(.secondary)
+            // ── Generic local LocalKin souls (3 today, from
+            //     ~/.localkin/souls/) ──
+            if !localKinSouls.isEmpty {
+                Menu("💻  LocalKin  (\(localKinSouls.count))") {
+                    ForEach(localKinSouls) { agentMenuRow($0) }
                 }
             }
 
-            if isLoadingAgents {
-                Text("Loading…").foregroundColor(.secondary)
+            // ── Cloud Faith / Selah masters ──
+            if !spiritualAgents.isEmpty {
+                Menu("📜  Faith / Selah  (\(spiritualAgents.count))") {
+                    ForEach(spiritualAgents) { agentMenuRow($0) }
+                }
+            } else if !isLoadingAgents && cloudErrorReason != nil {
+                Text("📜  Faith — \(cloudErrorReason ?? "unreachable")")
+                    .foregroundColor(.secondary)
             }
+
+            // ── Cloud Heal / 岐黄 masters ──
+            if !tcmAgents.isEmpty {
+                Menu("🌿  Heal / 岐黄  (\(tcmAgents.count))") {
+                    ForEach(tcmAgents) { agentMenuRow($0) }
+                }
+            } else if !isLoadingAgents && cloudErrorReason != nil {
+                Text("🌿  Heal — \(cloudErrorReason ?? "unreachable")")
+                    .foregroundColor(.secondary)
+            }
+
+            // ── Cloud agents that don't match either vertical
+            //     (defensive — empty today, here in case the catalog
+            //     gains a new domain like "qa" before the UI does) ──
+            if !otherCloudAgents.isEmpty {
+                Menu("☁️  Other cloud  (\(otherCloudAgents.count))") {
+                    ForEach(otherCloudAgents.prefix(80)) { agentMenuRow($0) }
+                }
+            }
+
+            // ── No groups at all → empty / loading ──
+            if allAgents.isEmpty {
+                if isLoadingAgents {
+                    Text("Loading…").foregroundColor(.secondary)
+                } else if let err = loadError {
+                    Text(err).foregroundColor(.secondary)
+                }
+            }
+
             Divider()
             Button("Reload") {
                 Task { await loadAgents() }
@@ -427,6 +483,11 @@ struct SpotlightContentView: View {
         // Restore per-agent history
         messages = ChatHistory.load(for: agent.slug)
 
+        // Persist last-used selection so the next launch lands on
+        // the same agent (rather than re-defaulting to Pilot every
+        // time and losing the user's last choice).
+        UserDefaults.standard.set(agent.slug, forKey: "kinclaw.lastAgent")
+
         // Local kinclaw: switch the server-side active soul.
         if let soulPath = agent.localSoulPath {
             Task {
@@ -478,11 +539,33 @@ struct SpotlightContentView: View {
         if merged.isEmpty {
             loadError = "No agents available — start kinclaw locally or check your internet."
         } else if selectedAgent == nil {
-            // Default to first local agent (the dock's marquee surface);
-            // fall back to first cloud agent if no kinclaw is running.
-            selectedAgent = local.first ?? cloud.first
+            selectedAgent = pickDefaultAgent(merged: merged, local: local, cloud: cloud)
         }
         isLoadingAgents = false
+    }
+
+    /// Pick the default agent surfaced when KinClaw Mac launches.
+    ///
+    /// Priority order:
+    ///   1. Last-used agent (if persisted slug still resolves in
+    ///      the current catalog) — respects user choice across
+    ///      sessions.
+    ///   2. KinClaw Pilot (the dock's marquee soul — operates the
+    ///      Mac via the 5 claws + skills). Per Jacky 2026-05-03.
+    ///   3. Any other KinClaw soul (Coder / Critic / etc.)
+    ///   4. Any other local soul (~/.localkin/souls/).
+    ///   5. First cloud agent (Selah Irenaeus, alphabetically).
+    private func pickDefaultAgent(merged: [Agent], local: [Agent],
+                                  cloud: [Agent]) -> Agent? {
+        let lastUsed = UserDefaults.standard.string(forKey: "kinclaw.lastAgent")
+        if let slug = lastUsed,
+           let agent = merged.first(where: { $0.slug == slug }) {
+            return agent
+        }
+        if let pilot = local.first(where: { $0.name == "KinClaw Pilot" }) {
+            return pilot
+        }
+        return local.first ?? cloud.first
     }
 
     // MARK: - Send (router → cloud / local)

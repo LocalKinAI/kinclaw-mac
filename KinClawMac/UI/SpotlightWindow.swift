@@ -62,17 +62,14 @@ final class SpotlightWindow: NSPanel {
         self.hasShadow = true
         self.isMovableByWindowBackground = true
 
-        // Frameless titlebar — but keep the bar in the styleMask
-        // would force the chrome back. We're borderless so this just
-        // hardens the look.
+        // Hide the title text but keep the titlebar surface so the
+        // traffic-light controls (close / minimize / zoom) stay
+        // visible and usable. titlebarAppearsTransparent + .fullSize
+        // ContentView lets the SwiftUI tree underneath fill behind
+        // the buttons; the user gets standard window chrome
+        // affordance with the panel-style aesthetic.
         self.titleVisibility = .hidden
         self.titlebarAppearsTransparent = true
-
-        // Hide the traffic-light controls if they slip in via
-        // .fullSizeContentView combinations.
-        for kind in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
-            self.standardWindowButton(kind)?.isHidden = true
-        }
 
         // Don't auto-release on close; AppDelegate manages lifetime.
         self.isReleasedWhenClosed = false
@@ -157,6 +154,16 @@ final class SpotlightWindow: NSPanel {
     // uses ESC for chat-clear or similar.)
     override func cancelOperation(_ sender: Any?) {
         hide()
+    }
+
+    /// The red traffic-light close button calls this — we redirect
+    /// it to hide rather than destroy the window. KinClaw Mac is a
+    /// menubar-only app; closing the panel must NOT quit the
+    /// process. The user can re-summon with ⌘⌥K or the 🦞 menubar.
+    /// Quit happens via menubar → Quit or ⌘Q (which goes through
+    /// NSApp.terminate, not this method).
+    override func close() {
+        self.orderOut(nil)
     }
 
     // MARK: - Frame persistence
