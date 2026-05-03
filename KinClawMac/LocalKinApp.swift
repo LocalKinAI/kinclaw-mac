@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import KeyboardShortcuts
 
 // MARK: - App entry
 //
@@ -41,22 +42,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The one floating chat panel.
     private(set) var spotlightWindow: SpotlightWindow!
 
+    /// 🦞 NSStatusItem in the menubar.
+    private(set) var menuBar: MenuBarController!
+
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Build the panel with the existing SwiftUI ContentView as
-        // its body. M3+ will swap ContentView for a Spotlight-shape
-        // single-column UX; for now we want to validate the panel
-        // hosts our existing views correctly.
+        // 1. Build the floating spotlight panel.
         spotlightWindow = SpotlightWindow {
             ContentView()
                 .environmentObject(self.appState)
                 .preferredColorScheme(.dark)
         }
-        // Show on launch. Once M3 lands the global hotkey we'll
-        // start hidden and let ⌘⌥K do the summoning.
-        spotlightWindow.show()
 
-        // Cloud auth refresh — same as the iOS version did at launch.
+        // 2. Wire the menubar (🦞) + its dropdown actions.
+        menuBar = MenuBarController()
+        menuBar.onShowHide      = { [weak self] in self?.spotlightWindow.toggle() }
+        menuBar.onOpenSettings  = { [weak self] in self?.openSettingsWindow() }
+        menuBar.onQuit          = { NSApp.terminate(nil) }
+
+        // 3. Register the global ⌘⌥K hotkey. KeyboardShortcuts
+        //    handles the Carbon-level event tap; we just provide
+        //    the toggle closure.
+        KeyboardShortcuts.onKeyDown(for: .toggleKinClaw) { [weak self] in
+            self?.spotlightWindow.toggle()
+        }
+
+        // 4. First-launch courtesy: show the panel so a brand-new
+        //    user can see what they just installed. Subsequent
+        //    launches stay hidden — the hotkey / menubar are now
+        //    the entry points.
+        let firstShownKey = "kinclaw.firstLaunchPanelShown"
+        if !UserDefaults.standard.bool(forKey: firstShownKey) {
+            spotlightWindow.show()
+            UserDefaults.standard.set(true, forKey: firstShownKey)
+        }
+
+        // 5. Cloud auth refresh — same as the iOS version did at launch.
         Task { await TokenManager.shared.refreshFromRemote() }
+    }
+
+    /// Opens (or focuses) the SwiftUI Settings scene. The legacy
+    /// `showSettingsWindow:` selector is the only sanctioned way
+    /// to programmatically open a `Settings { }` scene from AppKit
+    /// land; SwiftUI 14's `SettingsLink` only works inside a SwiftUI
+    /// hierarchy.
+    private func openSettingsWindow() {
+        // Bring the app forward first — settings appears as a normal
+        // window which expects an active app.
+        NSApp.activate(ignoringOtherApps: true)
+        if #available(macOS 14, *) {
+            // Newer SwiftUI selector form
+            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        } else {
+            // Pre-14 fallback (we target 14+ so this branch never
+            // runs, but keeping it documents the older API).
+            NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
