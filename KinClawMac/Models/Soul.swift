@@ -44,7 +44,10 @@ extension Soul {
             // Marker so other code can spot a local soul.
             // No https:// — just the host:port we'll talk to.
             hostname: "localhost-kinclaw",
-            domain: "kinclaw"
+            domain: "kinclaw",
+            // Carry the absolute path so ChatView can switch the
+            // server-side active soul before sending.
+            localSoulPath: path
         )
     }
 }

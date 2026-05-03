@@ -8,6 +8,10 @@ struct ChatView: View {
     @State private var inputText = ""
     @State private var isStreaming = false
     @State private var sseClient: SSEClient?
+    /// Active local-kinclaw event-stream task. nil for cloud agents
+    /// (which use sseClient instead) and between turns. Cancelled
+    /// on .onDisappear and on user-initiated cancel.
+    @State private var localStreamTask: Task<Void, Never>?
     @State private var ttsEnabled = false
     @State private var voiceMode = false       // Continuous voice conversation
     @State private var scrollTrigger = 0
@@ -78,6 +82,17 @@ struct ChatView: View {
             ttsEnabled = UserDefaults.standard.bool(forKey: "tts_enabled")
             inputFocused = true
 
+            // Local kinclaw: ensure server-side active soul matches
+            // this agent before any messages are sent. Idempotent on
+            // the server side — switching to the already-active soul
+            // is a no-op. Failure is silent here; sendMessage will
+            // surface a clearer error once the user actually types.
+            if let soulPath = agent.localSoulPath {
+                Task {
+                    try? await KinClawAPIClient.default.switchSoul(path: soulPath)
+                }
+            }
+
             // Voice mode callbacks
             recorder.onTranscript = { text in
                 inputText = text
@@ -98,6 +113,8 @@ struct ChatView: View {
         .onDisappear {
             exitVoiceMode()
             sseClient?.cancel()
+            localStreamTask?.cancel()
+            localStreamTask = nil
             speaker.stop()
         }
     }
@@ -376,7 +393,7 @@ struct ChatView: View {
         }
     }
 
-    // MARK: - Send Message
+    // MARK: - Send Message (router)
 
     private func sendMessage() {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -391,14 +408,27 @@ struct ChatView: View {
             inputFocused = true
         }
 
-        let apiMessages = messages.suffix(20).map { msg in
-            APIMessage(role: msg.role.rawValue, content: msg.content)
-        }
-
         isStreaming = true
         let assistantMessage = ChatMessage.assistant()
         messages.append(assistantMessage)
         let assistantIndex = messages.count - 1
+
+        // Branch on transport: local kinclaw uses two-channel
+        // (POST /api/chat + GET /api/events SSE); cloud LocalKin
+        // uses single-channel /v1/chat with SSE inline.
+        if agent.isLocal {
+            sendToLocalKinClaw(text: text, assistantIndex: assistantIndex)
+        } else {
+            sendToCloudLocalKin(text: text, assistantIndex: assistantIndex)
+        }
+    }
+
+    // MARK: - Cloud transport (existing flow)
+
+    private func sendToCloudLocalKin(text: String, assistantIndex: Int) {
+        let apiMessages = messages.suffix(20).map { msg in
+            APIMessage(role: msg.role.rawValue, content: msg.content)
+        }
 
         let client = SSEClient()
         sseClient = client
@@ -432,7 +462,7 @@ struct ChatView: View {
             ChatHistory.save(messages: messages, for: agent.slug)
         }
 
-        client.onError = { error in
+        client.onError = { _ in
             if messages[assistantIndex].content.isEmpty {
                 messages[assistantIndex].content = "Connection error. Please try again."
             }
@@ -448,5 +478,125 @@ struct ChatView: View {
             hostname: hostname,
             messages: apiMessages
         )
+    }
+
+    // MARK: - Local kinclaw transport
+    //
+    // kinclaw exposes a two-channel chat protocol — POST /api/chat
+    // kicks the turn (the server tracks history per active soul),
+    // and GET /api/events streams everything (text deltas, tool
+    // calls, tool results, turn_done) over SSE. We subscribe to
+    // events FIRST so no early text_delta is lost between the POST
+    // returning and our subscription opening.
+
+    private func sendToLocalKinClaw(text: String, assistantIndex: Int) {
+        // Cancel any in-flight stream from a previous turn.
+        localStreamTask?.cancel()
+
+        let task = Task { @MainActor in
+            let client = KinClawAPIClient.default
+            // Subscribe before kicking — see comment above.
+            let stream = client.eventStream()
+
+            // Kick the turn.
+            do {
+                try await client.sendChat(text)
+            } catch {
+                messages[assistantIndex].content =
+                    "kinclaw error: \(error.localizedDescription)"
+                isStreaming = false
+                if voiceMode { voiceModeContinue() }
+                return
+            }
+
+            // Drain events until turn_done or the stream ends.
+            do {
+                for try await event in stream {
+                    if Task.isCancelled { break }
+                    handleLocalEvent(event, assistantIndex: assistantIndex)
+                    if event.kind == .turnDone || event.kind == .error {
+                        break
+                    }
+                }
+            } catch {
+                if messages[assistantIndex].content.isEmpty {
+                    messages[assistantIndex].content =
+                        "stream error: \(error.localizedDescription)"
+                }
+            }
+
+            // Cleanup + post-turn TTS / voice continuation. The
+            // local agent doesn't count against the cloud free-tier
+            // message budget, so no appState.recordMessage() here.
+            isStreaming = false
+            ChatHistory.save(messages: messages, for: agent.slug)
+
+            if !messages[assistantIndex].content.isEmpty {
+                if voiceMode {
+                    speaker.speak(
+                        messages[assistantIndex].content,
+                        hostname: hostname
+                    ) {
+                        voiceModeContinue()
+                    }
+                } else if ttsEnabled {
+                    speaker.speak(
+                        messages[assistantIndex].content,
+                        hostname: hostname
+                    ) {}
+                }
+            } else if voiceMode {
+                voiceModeContinue()
+            }
+        }
+        localStreamTask = task
+    }
+
+    /// Translate kinclaw SSE events into bubble-content updates.
+    /// Kept simple for M6 — text_delta accumulates, tool_call /
+    /// tool_result get rendered as inline markdown blocks. M6.5+
+    /// will replace this with rich per-tool styling that mirrors
+    /// what `kinclaw serve`'s own web UI shows.
+    private func handleLocalEvent(_ event: KinClawEvent, assistantIndex: Int) {
+        switch event.kind {
+        case .textDelta:
+            if let t = event.text, !t.isEmpty {
+                messages[assistantIndex].content += t
+                scrollTrigger += 1
+            }
+        case .toolCall:
+            if let name = event.name {
+                messages[assistantIndex].content += "\n\n*🔧 \(name)*"
+                scrollTrigger += 1
+            }
+        case .toolResult:
+            if let output = event.output, !output.isEmpty {
+                // Cap at ~400 chars so a verbose tool dump doesn't
+                // dominate the bubble; users can re-run with the
+                // tool directly from kinclaw's own UI for full
+                // output.
+                let preview = output.count > 400
+                    ? String(output.prefix(400)) + "…"
+                    : output
+                messages[assistantIndex].content += "\n\n```\n\(preview)\n```"
+                scrollTrigger += 1
+            }
+        case .error:
+            let msg = event.message ?? "kinclaw reported an error"
+            if !messages[assistantIndex].content.isEmpty {
+                messages[assistantIndex].content += "\n\n"
+            }
+            messages[assistantIndex].content += "[error: \(msg)]"
+            scrollTrigger += 1
+        case .hello, .userMessage, .turnDone,
+             .screenFrame, .recordDone, .soulSwitched, .none:
+            // hello/user_message: server-side echoes we already
+            //   represent locally; ignore.
+            // turn_done: stream-loop will exit after this returns.
+            // screen_frame / record_done: no UI yet (M6.5).
+            // soul_switched: ChatView's onAppear already issued the
+            //   switch; nothing to do mid-turn.
+            break
+        }
     }
 }

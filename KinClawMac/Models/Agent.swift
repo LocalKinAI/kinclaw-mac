@@ -9,7 +9,19 @@ struct Agent: Codable, Identifiable, Hashable {
     let hostname: String?
     let domain: String?
 
+    /// Absolute filesystem path to a local kinclaw soul, set when
+    /// this Agent is bridged from a `Soul`. nil for cloud agents
+    /// (api.localkin.dev /v1/agents never includes this key).
+    /// Codable synthesis decodes-if-present on optionals, so cloud
+    /// JSON parses unchanged.
+    let localSoulPath: String?
+
     var id: String { slug }
+
+    /// True when this Agent is a bridged local kinclaw soul rather
+    /// than a cloud agent. ChatView branches on this to pick the
+    /// right transport.
+    var isLocal: Bool { localSoulPath != nil }
 
     var displayName: String {
         name.replacingOccurrences(of: "_", with: " ").capitalized
