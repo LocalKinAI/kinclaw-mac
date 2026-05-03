@@ -338,20 +338,27 @@ struct SpotlightContentView: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
             }
+            // While streaming, the bubble's height changes rapidly —
+            // animating a scrollTo to a moving target is what
+            // produced the visible page-shake during tool calls.
+            // Use animation only when the turn is settled (counts
+            // change on the user-message append + assistant-stub
+            // append + final completion); skip animation on the
+            // intra-turn delta bumps that come through scrollTrigger.
             .onChange(of: messages.count) { _, _ in
-                withAnimation(.easeOut(duration: 0.15)) {
-                    if isStreaming {
-                        proxy.scrollTo("streaming-indicator", anchor: .bottom)
-                    } else {
+                if isStreaming {
+                    proxy.scrollTo("streaming-indicator", anchor: .bottom)
+                } else {
+                    withAnimation(.easeOut(duration: 0.15)) {
                         proxy.scrollTo(messages.last?.id, anchor: .bottom)
                     }
                 }
             }
             .onChange(of: scrollTrigger) { _, _ in
-                withAnimation(.easeOut(duration: 0.1)) {
-                    if isStreaming {
-                        proxy.scrollTo("streaming-indicator", anchor: .bottom)
-                    } else {
+                if isStreaming {
+                    proxy.scrollTo("streaming-indicator", anchor: .bottom)
+                } else {
+                    withAnimation(.easeOut(duration: 0.1)) {
                         proxy.scrollTo(messages.last?.id, anchor: .bottom)
                     }
                 }
@@ -479,22 +486,18 @@ struct SpotlightContentView: View {
     @ViewBuilder
     private func streamingMarkdownText(_ msg: ChatMessage,
                                         showCursor: Bool) -> some View {
-        if showCursor {
-            // Streaming bubble — TimelineView drives the blink without
-            // a standing Timer. We pay the redraw cost only on the
-            // active bubble; settled messages render once and stop.
-            TimelineView(.periodic(from: .now, by: 0.5)) { context in
-                let on = Int(context.date.timeIntervalSinceReferenceDate * 2) % 2 == 0
-                VStack(alignment: .leading, spacing: 6) {
-                    MarkdownView(text: msg.content)
-                    Text(on ? "█" : " ")
-                        .font(.system(size: 13, design: .monospaced))
-                        .foregroundColor(.green.opacity(0.7))
-                        .frame(height: 14, alignment: .leading)
-                }
-            }
-        } else {
+        // The MarkdownView stays OUTSIDE any TimelineView so the
+        // markdown parse runs only when content actually changes —
+        // not every 0.5s on the cursor blink. Earlier version put
+        // both inside the timeline; the resulting re-parse + re-
+        // layout on every tick (combined with auto-scroll trying
+        // to chase the changing height) showed up as page-shake
+        // during tool calls.
+        VStack(alignment: .leading, spacing: 4) {
             MarkdownView(text: msg.content)
+            if showCursor {
+                BlinkingCursor()
+            }
         }
     }
 
@@ -804,6 +807,24 @@ struct SpotlightContentView: View {
         case .hello, .userMessage, .turnDone,
              .screenFrame, .recordDone, .soulSwitched, .none:
             break
+        }
+    }
+}
+
+// MARK: - Blinking cursor
+//
+// Only this view re-renders on the timeline tick. Surrounding
+// markdown / bubble layout is unaffected.
+
+private struct BlinkingCursor: View {
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 0.5)) { context in
+            let on = Int(context.date.timeIntervalSinceReferenceDate * 2) % 2 == 0
+            Text("█")
+                .font(.system(size: 13, design: .monospaced))
+                .foregroundColor(.green.opacity(0.7))
+                .opacity(on ? 1 : 0)
+                .frame(height: 14, alignment: .leading)
         }
     }
 }
