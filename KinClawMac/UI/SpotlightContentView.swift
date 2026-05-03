@@ -123,22 +123,31 @@ struct SpotlightContentView: View {
     // MARK: - Body
 
     var body: some View {
+        // Two layers via ZStack:
+        //   - Main content in a VStack starting at y=0 BELOW the
+        //     titlebar (28pt reserved Color.clear placeholder so
+        //     chat messages don't slide UP under the traffic
+        //     lights).
+        //   - Header overlay (.ignoresSafeArea(.top)) floating
+        //     INTO the titlebar row, sharing the row with the
+        //     traffic lights NSWindow draws there.
+        // The .ignoresSafeArea is scoped to JUST the header (not
+        // the whole body) — putting it on the parent in r10 was
+        // what pushed the messages up under the titlebar.
+        ZStack(alignment: .top) {
+            mainStack
+            titlebarHeaderOverlay
+        }
+        .frame(minWidth: 320, minHeight: 380)
+    }
+
+    /// Main column — chat content under the titlebar.
+    private var mainStack: some View {
         VStack(spacing: 0) {
-            // Header consolidated into the titlebar visually:
-            // - .leading 72pt skips past the traffic-light controls
-            //   that NSWindow draws at the top-left
-            // - .frame height 28 matches the macOS titlebar height
-            // - Combined with `.fullSizeContentView` + transparent
-            //   titlebar in SpotlightWindow, the SwiftUI tree
-            //   extends UP behind the titlebar, so the header sits
-            //   ON THE SAME ROW as the traffic lights — saves ~28pt
-            //   vertical space vs the previous "header below title-
-            //   bar" layout.
-            header
-                .padding(.leading, 72)
-                .padding(.trailing, 14)
-                .padding(.vertical, 3)
-                .frame(height: 28)
+            // 28pt reservation for the titlebar row. The titlebar-
+            // overlay header floats here visually, but in layout we
+            // need a placeholder so chat content starts BELOW it.
+            Color.clear.frame(height: 28)
 
             Divider().opacity(0.15)
 
@@ -208,16 +217,6 @@ struct SpotlightContentView: View {
         }
         .preferredColorScheme(.dark)
         .background(Color.clear) // SpotlightWindow's blur shows through
-        .frame(minWidth: 320, minHeight: 380)
-        // Critical: by default SwiftUI inserts a safe-area inset
-        // for the titlebar and shifts content DOWN to clear it.
-        // We set .fullSizeContentView on the NSPanel to allow
-        // content under the titlebar, but SwiftUI still respects
-        // the inset unless told otherwise. .ignoresSafeArea on the
-        // top edge makes our VStack truly start at y=0 — that's
-        // what puts the agent header on the SAME ROW as the
-        // traffic-light buttons.
-        .ignoresSafeArea(.container, edges: .top)
         // Drag any file in from Finder / desktop / mail — becomes a
         // pending attachment. Local kinclaw souls (Pilot etc.) get
         // the file path baked into the message so the agent can
@@ -235,6 +234,20 @@ struct SpotlightContentView: View {
             localStreamTask?.cancel()
             speaker.stop()
         }
+    }
+
+    /// Header floating in the titlebar row. Pinned to the top via
+    /// .ignoresSafeArea(.top) — without this SwiftUI inserts a
+    /// safe-area inset and pushes the header down clear of the
+    /// titlebar.
+    private var titlebarHeaderOverlay: some View {
+        header
+            .padding(.leading, 72)   // clear the traffic-light buttons
+            .padding(.trailing, 14)
+            .padding(.vertical, 3)
+            .frame(height: 28)
+            .frame(maxWidth: .infinity)
+            .ignoresSafeArea(.container, edges: .top)
     }
 
     // MARK: - Header (soul/agent picker)
@@ -1056,17 +1069,21 @@ struct SpotlightContentView: View {
     /// provider unwraps via `loadObject(ofClass:)`.
     private func handleDrop(providers: [NSItemProvider]) -> Bool {
         guard !providers.isEmpty else { return false }
-        var added = false
-        let group = DispatchGroup()
         for provider in providers {
             guard provider.canLoadObject(ofClass: URL.self) else { continue }
-            group.enter()
-            _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                defer { group.leave() }
-                guard let url = url else { return }
+            _ = provider.loadObject(ofClass: URL.self) { url, error in
+                if let error = error {
+                    print("[Drop] loadObject error: \(error)")
+                }
+                guard let url = url else {
+                    print("[Drop] no URL")
+                    return
+                }
+                let resolved = url.standardizedFileURL
+                let exists = FileManager.default.fileExists(atPath: resolved.path)
+                print("[Drop] got URL: \(resolved.path) (exists=\(exists))")
                 DispatchQueue.main.async {
-                    pendingAttachments.append(Attachment(localURL: url))
-                    added = true
+                    pendingAttachments.append(Attachment(localURL: resolved))
                 }
             }
         }
