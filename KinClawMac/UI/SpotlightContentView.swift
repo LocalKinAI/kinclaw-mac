@@ -209,6 +209,15 @@ struct SpotlightContentView: View {
         .preferredColorScheme(.dark)
         .background(Color.clear) // SpotlightWindow's blur shows through
         .frame(minWidth: 320, minHeight: 380)
+        // Critical: by default SwiftUI inserts a safe-area inset
+        // for the titlebar and shifts content DOWN to clear it.
+        // We set .fullSizeContentView on the NSPanel to allow
+        // content under the titlebar, but SwiftUI still respects
+        // the inset unless told otherwise. .ignoresSafeArea on the
+        // top edge makes our VStack truly start at y=0 — that's
+        // what puts the agent header on the SAME ROW as the
+        // traffic-light buttons.
+        .ignoresSafeArea(.container, edges: .top)
         // Drag any file in from Finder / desktop / mail — becomes a
         // pending attachment. Local kinclaw souls (Pilot etc.) get
         // the file path baked into the message so the agent can
@@ -706,6 +715,20 @@ struct SpotlightContentView: View {
 
     private var inputBar: some View {
         HStack(spacing: 8) {
+            // Paperclip — opens file picker. Same destination as
+            // drag-drop (pendingAttachments). Visible affordance so
+            // users know "you can attach files here" without first
+            // discovering drag-drop.
+            Button {
+                openFilePicker()
+            } label: {
+                Image(systemName: "paperclip")
+                    .font(.system(size: 13))
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Attach files (or drag & drop anywhere on this panel)")
+
             // Mic + (when recording) live audio level meter. Click
             // toggles record/cancel.
             Button {
@@ -777,6 +800,22 @@ struct SpotlightContentView: View {
     private func cancelRecentRowHide() {
         recentRowHideTask?.cancel()
         recentRowHideTask = nil
+    }
+
+    /// NSOpenPanel-based file picker for the paperclip button. Same
+    /// landing as drag-drop — selected URLs append to
+    /// pendingAttachments. Multiple selection allowed.
+    private func openFilePicker() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.message = "Choose files to attach"
+        if panel.runModal() == .OK {
+            for url in panel.urls {
+                pendingAttachments.append(Attachment(localURL: url))
+            }
+        }
     }
 
     private func openSettings() {
