@@ -603,6 +603,8 @@ struct SpotlightContentView: View {
                                 .foregroundColor(.primary)
                                 .clipShape(RoundedRectangle(cornerRadius: 10))
                                 .textSelection(.enabled)
+                                .frame(maxWidth: .infinity,
+                                       alignment: .trailing)
                         }
                         ForEach(msg.attachments) { attachment in
                             AttachmentView(attachment: attachment)
@@ -649,10 +651,19 @@ struct SpotlightContentView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .frame(maxWidth: 320, alignment: .leading)
+        // maxWidth .infinity (was 320 fixed!) so the bubble grows
+        // with the panel width; Spacer(minLength: 24) on the right
+        // in the parent HStack keeps it from running edge-to-edge.
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.platformSecondaryBackground.opacity(0.6))
         .foregroundColor(.primary)
         .clipShape(RoundedRectangle(cornerRadius: 10))
+        // textSelection on the bubble propagates down to every Text
+        // view inside MarkdownView (paragraphs, headings, list items,
+        // code blocks). Was lost when r5 introduced MarkdownView —
+        // each block-level Text view doesn't carry it itself, but
+        // SwiftUI inherits this modifier from the enclosing scope.
+        .textSelection(.enabled)
     }
 
     @ViewBuilder
