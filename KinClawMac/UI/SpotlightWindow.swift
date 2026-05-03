@@ -43,10 +43,18 @@ final class SpotlightWindow: NSPanel {
         // visual chrome below and let .fullSizeContentView push the
         // SwiftUI tree up under it; the result looks identical to
         // borderless but resize works the way users expect.
+        // Each traffic-light button is gated by its corresponding
+        // styleMask flag:
+        //   .closable        → red (close)
+        //   .miniaturizable  → yellow (minimize)
+        //   .resizable       → green (zoom) AND edge-resize hit zones
+        // Without all three, you get an asymmetric titlebar with
+        // only some buttons enabled — exactly the bug just caught
+        // (only zoom showed because only .resizable was in the mask).
         super.init(
             contentRect: initialFrame,
-            styleMask: [.titled, .resizable, .nonactivatingPanel,
-                        .fullSizeContentView],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable,
+                        .nonactivatingPanel, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
