@@ -59,6 +59,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let supervisor = KinClawSupervisor()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // One-shot migration: if the user has chat history saved
+        // under the old UserDefaults `chat_<slug>` keys, rewrite as
+        // session JSONs in ~/.kinclaw/sessions/ and clear the keys.
+        // Idempotent — flag stops re-runs.
+        ChatSessionStore.migrateFromUserDefaults()
         // 1. Build the floating spotlight panel with the
         //    Spotlight-shaped single-pane chat view (replacing the
         //    iOS-shaped TabView ContentView, which was too cramped

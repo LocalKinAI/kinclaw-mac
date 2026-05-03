@@ -48,6 +48,11 @@ struct SpotlightContentView: View {
     /// Drop-zone visual state — used to highlight the input area
     /// when the cursor is dragging a file over it.
     @State private var isDropTarget = false
+    /// Currently-active session id. Changes when the user picks
+    /// "New chat" or selects an item from the history popover.
+    @State private var currentSessionID: UUID = UUID()
+    @State private var sessionTitle: String = "New chat"
+    @State private var showingHistoryPopover = false
     /// Reveal state for the recent-agents row at the top of the
     /// messages area. Latched on hover, latched off via small
     /// delayed timer so brief mouse exits don't flicker the row.
@@ -258,6 +263,44 @@ struct SpotlightContentView: View {
             agentMenu
                 .frame(maxWidth: .infinity, alignment: .leading)
 
+            // Session history (📚) — popover with all saved
+            // chats for the active agent + "+ New chat" + delete.
+            Button {
+                showingHistoryPopover.toggle()
+            } label: {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Session history (\u{2318}H)")
+            .keyboardShortcut("h", modifiers: .command)
+            .popover(isPresented: $showingHistoryPopover,
+                     arrowEdge: .top) {
+                if let agent = selectedAgent {
+                    SessionHistoryPopover(
+                        agentSlug: agent.slug,
+                        activeSessionID: currentSessionID,
+                        onPick: { session in
+                            loadSession(session)
+                            showingHistoryPopover = false
+                        },
+                        onNew: {
+                            startNewSession()
+                            showingHistoryPopover = false
+                        },
+                        onDelete: { session in
+                            ChatSessionStore.delete(id: session.id,
+                                                     agentSlug: agent.slug)
+                            // If the deleted one was active, start fresh
+                            if session.id == currentSessionID {
+                                startNewSession()
+                            }
+                        }
+                    )
+                }
+            }
+
             // Quick actions
             if !messages.isEmpty {
                 Button {
@@ -268,7 +311,8 @@ struct SpotlightContentView: View {
                         .foregroundColor(.secondary)
                 }
                 .buttonStyle(.plain)
-                .help("Clear chat")
+                .help("Clear chat (\u{2318}\u{232B})")
+                .keyboardShortcut(.delete, modifiers: .command)
             }
 
             Button {
@@ -865,18 +909,93 @@ struct SpotlightContentView: View {
 
     private func clearChat() {
         guard let agent = selectedAgent else { return }
+        // Drop the in-flight session entirely — delete it from
+        // disk if it was saved + reset to a fresh empty session.
+        ChatSessionStore.delete(id: currentSessionID, agentSlug: agent.slug)
+        startNewSession()
+
+        // Local kinclaw: also reset server-side conversation memory
+        // by re-loading the soul (server reads from disk on switch).
+        // Cloud agents are stateless per-message so no reset needed.
+        if let soulPath = agent.localSoulPath {
+            Task {
+                try? await KinClawAPIClient.default.switchSoul(path: soulPath)
+            }
+        }
+    }
+
+    /// Start a new chat session. Saves the current one if it has
+    /// content, then resets messages + currentSessionID.
+    private func startNewSession() {
+        guard let agent = selectedAgent else { return }
+        saveCurrentSession()
         messages = []
-        ChatHistory.clear(for: agent.slug)
+        currentSessionID = UUID()
+        sessionTitle = "New chat"
+    }
+
+    /// Load a saved session into the active chat surface.
+    private func loadSession(_ session: ChatSession) {
+        saveCurrentSession()
+        currentSessionID = session.id
+        sessionTitle = session.title
+        messages = session.messages.map { $0.toMessage() }
+    }
+
+    /// Persist whatever's currently on screen as a session JSON.
+    /// Idempotent — safe to call on every meaningful state change
+    /// (after each turn, before switching, on disappear).
+    private func saveCurrentSession() {
+        guard let agent = selectedAgent else { return }
+        guard !messages.isEmpty else {
+            // Empty session — nothing to save. (We DON'T persist
+            // empty placeholder sessions; new-chat is implicit.)
+            return
+        }
+
+        // Title = first user message, capped to 60 chars. Falls
+        // back to existing title (set when loading a saved session)
+        // if no user message yet.
+        let derived = messages.first(where: { $0.isUser })?.content
+            ?? sessionTitle
+        let title = String(derived.prefix(60))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let now = Date()
+        let session = ChatSession(
+            id: currentSessionID,
+            agentSlug: agent.slug,
+            title: title,
+            createdAt: messages.first?.timestamp ?? now,
+            updatedAt: now,
+            messages: messages.map(PersistedMessage.init(from:))
+        )
+        ChatSessionStore.save(session)
+        sessionTitle = title
     }
 
     private func handleAgentChange() {
         guard let agent = selectedAgent else { return }
-        // Restore per-agent history
-        messages = ChatHistory.load(for: agent.slug)
+
+        // Save the outgoing session before switching agents (otherwise
+        // the messages we just had get dropped on the floor).
+        saveCurrentSession()
+
+        // Load the most-recent session for the new agent (or empty
+        // if they've never chatted with this one).
+        let recent = ChatSessionStore.list(for: agent.slug).first
+        if let last = recent {
+            currentSessionID = last.id
+            sessionTitle = last.title
+            messages = last.messages.map { $0.toMessage() }
+        } else {
+            currentSessionID = UUID()
+            sessionTitle = "New chat"
+            messages = []
+        }
 
         // Persist last-used selection so the next launch lands on
-        // the same agent (rather than re-defaulting to Pilot every
-        // time and losing the user's last choice).
+        // the same agent.
         UserDefaults.standard.set(agent.slug, forKey: "kinclaw.lastAgent")
 
         // Push to recent-agents stack (UserDefaults-backed; the
@@ -1049,7 +1168,7 @@ struct SpotlightContentView: View {
                     speaker.speak(messages[assistantIndex].content,
                                   hostname: hostname) {}
                 }
-                ChatHistory.save(messages: messages, for: agent.slug)
+                saveCurrentSession()
             }
         }
         client.onError = { _ in
