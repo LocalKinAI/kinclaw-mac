@@ -418,38 +418,42 @@ struct SpotlightContentView: View {
     private var messagesView: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                // VStack (not LazyVStack) — LazyVStack defers cell
-                // materialization, which on the first welcome→bubbles
-                // transition produced a multi-second visible-height-
-                // zero pulse before SwiftUI populated the new
-                // children. VStack pre-renders so the transition is
-                // immediate. Perf hit only matters at ~500+ messages
-                // where we'd reintroduce lazy rendering anyway.
-                VStack(alignment: .leading, spacing: 14) {
+                // LazyVStack — cells render only when scrolled into
+                // view. Critical for input-field responsiveness:
+                // every keystroke re-evaluates the parent struct,
+                // and a non-lazy VStack would force MarkdownParser
+                // to re-parse every visible+invisible message every
+                // tick. LazyVStack scopes that work to visible cells
+                // only, restoring instant typing feel.
+                //
+                // (The earlier "几秒钟空白" bug attributed to LazyVStack
+                // turned out to be a scroll-anchor issue, not lazy
+                // materialization — fix is below in the .onChange
+                // scroll handler, which now anchors the last-message
+                // at .bottom rather than a 1pt invisible spacer at
+                // .bottom.)
+                LazyVStack(alignment: .leading, spacing: 14) {
                     if messages.isEmpty && selectedAgent != nil {
                         welcomeCard
                             .padding(.top, 40)
-                            .transition(.opacity)
                     } else if messages.isEmpty && loadError != nil {
                         errorState
-                            .transition(.opacity)
                     } else {
                         ForEach(messages) { msg in
                             messageBubble(msg)
                                 .id(msg.id)
-                                .transition(.opacity)
                         }
                     }
-                    // Streaming indicator at the LIST tail kept as a
-                    // safety anchor for auto-scroll — but only render
-                    // a tiny invisible spacer (no visible "thinking"
-                    // row) since the dots-in-bubble flow above is
-                    // the canonical streaming signal now.
-                    if isStreaming {
-                        Color.clear
-                            .frame(height: 1)
-                            .id("streaming-indicator")
-                    }
+                    // The 1pt invisible streaming-indicator spacer
+                    // was here before — turned out auto-scrolling
+                    // to it with anchor: .bottom would push the
+                    // small empty assistant bubble flush against
+                    // the bottom edge with EVERYTHING ELSE pushed
+                    // OFF the top of the viewport on short content,
+                    // producing the "几秒钟空白" effect. Removed —
+                    // the .onChange handler below now scrolls to
+                    // messages.last?.id with anchor: .bottom which
+                    // does the right thing without the spacer.
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
@@ -458,16 +462,16 @@ struct SpotlightContentView: View {
                 // bubble append so they animate as one event.
                 .animation(.easeInOut(duration: 0.18), value: messages.count)
             }
-            // While streaming, the bubble's height changes rapidly —
-            // animating a scrollTo to a moving target is what
-            // produced the visible page-shake during tool calls.
-            // Use animation only when the turn is settled (counts
-            // change on the user-message append + assistant-stub
-            // append + final completion); skip animation on the
-            // intra-turn delta bumps that come through scrollTrigger.
+            // Anchor at messages.last?.id with .bottom in BOTH
+            // streaming + settled cases. With short content the
+            // scroll just stays where it is (no pushing things
+            // off-screen); with long content it tracks the tail.
+            // Skip animation while streaming — the bubble height
+            // changes rapidly during tool calls; animating a
+            // scrollTo to a moving target produced page-shake.
             .onChange(of: messages.count) { _, _ in
                 if isStreaming {
-                    proxy.scrollTo("streaming-indicator", anchor: .bottom)
+                    proxy.scrollTo(messages.last?.id, anchor: .bottom)
                 } else {
                     withAnimation(.easeOut(duration: 0.15)) {
                         proxy.scrollTo(messages.last?.id, anchor: .bottom)
@@ -476,7 +480,7 @@ struct SpotlightContentView: View {
             }
             .onChange(of: scrollTrigger) { _, _ in
                 if isStreaming {
-                    proxy.scrollTo("streaming-indicator", anchor: .bottom)
+                    proxy.scrollTo(messages.last?.id, anchor: .bottom)
                 } else {
                     withAnimation(.easeOut(duration: 0.1)) {
                         proxy.scrollTo(messages.last?.id, anchor: .bottom)
