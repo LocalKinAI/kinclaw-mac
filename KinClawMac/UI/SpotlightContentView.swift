@@ -42,6 +42,12 @@ struct SpotlightContentView: View {
     @State private var inputText = ""
     @State private var isStreaming = false
     @State private var scrollTrigger = 0
+    /// Files the user has dragged in but not yet sent. Render as
+    /// chips above the input bar; cleared after each send.
+    @State private var pendingAttachments: [Attachment] = []
+    /// Drop-zone visual state — used to highlight the input area
+    /// when the cursor is dragging a file over it.
+    @State private var isDropTarget = false
 
     // Transports.
     @State private var sseClient: SSEClient?
@@ -135,13 +141,31 @@ struct SpotlightContentView: View {
 
             Divider().opacity(0.15)
 
+            pendingAttachmentsBar
+
             inputBar
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(isDropTarget
+                                ? Color.green.opacity(0.6)
+                                : Color.clear,
+                                lineWidth: 1.5)
+                        .padding(.horizontal, 8)
+                )
         }
         .preferredColorScheme(.dark)
         .background(Color.clear) // SpotlightWindow's blur shows through
         .frame(minWidth: 320, minHeight: 380)
+        // Drag any file in from Finder / desktop / mail — becomes a
+        // pending attachment. Local kinclaw souls (Pilot etc.) get
+        // the file path baked into the message so the agent can
+        // read it directly. Cloud agents get a path mention but
+        // can't access the file (Phase 2: vision-model upload).
+        .onDrop(of: [.fileURL], isTargeted: $isDropTarget) { providers in
+            handleDrop(providers: providers)
+        }
         .onAppear { Task { await loadAgents() } }
         .onChange(of: selectedAgent?.id) { _, _ in
             handleAgentChange()
@@ -498,14 +522,21 @@ struct SpotlightContentView: View {
             if msg.isUser {
                 Spacer(minLength: 24)
                 BubbleWithCopy(content: msg.content, timestamp: msg.timestamp) {
-                    Text(msg.content)
-                        .font(.system(size: 13))
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(Color.green.opacity(0.18))
-                        .foregroundColor(.primary)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                        .textSelection(.enabled)
+                    VStack(alignment: .trailing, spacing: 6) {
+                        if !msg.content.isEmpty {
+                            Text(msg.content)
+                                .font(.system(size: 13))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .background(Color.green.opacity(0.18))
+                                .foregroundColor(.primary)
+                                .clipShape(RoundedRectangle(cornerRadius: 10))
+                                .textSelection(.enabled)
+                        }
+                        ForEach(msg.attachments) { attachment in
+                            AttachmentView(attachment: attachment)
+                        }
+                    }
                 }
             } else {
                 // Agent emoji avatar in front of assistant bubbles —
@@ -528,12 +559,9 @@ struct SpotlightContentView: View {
 
     private func assistantBubble(_ msg: ChatMessage,
                                  showCursor: Bool) -> some View {
-        // Renders Markdown body + any tool-call widgets attached to
-        // this message. While streaming with NO content yet, show
-        // dots INSIDE the bubble (ChatGPT-style) — much clearer
-        // signal than a separate "thinking..." row underneath.
-        // Once first delta arrives, dots vanish and cursor takes
-        // over.
+        // Renders Markdown body + tool-call widgets + attachments.
+        // While streaming with NO content yet, dots inside bubble
+        // (ChatGPT-style); once first delta lands, dots vanish.
         VStack(alignment: .leading, spacing: 6) {
             if msg.content.isEmpty && showCursor && msg.toolCalls.isEmpty {
                 StreamingDots(color: .secondary, size: 5, spacing: 5)
@@ -543,6 +571,9 @@ struct SpotlightContentView: View {
             }
             ForEach(msg.toolCalls) { call in
                 ToolCallView(call: call)
+            }
+            ForEach(msg.attachments) { attachment in
+                AttachmentView(attachment: attachment)
             }
         }
         .padding(.horizontal, 12)
@@ -572,6 +603,55 @@ struct SpotlightContentView: View {
     }
 
     // MARK: - Input bar
+
+    /// Pending attachment chips above the input bar (only when
+    /// the user has dragged something in but not yet sent).
+    @ViewBuilder
+    private var pendingAttachmentsBar: some View {
+        if !pendingAttachments.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(pendingAttachments) { attachment in
+                        HStack(spacing: 6) {
+                            Image(systemName: chipIcon(attachment))
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                            Text(attachment.displayName)
+                                .font(.system(size: 11))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Button {
+                                pendingAttachments.removeAll {
+                                    $0.id == attachment.id
+                                }
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.secondary.opacity(0.7))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(Color.platformSecondaryBackground.opacity(0.65))
+                        )
+                    }
+                }
+                .padding(.horizontal, 12)
+            }
+            .frame(height: 32)
+        }
+    }
+
+    private func chipIcon(_ a: Attachment) -> String {
+        switch a.kind {
+        case .image: return "photo"
+        case .video: return "video"
+        case .file:  return "doc"
+        }
+    }
 
     private var inputBar: some View {
         HStack(spacing: 8) {
@@ -748,15 +828,44 @@ struct SpotlightContentView: View {
 
     private func send() {
         guard let agent = selectedAgent else { return }
-        let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        let typed = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Allow sending with attachments only — typed text optional
+        // when there's at least one file attached (e.g. "drag image
+        // → click send" without typing anything implies "look at
+        // this").
+        guard !typed.isEmpty || !pendingAttachments.isEmpty else { return }
+
+        // Compose final user message: typed text + path mentions
+        // for each attachment. Local kinclaw souls can read paths
+        // directly; cloud agents see the path as a string mention
+        // (won't actually open the file but knows you're referring
+        // to one).
+        var composed = typed
+        if !pendingAttachments.isEmpty {
+            let pathLines = pendingAttachments.compactMap { att -> String? in
+                guard let p = att.localURL?.path else { return nil }
+                return "[file: \(p)]"
+            }
+            if !pathLines.isEmpty {
+                if !composed.isEmpty { composed += "\n\n" }
+                composed += pathLines.joined(separator: "\n")
+            }
+        }
+
+        var userMsg = ChatMessage.user(composed)
+        userMsg.attachments = pendingAttachments
+        let attachmentsToCarry = pendingAttachments
 
         inputText = ""
-        messages.append(.user(text))
+        pendingAttachments = []
+        messages.append(userMsg)
         messages.append(.assistant())
         let assistantIndex = messages.count - 1
         isStreaming = true
         inputFocused = true
+        // Keep `text` in scope for the legacy send paths below.
+        let text = composed
+        _ = attachmentsToCarry  // explicitly reserved for future use
 
         if agent.isLocal {
             sendLocal(text: text, assistantIndex: assistantIndex)
@@ -836,6 +945,31 @@ struct SpotlightContentView: View {
         localStreamTask = task
     }
 
+    /// NSItemProvider drop handler — accepts file URLs from Finder,
+    /// desktop, mail attachments, anywhere. Async because each
+    /// provider unwraps via `loadObject(ofClass:)`.
+    private func handleDrop(providers: [NSItemProvider]) -> Bool {
+        guard !providers.isEmpty else { return false }
+        var added = false
+        let group = DispatchGroup()
+        for provider in providers {
+            guard provider.canLoadObject(ofClass: URL.self) else { continue }
+            group.enter()
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                defer { group.leave() }
+                guard let url = url else { return }
+                DispatchQueue.main.async {
+                    pendingAttachments.append(Attachment(localURL: url))
+                    added = true
+                }
+            }
+        }
+        // Don't block; let the async loadObjects fire-and-forget. The
+        // .onDrop return value just signals "we accept it" — actual
+        // append happens when the provider resolves.
+        return true
+    }
+
     private func handleLocalEvent(_ event: KinClawEvent, assistantIndex: Int) {
         switch event.kind {
         case .textDelta:
@@ -888,8 +1022,38 @@ struct SpotlightContentView: View {
             }
             messages[assistantIndex].content += "**Error:** \(m)"
             scrollTrigger += 1
+        case .screenFrame, .recordDone:
+            // Agent emitted a screenshot or video recording —
+            // attach to the assistant bubble so the user sees it
+            // inline. event.images carries absolute paths;
+            // event.urls carries kinclaw `/file/...` URLs.
+            for path in event.images ?? [] {
+                let url = URL(fileURLWithPath: path)
+                messages[assistantIndex].attachments.append(
+                    Attachment(localURL: url))
+                scrollTrigger += 1
+            }
+            for s in event.urls ?? [] {
+                if let url = URL(string: s) {
+                    messages[assistantIndex].attachments.append(
+                        Attachment(remoteURL: url))
+                    scrollTrigger += 1
+                }
+            }
+            // Single `path` field — record_done usually emits this.
+            if let path = event.path, !path.isEmpty {
+                let url = URL(fileURLWithPath: path)
+                messages[assistantIndex].attachments.append(
+                    Attachment(localURL: url))
+                scrollTrigger += 1
+            }
+            if let url = event.url, let parsed = URL(string: url) {
+                messages[assistantIndex].attachments.append(
+                    Attachment(remoteURL: parsed))
+                scrollTrigger += 1
+            }
         case .hello, .userMessage, .turnDone,
-             .screenFrame, .recordDone, .soulSwitched, .none:
+             .soulSwitched, .none:
             break
         }
     }
