@@ -16,7 +16,18 @@ struct Agent: Codable, Identifiable, Hashable {
     /// JSON parses unchanged.
     let localSoulPath: String?
 
-    var id: String { slug }
+    /// Identity for SwiftUI ForEach + Identifiable. Uses
+    /// `domain:slug` so the same slug surfaced under multiple
+    /// groups (e.g. `guyon` appears as both a Core entry and a
+    /// Selah spiritual master) doesn't collide in lists. Plain
+    /// `slug` is still used for chat / lookup keys — see
+    /// `pickDefaultAgent` and the UserDefaults persistence.
+    var id: String {
+        if let d = domain, !d.isEmpty {
+            return "\(d):\(slug)"
+        }
+        return slug
+    }
 
     /// True when this Agent is a bridged local kinclaw soul rather
     /// than a cloud agent. ChatView branches on this to pick the

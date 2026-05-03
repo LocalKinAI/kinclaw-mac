@@ -19,8 +19,12 @@ struct KinClawMacApp: App {
 
     var body: some Scene {
         Settings {
-            SettingsView()
-                .environmentObject(appDelegate.appState)
+            // Mac-native settings — hotkey recorder + launch-at-login
+            // + about. The iOS-ported SettingsView (license keys /
+            // trial / Lemon Squeezy) lives on disk but isn't
+            // referenced from here; that whole tier belongs on
+            // localkin.dev account pages, not on a free local dock.
+            KinClawMacSettingsView()
                 .preferredColorScheme(.dark)
         }
     }

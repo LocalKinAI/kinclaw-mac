@@ -47,8 +47,51 @@ extension CloudMaster {
 }
 
 enum CloudAgentCatalog {
-    /// All baked-in cloud masters. Order: Selah first, then Heal.
+    /// All baked-in cloud masters. Order: Core (api.localkin.dev/
+    /// landing) → Selah → Heal.
     static let all: [CloudMaster] = [
+        // ── Core — api.localkin.dev/ landing page (6 agents) ──
+        // The 6 agents featured on the api.localkin.dev/ landing
+        // page. Headliners — some overlap with Selah (guyon also
+        // appears as a spiritual master) and Heal (tcm general)
+        // but Core is the entry-point group that surfaces them.
+        .init(slug: "guyon",
+              nameZh: "盖恩夫人",
+              nameEn: "Madame Guyon",
+              era: "Spiritual companion",
+              avatar: "🕊️",
+              domain: "core"),
+        .init(slug: "english",
+              nameZh: "英语导师",
+              nameEn: "English Tutor",
+              era: "100 real-life scenarios",
+              avatar: "🎓",
+              domain: "core"),
+        .init(slug: "tcm",
+              nameZh: "中医大师",
+              nameEn: "TCM Master",
+              era: "Classical · 12 physicians",
+              avatar: "🏥",
+              domain: "core"),
+        .init(slug: "citizen",
+              nameZh: "公民教练",
+              nameEn: "Citizenship Coach",
+              era: "128 USCIS questions",
+              avatar: "🇺🇸",
+              domain: "core"),
+        .init(slug: "chinese-tutor",
+              nameZh: "中文导师",
+              nameEn: "Chinese Tutor",
+              era: "ABC kids · 25 scenarios",
+              avatar: "🇨🇳",
+              domain: "core"),
+        .init(slug: "spanish",
+              nameZh: "西班牙语导师",
+              nameEn: "Spanish Tutor",
+              era: "Bilingual fun for kids",
+              avatar: "🇪🇸",
+              domain: "core"),
+
         // ── Selah / Faith — spiritual (42 masters) ──
         .init(slug: "irenaeus", nameZh: "爱任纽", nameEn: "Irenaeus", era: "130-202", avatar: "📜", domain: "spiritual"),
         .init(slug: "athanasius", nameZh: "亚他那修", nameEn: "Athanasius", era: "296-373", avatar: "⚔️", domain: "spiritual"),

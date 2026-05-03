@@ -82,6 +82,9 @@ struct SpotlightContentView: View {
         // KinClaw branded (Claude / Cloud / default = 3 today).
         localAgents.filter { !$0.name.hasPrefix("KinClaw") }
     }
+    private var coreAgents: [Agent] {
+        cloudAgents.filter { $0.domain == "core" }
+    }
     private var spiritualAgents: [Agent] {
         cloudAgents.filter { $0.domain == "spiritual" }
     }
@@ -89,7 +92,11 @@ struct SpotlightContentView: View {
         cloudAgents.filter { $0.domain == "tcm" }
     }
     private var otherCloudAgents: [Agent] {
-        cloudAgents.filter { $0.domain != "spiritual" && $0.domain != "tcm" }
+        cloudAgents.filter {
+            $0.domain != "core"
+                && $0.domain != "spiritual"
+                && $0.domain != "tcm"
+        }
     }
 
     private var hostname: String {
@@ -202,6 +209,17 @@ struct SpotlightContentView: View {
             if !localKinSouls.isEmpty {
                 Menu("🤖  Solo agents  (\(localKinSouls.count))") {
                     ForEach(localKinSouls) { agentMenuRow($0) }
+                }
+            }
+
+            // ── Core — api.localkin.dev/ landing page headliners.
+            //     6 general-audience agents (Guyon / English /
+            //     TCM / Citizen / Chinese-tutor / Spanish). Some
+            //     overlap with Selah / Heal (guyon, tcm) — Core is
+            //     where they're surfaced as featured entries. ──
+            if !coreAgents.isEmpty {
+                Menu("⭐  Core  (\(coreAgents.count))") {
+                    ForEach(coreAgents) { agentMenuRow($0) }
                 }
             }
 
