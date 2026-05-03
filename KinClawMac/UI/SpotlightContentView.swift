@@ -246,13 +246,13 @@ struct SpotlightContentView: View {
                 Task { await loadAgents() }
             }
         } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: 6) {
                 if let agent = selectedAgent {
-                    Circle()
-                        .fill(agent.isLocal ? Color.green : Color.blue)
-                        .frame(width: 6, height: 6)
-                    Text(agent.displayName)
+                    Text(AgentDecor.emoji(for: agent))
+                        .font(.system(size: 14))
+                    Text(activeNameLabel(for: agent))
                         .font(.system(size: 13, weight: .semibold))
+                        .lineLimit(1)
                 } else if isLoadingAgents {
                     Text("Loading agents…")
                         .font(.system(size: 13))
@@ -279,8 +279,13 @@ struct SpotlightContentView: View {
             selectedAgent = agent
         } label: {
             HStack {
-                Text(agent.displayName)
+                Text(AgentDecor.displayLabel(for: agent))
                 Spacer()
+                if let era = AgentDecor.caption(for: agent) {
+                    Text(era)
+                        .foregroundColor(.secondary)
+                        .font(.caption)
+                }
                 if selectedAgent?.id == agent.id {
                     Image(systemName: "checkmark")
                 }
@@ -342,31 +347,53 @@ struct SpotlightContentView: View {
     }
 
     private var welcomeCard: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 8) {
             if let agent = selectedAgent {
-                Image(systemName: agent.isLocal
-                                  ? "laptopcomputer"
-                                  : "sparkles")
-                    .font(.system(size: 36))
-                    .foregroundColor(agent.isLocal ? .green : .blue)
+                Text(AgentDecor.emoji(for: agent))
+                    .font(.system(size: 44))
+                    .padding(.bottom, 4)
 
-                Text(agent.displayName)
-                    .font(.system(size: 18, weight: .semibold))
+                // Cloud masters get bilingual rendering; local souls
+                // just get their plain name.
+                if let master = CloudAgentCatalog.master(for: agent.slug) {
+                    Text(master.nameZh)
+                        .font(.system(size: 18, weight: .semibold))
+                    Text(master.nameEn)
+                        .font(.system(size: 13))
+                        .foregroundColor(.secondary)
+                } else {
+                    Text(agent.displayName)
+                        .font(.system(size: 18, weight: .semibold))
+                }
+
+                if let caption = AgentDecor.caption(for: agent) {
+                    Text(caption)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary.opacity(0.85))
+                        .padding(.top, 2)
+                }
 
                 Text(agent.isLocal
-                     ? "Local KinClaw — operates your Mac"
-                     : "Cloud agent — \(agent.domain ?? "general")")
+                     ? "Type below to start. ⌘⏎ to send."
+                     : "Type below — ⌘⏎ to send. Bilingual; mix freely.")
                     .font(.system(size: 11))
-                    .foregroundColor(.secondary)
-
-                Text("Type below to start.")
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary.opacity(0.7))
-                    .padding(.top, 2)
+                    .foregroundColor(.secondary.opacity(0.6))
+                    .padding(.top, 6)
+                    .multilineTextAlignment(.center)
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 20)
+        .padding(.vertical, 24)
+    }
+
+    /// Header label shown next to the dropdown chevron. For cloud
+    /// masters: "盖恩夫人 · Madame Guyon" (bilingual). For local:
+    /// just the plain display name. Truncates to fit narrow panels.
+    private func activeNameLabel(for agent: Agent) -> String {
+        if let master = CloudAgentCatalog.master(for: agent.slug) {
+            return "\(master.nameZh)  ·  \(master.nameEn)"
+        }
+        return agent.displayName
     }
 
     private var errorState: some View {
@@ -390,7 +417,10 @@ struct SpotlightContentView: View {
     }
 
     private func messageBubble(_ msg: ChatMessage) -> some View {
-        HStack(alignment: .top, spacing: 8) {
+        let isLastAssistantWhileStreaming = !msg.isUser
+            && isStreaming
+            && msg.id == messages.last?.id
+        return HStack(alignment: .top, spacing: 8) {
             if msg.isUser {
                 Spacer(minLength: 30)
                 Text(msg.content)
@@ -402,16 +432,28 @@ struct SpotlightContentView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                     .textSelection(.enabled)
             } else {
-                Text(LocalizedStringKey(msg.content))
-                    .font(.system(size: 13))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Color.platformSecondaryBackground.opacity(0.6))
-                    .foregroundColor(.primary)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                    .textSelection(.enabled)
+                assistantBubble(msg, showCursor: isLastAssistantWhileStreaming)
                 Spacer(minLength: 30)
             }
+        }
+    }
+
+    private func assistantBubble(_ msg: ChatMessage,
+                                 showCursor: Bool) -> some View {
+        // Use TimelineView at 2Hz so the cursor blinks without a
+        // standing Timer. Only the streaming bubble pays the cost;
+        // settled messages re-render once and stop.
+        TimelineView(.periodic(from: .now, by: 0.5)) { context in
+            let cursorVisible = showCursor
+                && Int(context.date.timeIntervalSinceReferenceDate * 2) % 2 == 0
+            Text(msg.content + (cursorVisible ? " █" : "   "))
+                .font(.system(size: 13))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.platformSecondaryBackground.opacity(0.6))
+                .foregroundColor(.primary)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .textSelection(.enabled)
         }
     }
 
