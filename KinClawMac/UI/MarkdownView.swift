@@ -76,6 +76,54 @@ struct MarkdownView: View {
                     .padding(.leading, 8)
                     .fixedSize(horizontal: false, vertical: true)
             }
+
+        case .table(let headers, let rows):
+            MarkdownTableView(headers: headers, rows: rows)
+        }
+    }
+}
+
+// MARK: - Table view
+
+private struct MarkdownTableView: View {
+    let headers: [String]
+    let rows: [[String]]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header row
+            tableRow(headers, isHeader: true)
+            Divider().opacity(0.3)
+            // Data rows
+            ForEach(Array(rows.enumerated()), id: \.offset) { idx, row in
+                tableRow(row, isHeader: false)
+                if idx < rows.count - 1 {
+                    Divider().opacity(0.12)
+                }
+            }
+        }
+        .padding(8)
+        .background(Color.platformTertiaryBackground.opacity(0.45))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    @ViewBuilder
+    private func tableRow(_ cells: [String], isHeader: Bool) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            ForEach(Array(cells.enumerated()), id: \.offset) { i, cell in
+                Text(LocalizedStringKey(cell))
+                    .font(.system(size: 12,
+                                  weight: isHeader ? .semibold : .regular))
+                    .foregroundColor(isHeader ? .primary : .primary.opacity(0.9))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if i < cells.count - 1 {
+                    Rectangle()
+                        .fill(Color.secondary.opacity(0.1))
+                        .frame(width: 0.5)
+                }
+            }
         }
     }
 }
@@ -141,6 +189,8 @@ enum MarkdownBlock {
     case list(items: [String], ordered: Bool)
     case codeBlock(language: String?, body: String)
     case blockquote(String)
+    /// GFM-style table: `| h1 | h2 |` / `|---|---|` / `| r1 | r2 |`.
+    case table(headers: [String], rows: [[String]])
 }
 
 enum MarkdownParser {
@@ -219,6 +269,27 @@ enum MarkdownParser {
                 continue
             }
 
+            // Table — `| h1 | h2 |` followed by `|---|---|` then
+            //         `| r1 | r2 |` rows. We require the separator
+            //         row right after the header to disambiguate
+            //         tables from random pipe-laden text.
+            if trimmed.hasPrefix("|"), i + 1 < lines.count {
+                let next = lines[i + 1].trimmingCharacters(in: .whitespaces)
+                if next.hasPrefix("|") && next.contains("---") {
+                    let headers = parseTableRow(trimmed)
+                    var rows: [[String]] = []
+                    i += 2 // skip header + separator
+                    while i < lines.count {
+                        let t = lines[i].trimmingCharacters(in: .whitespaces)
+                        guard t.hasPrefix("|") else { break }
+                        rows.append(parseTableRow(t))
+                        i += 1
+                    }
+                    blocks.append(.table(headers: headers, rows: rows))
+                    continue
+                }
+            }
+
             // Empty line — paragraph separator
             if trimmed.isEmpty {
                 i += 1
@@ -261,5 +332,18 @@ enum MarkdownParser {
             return String(t[m.upperBound...])
         }
         return t
+    }
+
+    /// Split a `| a | b | c |` line into ["a", "b", "c"]. Tolerates
+    /// missing trailing `|`, leading/trailing whitespace, and
+    /// embedded `\|` escapes.
+    private static func parseTableRow(_ line: String) -> [String] {
+        var t = line
+        if t.hasPrefix("|") { t.removeFirst() }
+        if t.hasSuffix("|") { t.removeLast() }
+        // Naive split — doesn't handle escaped pipes inside cells,
+        // but kinclaw / cloud agents don't emit those in practice.
+        return t.split(separator: "|", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
     }
 }

@@ -115,14 +115,52 @@ struct ToolCallView: View {
                 .padding(.vertical, 4)
             }
             if let out = call.output, !out.isEmpty {
-                Text(out)
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(.primary.opacity(0.9))
+                renderedOutput(out)
                     .padding(8)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color.platformTertiaryBackground.opacity(0.7))
-                    .textSelection(.enabled)
             }
         }
+    }
+
+    /// Pick rendering based on the shape of the output. Many kinclaw
+    /// tools emit structured strings (markdown tables, fenced code,
+    /// JSON) that read better as rich text than as a mono dump;
+    /// other tools (raw stdout, AX trees, file paths) want mono.
+    @ViewBuilder
+    private func renderedOutput(_ out: String) -> some View {
+        if looksLikeMarkdown(out) {
+            MarkdownView(text: out)
+                .textSelection(.enabled)
+        } else {
+            // Treat as plain mono. Trim trailing whitespace; nothing
+            // worse than a giant blank tail in a code surface.
+            Text(out.trimmingCharacters(in: .whitespacesAndNewlines))
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundColor(.primary.opacity(0.9))
+                .textSelection(.enabled)
+        }
+    }
+
+    /// Heuristic for "this looks like rich content, not raw stdout":
+    /// has at least one of — fenced code block, table, list, or
+    /// heading. Avoids running raw tool dumps (AX trees, JSON blobs)
+    /// through the markdown parser where they'd render unrelated.
+    private func looksLikeMarkdown(_ out: String) -> Bool {
+        if out.contains("```") { return true }
+        if out.range(of: "^\\|.*\\|$",
+                     options: [.regularExpression, .anchored]) != nil
+            && out.contains("---") {
+            return true
+        }
+        // Lists / headings — at least 2 lines starting with the prefix
+        let listLines = out.split(separator: "\n").filter { line in
+            let t = line.trimmingCharacters(in: .whitespaces)
+            return t.hasPrefix("- ") || t.hasPrefix("* ")
+                || t.hasPrefix("# ") || t.hasPrefix("## ")
+                || t.range(of: "^\\d+\\. ",
+                           options: .regularExpression) != nil
+        }
+        return listLines.count >= 2
     }
 }

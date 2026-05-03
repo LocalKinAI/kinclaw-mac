@@ -120,6 +120,17 @@ struct SpotlightContentView: View {
 
             Divider().opacity(0.15)
 
+            // Recent-agents row — only renders when ≥2 agents have
+            // been selected at least once. Click any avatar →
+            // switch agents instantly.
+            RecentAgentsRow(
+                allAgents: allAgents,
+                currentSlug: selectedAgent?.slug,
+                onSelect: { agent in
+                    selectedAgent = agent
+                }
+            )
+
             messagesView
 
             Divider().opacity(0.15)
@@ -324,15 +335,15 @@ struct SpotlightContentView: View {
                                 .id(msg.id)
                         }
                     }
+                    // Streaming indicator at the LIST tail kept as a
+                    // safety anchor for auto-scroll — but only render
+                    // a tiny invisible spacer (no visible "thinking"
+                    // row) since the dots-in-bubble flow above is
+                    // the canonical streaming signal now.
                     if isStreaming {
-                        HStack(spacing: 8) {
-                            StreamingDots()
-                            Text("thinking…")
-                                .font(.system(size: 11))
-                                .foregroundColor(.secondary)
-                        }
-                        .padding(.horizontal, 4)
-                        .id("streaming-indicator")
+                        Color.clear
+                            .frame(height: 1)
+                            .id("streaming-indicator")
                     }
                 }
                 .padding(.horizontal, 14)
@@ -518,10 +529,16 @@ struct SpotlightContentView: View {
     private func assistantBubble(_ msg: ChatMessage,
                                  showCursor: Bool) -> some View {
         // Renders Markdown body + any tool-call widgets attached to
-        // this message. Streaming cursor sits at the end of the
-        // text portion only; tool widgets render below.
+        // this message. While streaming with NO content yet, show
+        // dots INSIDE the bubble (ChatGPT-style) — much clearer
+        // signal than a separate "thinking..." row underneath.
+        // Once first delta arrives, dots vanish and cursor takes
+        // over.
         VStack(alignment: .leading, spacing: 6) {
-            if !msg.content.isEmpty || showCursor {
+            if msg.content.isEmpty && showCursor && msg.toolCalls.isEmpty {
+                StreamingDots(color: .secondary, size: 5, spacing: 5)
+                    .padding(.vertical, 2)
+            } else if !msg.content.isEmpty || showCursor {
                 streamingMarkdownText(msg, showCursor: showCursor)
             }
             ForEach(msg.toolCalls) { call in
@@ -635,6 +652,11 @@ struct SpotlightContentView: View {
         // the same agent (rather than re-defaulting to Pilot every
         // time and losing the user's last choice).
         UserDefaults.standard.set(agent.slug, forKey: "kinclaw.lastAgent")
+
+        // Push to recent-agents stack (UserDefaults-backed; the
+        // RecentAgentsRow watches this via @AppStorage and re-renders
+        // automatically).
+        RecentAgentsRow.touch(slug: agent.slug)
 
         // Local kinclaw: switch the server-side active soul.
         if let soulPath = agent.localSoulPath {
