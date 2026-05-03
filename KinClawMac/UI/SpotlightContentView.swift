@@ -118,11 +118,11 @@ struct SpotlightContentView: View {
                 .padding(.top, 10)
                 .padding(.bottom, 8)
 
-            Divider().opacity(0.25)
+            Divider().opacity(0.15)
 
             messagesView
 
-            Divider().opacity(0.25)
+            Divider().opacity(0.15)
 
             inputBar
                 .padding(.horizontal, 12)
@@ -393,17 +393,60 @@ struct SpotlightContentView: View {
                         .padding(.top, 2)
                 }
 
+                // ── Suggestion chips ──
+                // Click to fill the input. Same affordance ChatGPT /
+                // Claude / Perplexity use to onboard users into a
+                // blank text field. Per-agent / per-domain prompts
+                // live in AgentSuggestions.
+                let suggestions = AgentSuggestions.suggestions(for: agent)
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Array(suggestions.enumerated()),
+                            id: \.offset) { _, prompt in
+                        Button {
+                            inputText = prompt
+                            inputFocused = true
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "arrow.up.right")
+                                    .font(.system(size: 9, weight: .semibold))
+                                    .foregroundColor(.secondary.opacity(0.6))
+                                Text(prompt)
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.primary.opacity(0.85))
+                                    .lineLimit(2)
+                                    .multilineTextAlignment(.leading)
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 7)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(Color.platformSecondaryBackground.opacity(0.5))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(Color.secondary.opacity(0.15),
+                                            lineWidth: 0.5)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.top, 14)
+                .padding(.horizontal, 18)
+                .frame(maxWidth: .infinity)
+
                 Text(agent.isLocal
-                     ? "Type below to start. ⌘⏎ to send."
-                     : "Type below — ⌘⏎ to send. Bilingual; mix freely.")
+                     ? "or type below — ⌘⏎ to send."
+                     : "or type below — ⌘⏎ to send. Bilingual; mix freely.")
                     .font(.system(size: 11))
-                    .foregroundColor(.secondary.opacity(0.6))
-                    .padding(.top, 6)
+                    .foregroundColor(.secondary.opacity(0.55))
+                    .padding(.top, 12)
                     .multilineTextAlignment(.center)
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 24)
+        .padding(.vertical, 18)
     }
 
     /// Header label shown next to the dropdown chevron. For cloud
@@ -440,9 +483,9 @@ struct SpotlightContentView: View {
         let isLastAssistantWhileStreaming = !msg.isUser
             && isStreaming
             && msg.id == messages.last?.id
-        return HStack(alignment: .top, spacing: 8) {
+        return HStack(alignment: .top, spacing: 6) {
             if msg.isUser {
-                Spacer(minLength: 30)
+                Spacer(minLength: 24)
                 BubbleWithCopy(content: msg.content) {
                     Text(msg.content)
                         .font(.system(size: 13))
@@ -454,10 +497,20 @@ struct SpotlightContentView: View {
                         .textSelection(.enabled)
                 }
             } else {
+                // Agent emoji avatar in front of assistant bubbles —
+                // visual continuity through a long conversation,
+                // especially when the user has switched agents and
+                // both agents' replies sit in the scrollback.
+                if let agent = selectedAgent {
+                    Text(AgentDecor.emoji(for: agent))
+                        .font(.system(size: 16))
+                        .frame(width: 22, height: 22, alignment: .top)
+                        .padding(.top, 4)
+                }
                 BubbleWithCopy(content: msg.content) {
                     assistantBubble(msg, showCursor: isLastAssistantWhileStreaming)
                 }
-                Spacer(minLength: 30)
+                Spacer(minLength: 24)
             }
         }
     }
