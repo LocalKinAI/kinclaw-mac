@@ -418,16 +418,26 @@ struct SpotlightContentView: View {
     private var messagesView: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
+                // VStack (not LazyVStack) — LazyVStack defers cell
+                // materialization, which on the first welcome→bubbles
+                // transition produced a multi-second visible-height-
+                // zero pulse before SwiftUI populated the new
+                // children. VStack pre-renders so the transition is
+                // immediate. Perf hit only matters at ~500+ messages
+                // where we'd reintroduce lazy rendering anyway.
+                VStack(alignment: .leading, spacing: 14) {
                     if messages.isEmpty && selectedAgent != nil {
                         welcomeCard
                             .padding(.top, 40)
+                            .transition(.opacity)
                     } else if messages.isEmpty && loadError != nil {
                         errorState
+                            .transition(.opacity)
                     } else {
                         ForEach(messages) { msg in
                             messageBubble(msg)
                                 .id(msg.id)
+                                .transition(.opacity)
                         }
                     }
                     // Streaming indicator at the LIST tail kept as a
@@ -443,6 +453,10 @@ struct SpotlightContentView: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
+                // Soft fade for the welcome → messages transition.
+                // Ties together the welcome-card removal + first
+                // bubble append so they animate as one event.
+                .animation(.easeInOut(duration: 0.18), value: messages.count)
             }
             // While streaming, the bubble's height changes rapidly —
             // animating a scrollTo to a moving target is what
@@ -962,6 +976,15 @@ struct SpotlightContentView: View {
         // → click send" without typing anything implies "look at
         // this").
         guard !typed.isEmpty || !pendingAttachments.isEmpty else { return }
+
+        // Wrap message-list mutations in a SwiftUI animation block
+        // so the welcome-card → bubbles transition + bubble append
+        // animates as one continuous fade rather than instant pop
+        // (which on macOS visibly snapped the layout and contributed
+        // to the brief blank flash).
+        // We can't put `withAnimation` around the actual mutation
+        // because it spans multiple async branches — instead we set
+        // a top-level animation modifier on the messagesView VStack.
 
         // Compose final user message: typed text + path mentions
         // for each attachment. Local kinclaw souls can read paths
