@@ -55,9 +55,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let supervisor = KinClawSupervisor()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // 1. Build the floating spotlight panel.
+        // 1. Build the floating spotlight panel with the
+        //    Spotlight-shaped single-pane chat view (replacing the
+        //    iOS-shaped TabView ContentView, which was too cramped
+        //    in a 380×600 floating panel).
         spotlightWindow = SpotlightWindow {
-            ContentView()
+            SpotlightContentView()
                 .environmentObject(self.appState)
                 .preferredColorScheme(.dark)
         }
