@@ -48,6 +48,11 @@ struct SpotlightContentView: View {
     /// Drop-zone visual state — used to highlight the input area
     /// when the cursor is dragging a file over it.
     @State private var isDropTarget = false
+    /// Reveal state for the recent-agents row at the top of the
+    /// messages area. Latched on hover, latched off via small
+    /// delayed timer so brief mouse exits don't flicker the row.
+    @State private var showingRecentRow = false
+    @State private var recentRowHideTask: DispatchWorkItem?
 
     // Transports.
     @State private var sseClient: SSEClient?
@@ -119,25 +124,71 @@ struct SpotlightContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // Header consolidated into the titlebar visually:
+            // - .leading 72pt skips past the traffic-light controls
+            //   that NSWindow draws at the top-left
+            // - .frame height 28 matches the macOS titlebar height
+            // - Combined with `.fullSizeContentView` + transparent
+            //   titlebar in SpotlightWindow, the SwiftUI tree
+            //   extends UP behind the titlebar, so the header sits
+            //   ON THE SAME ROW as the traffic lights — saves ~28pt
+            //   vertical space vs the previous "header below title-
+            //   bar" layout.
             header
-                .padding(.horizontal, 14)
-                .padding(.top, 10)
-                .padding(.bottom, 8)
+                .padding(.leading, 72)
+                .padding(.trailing, 14)
+                .padding(.vertical, 3)
+                .frame(height: 28)
 
             Divider().opacity(0.15)
 
-            // Recent-agents row — only renders when ≥2 agents have
-            // been selected at least once. Click any avatar →
-            // switch agents instantly.
-            RecentAgentsRow(
-                allAgents: allAgents,
-                currentSlug: selectedAgent?.slug,
-                onSelect: { agent in
-                    selectedAgent = agent
-                }
-            )
+            // Recent-agents row + messages area. Row is hover-
+            // revealed: hover the top 12pt of the messages area →
+            // row slides down. Mouse moves into the row → still
+            // hovering (row keeps visible). Mouse leaves → row
+            // hides after 600ms grace period (prevents flicker
+            // when crossing tiny visual gaps).
+            ZStack(alignment: .top) {
+                messagesView
 
-            messagesView
+                if showingRecentRow {
+                    RecentAgentsRow(
+                        allAgents: allAgents,
+                        currentSlug: selectedAgent?.slug,
+                        onSelect: { agent in
+                            selectedAgent = agent
+                            // collapse after pick — mouse moves down
+                            // to chat anyway
+                            scheduleRecentRowHide(after: 0.15)
+                        }
+                    )
+                    .background(.ultraThinMaterial,
+                                in: RoundedRectangle(cornerRadius: 0))
+                    .transition(
+                        .move(edge: .top).combined(with: .opacity)
+                    )
+                    .onHover { hovering in
+                        if hovering { cancelRecentRowHide() }
+                        else { scheduleRecentRowHide(after: 0.6) }
+                    }
+                }
+
+                // Hover hit zone at the very top — reveals the row
+                // when the mouse approaches.
+                Color.clear
+                    .frame(height: 12)
+                    .contentShape(Rectangle())
+                    .onHover { hovering in
+                        if hovering {
+                            cancelRecentRowHide()
+                            withAnimation(.easeOut(duration: 0.18)) {
+                                showingRecentRow = true
+                            }
+                        } else {
+                            scheduleRecentRowHide(after: 0.6)
+                        }
+                    }
+            }
 
             Divider().opacity(0.15)
 
@@ -711,6 +762,22 @@ struct SpotlightContentView: View {
     }
 
     // MARK: - Behavior
+
+    private func scheduleRecentRowHide(after seconds: TimeInterval) {
+        recentRowHideTask?.cancel()
+        let task = DispatchWorkItem {
+            withAnimation(.easeOut(duration: 0.2)) {
+                showingRecentRow = false
+            }
+        }
+        recentRowHideTask = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: task)
+    }
+
+    private func cancelRecentRowHide() {
+        recentRowHideTask?.cancel()
+        recentRowHideTask = nil
+    }
 
     private func openSettings() {
         NSApp.activate(ignoringOtherApps: true)

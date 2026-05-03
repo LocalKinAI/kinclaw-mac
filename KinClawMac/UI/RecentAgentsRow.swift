@@ -27,7 +27,7 @@ struct RecentAgentsRow: View {
     }
 
     var body: some View {
-        if recentAgents.count >= 2 {
+        if recentAgents.count >= 1 {
             HStack(spacing: 8) {
                 ForEach(recentAgents) { agent in
                     Button {
