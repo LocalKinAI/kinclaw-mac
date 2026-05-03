@@ -2,7 +2,7 @@ name: KinClawMac
 options:
   bundleIdPrefix: dev.localkin
   deploymentTarget:
-    macOS: "13.0"
+    macOS: "14.0"
   xcodeVersion: "16.0"
   generateEmptyDirectories: true
 
@@ -31,8 +31,7 @@ targets:
         INFOPLIST_FILE: KinClawMac/Info.plist
         PRODUCT_BUNDLE_IDENTIFIER: dev.localkin.kinclawmac
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        ENABLE_HARDENED_RUNTIME: YES
-        CODE_SIGN_ENTITLEMENTS: KinClawMac/KinClawMac.entitlements
+        # Hardened Runtime + entitlements come back at M6 (signing milestone)
     info:
       path: KinClawMac/Info.plist
       properties:
@@ -44,6 +43,8 @@ targets:
         LSUIElement: true
         # Microphone permission (voice mode)
         NSMicrophoneUsageDescription: "KinClaw uses your microphone for voice mode — push-to-talk to any agent."
+        # Speech recognition (local STT fallback when server unreachable)
+        NSSpeechRecognitionUsageDescription: "KinClaw uses on-device speech recognition as a local fallback when remote STT is unavailable."
         # Accessibility permission (when invoking local KinClaw computer-use)
         NSAppleEventsUsageDescription: "KinClaw needs Apple Events access to coordinate with the local kinclaw daemon for computer-use tasks."
         ITSAppUsesNonExemptEncryption: false
