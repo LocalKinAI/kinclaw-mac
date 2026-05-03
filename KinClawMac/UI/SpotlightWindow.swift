@@ -1,6 +1,11 @@
 import SwiftUI
 import AppKit
 
+private extension NSRect {
+    /// Convenience for picking the most-overlapping screen.
+    var area: CGFloat { width * height }
+}
+
 /// The floating chat panel — frameless, glass-blurred, always-on-top.
 /// Hosts a SwiftUI tree (currently the ported `ContentView`; M3+ will
 /// replace that with a single-column Spotlight UX).
@@ -138,18 +143,75 @@ final class SpotlightWindow: NSPanel {
     /// Make the panel visible without activating the app — the user
     /// keeps focus on whatever they were doing; clicking inside our
     /// panel will then transfer keyboard focus on demand.
+    ///
+    /// Also clamps the saved frame back into a visible screen — if
+    /// the user dragged the panel onto an external monitor, then
+    /// unplugged it, the saved position would land off-screen and
+    /// the panel would summon invisibly. Clamping fixes that
+    /// silently.
+    ///
+    /// Visual: 150ms fade-in. Pure pop felt jarring; the slide-up
+    /// from Spotlight / Raycast / Alfred is what users expect.
     func show() {
         if Self.savedFrame == nil {
             self.setFrame(Self.centeredFrame(), display: true)
+        } else {
+            self.setFrame(self.clampedToVisibleScreen(self.frame),
+                          display: true)
         }
+        // Start invisible so the alpha animation has somewhere to
+        // animate FROM. .makeKey + orderFrontRegardless then fade.
+        self.alphaValue = 0
         self.orderFrontRegardless()
-        // Hand keyboard focus to the panel so the chat input is
-        // immediately typable. `makeKey` is a no-op on already-key
-        // windows so this is safe to call repeatedly.
         self.makeKey()
+
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.15
+            ctx.allowsImplicitAnimation = true
+            self.animator().alphaValue = 1
+        }
     }
 
-    func hide() { self.orderOut(nil) }
+    func hide() {
+        // Mirror the show animation — quick fade-out before
+        // orderOut. Skip if already invisible to avoid double-
+        // animation when toggle() races itself.
+        guard self.isVisible else { return }
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.10
+            ctx.allowsImplicitAnimation = true
+            self.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            self?.orderOut(nil)
+            // Reset alpha so the next show() starts from 0 cleanly
+            // (orderOut hides; the alpha set above persists).
+            self?.alphaValue = 1
+        })
+    }
+
+    /// Push the frame back inside the union of visible screens.
+    /// Handles the "external monitor unplugged since last save"
+    /// case + any saved frame whose origin / size has somehow
+    /// drifted out of bounds.
+    private func clampedToVisibleScreen(_ frame: NSRect) -> NSRect {
+        // Use the screen the frame intersects most, falling back
+        // to NSScreen.main if there's no intersection at all.
+        let target = NSScreen.screens.max(by: { a, b in
+            a.frame.intersection(frame).area < b.frame.intersection(frame).area
+        }) ?? NSScreen.main
+        guard let visible = target?.visibleFrame else { return frame }
+
+        var clamped = frame
+        // Shrink to fit if the frame exceeds the screen.
+        clamped.size.width  = min(clamped.size.width,  visible.size.width)
+        clamped.size.height = min(clamped.size.height, visible.size.height)
+        // Slide back inside.
+        if clamped.maxX > visible.maxX { clamped.origin.x = visible.maxX - clamped.width }
+        if clamped.minX < visible.minX { clamped.origin.x = visible.minX }
+        if clamped.maxY > visible.maxY { clamped.origin.y = visible.maxY - clamped.height }
+        if clamped.minY < visible.minY { clamped.origin.y = visible.minY }
+        return clamped
+    }
 
     /// Hotkey-style: visible → hide; hidden → show. The whole point
     /// of the Spotlight form factor.

@@ -195,10 +195,12 @@ struct SpotlightContentView: View {
                 }
             }
 
-            // ── Generic local LocalKin souls (3 today, from
-            //     ~/.localkin/souls/) ──
+            // ── LocalKin Solo agents (3 today, from
+            //     ~/.localkin/souls/) — standalone individual chat
+            //     souls (Claude / Cloud / default), distinct from
+            //     KinClaw's computer-use roles. ──
             if !localKinSouls.isEmpty {
-                Menu("💻  LocalKin  (\(localKinSouls.count))") {
+                Menu("🤖  Solo agents  (\(localKinSouls.count))") {
                     ForEach(localKinSouls) { agentMenuRow($0) }
                 }
             }

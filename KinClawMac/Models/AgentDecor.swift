@@ -100,11 +100,15 @@ enum AgentDecor {
             case "researcher":  return "deep research"
             default:            break
             }
+            // Solo agents — standalone chat souls under
+            // ~/.localkin/souls/. "Solo" because they're single-
+            // agent loops (vs KinClaw's claw-bound roles or
+            // LocalKin platform's swarm orchestrations).
             switch agent.slug {
-            case "default":     return "default LocalKin chat"
-            case "claude":      return "Claude-backed local soul"
-            case "cloud":       return "cloud-brain local soul"
-            default:            return "local soul"
+            case "default":     return "solo agent — default brain"
+            case "claude":      return "solo agent — Claude backed"
+            case "cloud":       return "solo agent — cloud brain"
+            default:            return "solo agent"
             }
         }
         return nil
