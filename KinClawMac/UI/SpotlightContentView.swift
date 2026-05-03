@@ -151,53 +151,51 @@ struct SpotlightContentView: View {
 
             Divider().opacity(0.15)
 
-            // Recent-agents row + messages area. Row is hover-
-            // revealed: hover the top 12pt of the messages area →
-            // row slides down. Mouse moves into the row → still
-            // hovering (row keeps visible). Mouse leaves → row
-            // hides after 600ms grace period (prevents flicker
-            // when crossing tiny visual gaps).
-            ZStack(alignment: .top) {
-                messagesView
-
-                if showingRecentRow {
-                    RecentAgentsRow(
-                        allAgents: allAgents,
-                        currentSlug: selectedAgent?.slug,
-                        onSelect: { agent in
-                            selectedAgent = agent
-                            // collapse after pick — mouse moves down
-                            // to chat anyway
-                            scheduleRecentRowHide(after: 0.15)
+            // messagesView is the primary, flexible child of mainStack.
+            // The hover-zone + recent-agents row sit as OVERLAYS so
+            // they don't compete with the ScrollView for layout
+            // priority — the previous ZStack arrangement collapsed
+            // the chat to a near-zero height after sending the
+            // first message because the 12pt hover hit zone was
+            // dominating intrinsic sizing.
+            messagesView
+                .overlay(alignment: .top) {
+                    if showingRecentRow {
+                        RecentAgentsRow(
+                            allAgents: allAgents,
+                            currentSlug: selectedAgent?.slug,
+                            onSelect: { agent in
+                                selectedAgent = agent
+                                scheduleRecentRowHide(after: 0.15)
+                            }
+                        )
+                        .background(.ultraThinMaterial)
+                        .transition(.move(edge: .top)
+                                     .combined(with: .opacity))
+                        .onHover { hovering in
+                            if hovering { cancelRecentRowHide() }
+                            else { scheduleRecentRowHide(after: 0.6) }
                         }
-                    )
-                    .background(.ultraThinMaterial,
-                                in: RoundedRectangle(cornerRadius: 0))
-                    .transition(
-                        .move(edge: .top).combined(with: .opacity)
-                    )
-                    .onHover { hovering in
-                        if hovering { cancelRecentRowHide() }
-                        else { scheduleRecentRowHide(after: 0.6) }
                     }
                 }
-
-                // Hover hit zone at the very top — reveals the row
-                // when the mouse approaches.
-                Color.clear
-                    .frame(height: 12)
-                    .contentShape(Rectangle())
-                    .onHover { hovering in
-                        if hovering {
-                            cancelRecentRowHide()
-                            withAnimation(.easeOut(duration: 0.18)) {
-                                showingRecentRow = true
+                .overlay(alignment: .top) {
+                    // 12pt invisible hover trigger floating ON TOP
+                    // of the messages — only intercepts hover, not
+                    // clicks (allowsHitTesting elsewhere).
+                    Color.clear
+                        .frame(height: 12)
+                        .contentShape(Rectangle())
+                        .onHover { hovering in
+                            if hovering {
+                                cancelRecentRowHide()
+                                withAnimation(.easeOut(duration: 0.18)) {
+                                    showingRecentRow = true
+                                }
+                            } else {
+                                scheduleRecentRowHide(after: 0.6)
                             }
-                        } else {
-                            scheduleRecentRowHide(after: 0.6)
                         }
-                    }
-            }
+                }
 
             Divider().opacity(0.15)
 
