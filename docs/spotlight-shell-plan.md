@@ -113,7 +113,7 @@ iOS↔macOS SwiftUI 大部分通用,以下需要 conditional compilation `#if os
 └──────────────────────────────────────────┘
               │             │
               ▼             ▼
-   localhost:8020      api.localkin.dev/v1
+   localhost:5001      api.localkin.dev/v1
    (kinclaw serve)     (160+ cloud agents)
 ```
 
