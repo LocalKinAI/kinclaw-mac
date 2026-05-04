@@ -257,9 +257,11 @@ struct SpotlightContentView: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            Text("🦞")
-                .font(.system(size: 16))
-
+            // (Removed the decorative 🦞 wordmark — it duplicated
+            // visually with the active agent's avatar emoji in the
+            // dropdown label, especially when Pilot was selected
+            // ['🦞 KinClaw Pilot' had two lobsters side-by-side].
+            // The dropdown's emoji alone is sufficient identity.)
             agentMenu
                 .frame(maxWidth: .infinity, alignment: .leading)
 
