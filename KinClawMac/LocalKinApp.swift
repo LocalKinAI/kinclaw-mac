@@ -79,6 +79,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBar.onShowHide      = { [weak self] in self?.spotlightWindow.toggle() }
         menuBar.onOpenSettings  = { [weak self] in self?.openSettingsWindow() }
         menuBar.onQuit          = { NSApp.terminate(nil) }
+        // The menubar's "Settings…" item triggers via NSApp.activate
+        // + sendAction; that route works because clicking a menu bar
+        // item DOES activate the app properly. The panel header's
+        // ⚙ uses SwiftUI's SettingsLink instead (more reliable
+        // when the panel is the only visible UI surface).
 
         // 3. Register the global ⌘⌥K hotkey. KeyboardShortcuts
         //    handles the Carbon-level event tap; we just provide

@@ -329,9 +329,12 @@ struct SpotlightContentView: View {
             .buttonStyle(.plain)
             .help(ttsEnabled ? "Speech on" : "Speech off")
 
-            Button {
-                openSettings()
-            } label: {
+            // SwiftUI's native SettingsLink (macOS 14+) opens the
+            // Settings { } scene reliably regardless of activation
+            // state. Manual `NSApp.sendAction(showSettingsWindow:)`
+            // gets silently dropped while a nonactivating panel
+            // owns focus — SettingsLink bypasses that path entirely.
+            SettingsLink {
                 Image(systemName: "gearshape")
                     .font(.system(size: 13))
                     .foregroundColor(.secondary)
