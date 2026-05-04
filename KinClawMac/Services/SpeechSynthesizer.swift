@@ -38,18 +38,45 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         }
     }
 
-    /// Server TTS via Kokoro (POST /v1/tts → WAV audio)
+    /// Server TTS — local agents hit Kokoro directly, cloud agents
+    /// go through the LocalKin gateway. We're a native Mac app, so
+    /// we don't need the CORS proxy that the browser-served
+    /// kinclaw web UI uses (kinclaw kernel's /api/voice/tts just
+    /// forwards to TTS_ENDPOINT/synthesize anyway). Direct = one
+    /// fewer hop, simpler config.
     private func serverTTS(text: String, hostname: String) async -> Bool {
         do {
-            let url = URL(string: "https://\(hostname)/v1/tts")!
+            // Route to Kokoro directly when the agent is a local
+            // soul (hostname marker is "localhost-kinclaw" — see
+            // Soul.asAgent). User can override the Kokoro endpoint
+            // via Settings → Backend → TTS (defaults to
+            // http://localhost:8001).
+            let isLocal = hostname == "localhost-kinclaw"
+                || hostname.hasPrefix("localhost")
+            let url: URL
+            if isLocal {
+                let prefBase = UserDefaults.standard.string(
+                    forKey: "kinclaw.backend.tts") ?? ""
+                let base = prefBase.isEmpty
+                    ? "http://localhost:8001"
+                    : prefBase.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                url = URL(string: "\(base)/synthesize")!
+            } else {
+                url = URL(string: "https://\(hostname)/v1/tts")!
+            }
+
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.timeoutInterval = 15
 
-            // Auth token
-            let token = await TokenManager.shared.token(for: hostname)
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            // Cloud path needs Bearer auth; local Kokoro on loopback
+            // doesn't (no auth layer).
+            if !isLocal {
+                let token = await TokenManager.shared.token(for: hostname)
+                request.setValue("Bearer \(token)",
+                                 forHTTPHeaderField: "Authorization")
+            }
 
             struct TTSRequest: Codable {
                 let text: String
