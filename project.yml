@@ -48,3 +48,4 @@ targets:
         # Accessibility permission (when invoking local KinClaw computer-use)
         NSAppleEventsUsageDescription: "KinClaw needs Apple Events access to coordinate with the local kinclaw daemon for computer-use tasks."
         ITSAppUsesNonExemptEncryption: false
+        NSHumanReadableCopyright: "Copyright © 2026 LocalKinAI. Apache-2.0 licensed."
