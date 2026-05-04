@@ -54,8 +54,19 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
             struct TTSRequest: Codable {
                 let text: String
                 let voice: String?
+                let speed: Double?
             }
-            request.httpBody = try JSONEncoder().encode(TTSRequest(text: text, voice: nil))
+            // Pick voice based on user's TTS speaker pref (Settings →
+            // Voice) + detected language. nil voice was making the
+            // server pick its own default (zf_xiaoxiao zh-CN female),
+            // which read English text in mangled Chinese phonetics.
+            let voice = pickServerVoice(forText: text)
+            let speed = UserDefaults.standard.double(forKey: "kinclaw.voice.tts.speed")
+            request.httpBody = try JSONEncoder().encode(TTSRequest(
+                text: text,
+                voice: voice,
+                speed: speed > 0 ? speed : nil
+            ))
 
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse,
@@ -86,16 +97,14 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
 
         let utterance = AVSpeechUtterance(string: cleaned)
 
-        // Auto-detect language
-        if containsChinese(cleaned) {
-            utterance.voice = AVSpeechSynthesisVoice(language: "zh-CN")
-        } else if containsSpanish(cleaned) {
-            utterance.voice = AVSpeechSynthesisVoice(language: "es-ES")
-        } else {
-            utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
-        }
+        // Pick voice — honor user's lang pref, else majority detection.
+        let langCode = detectLanguage(cleaned)
+        utterance.voice = AVSpeechSynthesisVoice(language: langCode)
 
-        utterance.rate = AVSpeechUtteranceDefaultSpeechRate * 0.9
+        // Apply user's speed pref (Settings → Voice).
+        let speedPref = UserDefaults.standard.double(forKey: "kinclaw.voice.tts.speed")
+        let multiplier = speedPref > 0 ? speedPref : 0.9
+        utterance.rate = AVSpeechUtteranceDefaultSpeechRate * Float(multiplier)
         synthesizer.speak(utterance)
     }
 
@@ -129,14 +138,56 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
 
     // MARK: - Language Detection
 
-    private func containsChinese(_ text: String) -> Bool {
-        text.range(of: "\\p{Han}", options: .regularExpression) != nil
+    /// Decide what BCP-47 language code to feed AVSpeechSynthesizer.
+    ///
+    /// Priority:
+    ///   1. User's explicit Settings → General → Language pref
+    ///      ("zh" / "en" / "auto"). Wins over text-content guess.
+    ///   2. Majority CJK vs Latin character count. Was previously
+    ///      "ANY CJK char → all-Chinese voice", which mangled
+    ///      English replies that happened to mention a single
+    ///      Chinese brand name or punctuation mark.
+    private func detectLanguage(_ text: String) -> String {
+        let pref = UserDefaults.standard.string(forKey: "kinclaw.lang") ?? "auto"
+        if pref == "zh" { return "zh-CN" }
+        if pref == "en" { return "en-US" }
+
+        var cjk = 0
+        var latin = 0
+        for scalar in text.unicodeScalars {
+            let v = scalar.value
+            // CJK Unified Ideographs main block
+            if (0x4E00...0x9FFF).contains(v)
+                || (0x3040...0x30FF).contains(v)   // hiragana / katakana
+                || (0xAC00...0xD7AF).contains(v) { // hangul
+                cjk += 1
+            } else if (0x0041...0x005A).contains(v)
+                   || (0x0061...0x007A).contains(v) {
+                latin += 1
+            }
+        }
+        if cjk == 0 { return "en-US" }
+        if latin == 0 { return "zh-CN" }
+        // Mixed — pick the majority. CJK chars carry more "weight"
+        // per unit since each is a full word, not a letter; bias
+        // toward CJK at 0.5x ratio.
+        return Double(cjk) >= Double(latin) * 0.3 ? "zh-CN" : "en-US"
     }
 
-    private func containsSpanish(_ text: String) -> Bool {
-        let indicators = ["hola", "gracias", "buenos", "buenas", "usted"]
-        let lower = text.lowercased()
-        return indicators.contains { lower.contains($0) }
+    /// Pick a Kokoro / server TTS voice based on detected language
+    /// and the user's preferred speaker (Settings → Voice → Voice).
+    /// "auto" → use language-appropriate default; explicit speaker
+    /// → use it as-is regardless of language.
+    private func pickServerVoice(forText text: String) -> String {
+        let pref = UserDefaults.standard.string(forKey: "kinclaw.voice.tts.speaker") ?? "auto"
+        if pref != "auto" && !pref.isEmpty {
+            return pref
+        }
+        let lang = detectLanguage(text)
+        if lang.hasPrefix("zh") {
+            return "zf_xiaoxiao"   // Chinese female default
+        }
+        return "af_heart"          // English female default
     }
 }
 
