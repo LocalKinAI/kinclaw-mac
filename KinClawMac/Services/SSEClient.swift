@@ -56,10 +56,10 @@ class SSEClient: NSObject, URLSessionDataDelegate {
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
         // X-Lang lets the gateway pick the right localized greeting
-        // / refusal message. zh is the default for the Selah / Heal
-        // bilingual masters; cloud agents transparently honor en
-        // when the user types in English.
-        request.setValue("zh", forHTTPHeaderField: "X-Lang")
+        // / refusal message. Read user's pref from UserDefaults
+        // (set in Settings > General > Language). "auto" → match
+        // the current macOS locale.
+        request.setValue(resolvedLang(), forHTTPHeaderField: "X-Lang")
 
         let body = ChatRequest(messages: messages, stream: true, noHistory: true)
         request.httpBody = try? JSONEncoder().encode(body)
@@ -71,6 +71,18 @@ class SSEClient: NSObject, URLSessionDataDelegate {
         task = session?.dataTask(with: request)
         buffer = ""
         task?.resume()
+    }
+
+    /// Resolves the X-Lang header value from the user's Settings
+    /// preference. "auto" → current macOS locale's language code
+    /// (zh-Hans → "zh", en-US → "en"); explicit zh/en passes
+    /// through. Falls back to "zh" since the LocalKin masters lean
+    /// Chinese-first.
+    private func resolvedLang() -> String {
+        let pref = UserDefaults.standard.string(forKey: "kinclaw.lang") ?? "auto"
+        if pref == "zh" || pref == "en" { return pref }
+        let locale = Locale.current.language.languageCode?.identifier ?? "zh"
+        return locale.hasPrefix("zh") ? "zh" : "en"
     }
 
     func cancel() {
