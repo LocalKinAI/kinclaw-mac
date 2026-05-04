@@ -59,6 +59,11 @@ struct SpotlightContentView: View {
     @State private var showingRecentRow = false
     @State private var recentRowHideTask: DispatchWorkItem?
 
+    /// Active surface — Chat / Cowork / Code. Loaded from UserDefaults
+    /// so the user's last choice survives a relaunch. Cowork + Code
+    /// are placeholder views until Stages 3 and 4 land.
+    @State private var mode: ChatMode = ChatMode.loadPersisted()
+
     // Transports.
     @State private var sseClient: SSEClient?
     @State private var localStreamTask: Task<Void, Never>?
@@ -146,7 +151,10 @@ struct SpotlightContentView: View {
         .frame(minWidth: 320, minHeight: 380)
     }
 
-    /// Main column — chat content under the titlebar.
+    /// Main column — mode bar on top, then the active surface body.
+    /// The body switches between three sibling views (chat / cowork /
+    /// code) based on `mode`. Chat is the existing fully-wired surface;
+    /// Cowork and Code are placeholders until Stages 3-4.
     private var mainStack: some View {
         VStack(spacing: 0) {
             // 28pt reservation for the titlebar row. The titlebar-
@@ -156,7 +164,51 @@ struct SpotlightContentView: View {
 
             Divider().opacity(0.15)
 
-            // messagesView is the primary, flexible child of mainStack.
+            // Three-pill mode switcher (Chat / Cowork / Code). Persists
+            // across launches via ChatMode.persist().
+            ModeBar(mode: $mode)
+
+            Divider().opacity(0.15)
+
+            Group {
+                switch mode {
+                case .chat:
+                    chatBody
+                case .cowork:
+                    CoworkPane()
+                case .code:
+                    CodePane()
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+        .background(Color.clear) // SpotlightWindow's blur shows through
+        // Drag any file in from Finder / desktop / mail — becomes a
+        // pending attachment. Local kinclaw souls (Pilot etc.) get
+        // the file path baked into the message so the agent can
+        // read it directly. Cloud agents get a path mention but
+        // can't access the file (Phase 2: vision-model upload).
+        .onDrop(of: [.fileURL], isTargeted: $isDropTarget) { providers in
+            handleDrop(providers: providers)
+        }
+        .onAppear { Task { await loadAgents() } }
+        .onChange(of: selectedAgent?.id) { _, _ in
+            handleAgentChange()
+        }
+        .onDisappear {
+            sseClient?.cancel()
+            localStreamTask?.cancel()
+            speaker.stop()
+        }
+    }
+
+    /// Chat surface — the original spotlight content (messages +
+    /// pending attachments + input bar). Extracted from mainStack
+    /// in Stage 2 so the same VStack can switch between chat /
+    /// cowork / code based on the active ModeBar selection.
+    private var chatBody: some View {
+        VStack(spacing: 0) {
+            // messagesView is the primary, flexible child.
             // The hover-zone + recent-agents row sit as OVERLAYS so
             // they don't compete with the ScrollView for layout
             // priority — the previous ZStack arrangement collapsed
@@ -217,25 +269,6 @@ struct SpotlightContentView: View {
                                 lineWidth: 1.5)
                         .padding(.horizontal, 8)
                 )
-        }
-        .preferredColorScheme(.dark)
-        .background(Color.clear) // SpotlightWindow's blur shows through
-        // Drag any file in from Finder / desktop / mail — becomes a
-        // pending attachment. Local kinclaw souls (Pilot etc.) get
-        // the file path baked into the message so the agent can
-        // read it directly. Cloud agents get a path mention but
-        // can't access the file (Phase 2: vision-model upload).
-        .onDrop(of: [.fileURL], isTargeted: $isDropTarget) { providers in
-            handleDrop(providers: providers)
-        }
-        .onAppear { Task { await loadAgents() } }
-        .onChange(of: selectedAgent?.id) { _, _ in
-            handleAgentChange()
-        }
-        .onDisappear {
-            sseClient?.cancel()
-            localStreamTask?.cancel()
-            speaker.stop()
         }
     }
 

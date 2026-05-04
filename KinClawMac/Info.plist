@@ -26,6 +26,8 @@
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>KinClaw needs Apple Events access to coordinate with the local kinclaw daemon for computer-use tasks.</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2026 LocalKinAI. Apache-2.0 licensed.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>KinClaw uses your microphone for voice mode — push-to-talk to any agent.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
