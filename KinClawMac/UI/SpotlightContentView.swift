@@ -60,9 +60,23 @@ struct SpotlightContentView: View {
     @State private var recentRowHideTask: DispatchWorkItem?
 
     /// Active surface — Chat / Cowork / Code. Loaded from UserDefaults
-    /// so the user's last choice survives a relaunch. Cowork + Code
-    /// are placeholder views until Stages 3 and 4 land.
+    /// so the user's last choice survives a relaunch.
     @State private var mode: ChatMode = ChatMode.loadPersisted()
+
+    /// Per-mode last-used agent slug. Each tab has its OWN active
+    /// agent — switching tabs swaps which agent is in use. This is
+    /// the conceptual heart of the three-tab split:
+    ///
+    ///   Chat   → cloud personalities (Selah / Heal / Core / Faith)
+    ///   Cowork → KinClaw computer-use souls (Pilot / Coder / etc.)
+    ///   Code   → fixed kincode kernel (no picker)
+    ///
+    /// Without this separation, "I was chatting with Selah, switched
+    /// to Cowork" would leave Selah selected — and Selah can't drive
+    /// the screen claw, so the surface silently fails to do what the
+    /// user expects.
+    @AppStorage("kinclaw.chat.lastAgent") private var chatLastAgentSlug: String = ""
+    @AppStorage("kinclaw.cowork.lastSoul") private var coworkLastSoulSlug: String = ""
 
     // Transports.
     @State private var sseClient: SSEClient?
@@ -199,8 +213,12 @@ struct SpotlightContentView: View {
             handleDrop(providers: providers)
         }
         .onAppear { Task { await loadAgents() } }
-        .onChange(of: selectedAgent?.id) { _, _ in
+        .onChange(of: selectedAgent?.slug) { _, slug in
             handleAgentChange()
+            persistAgentForCurrentMode(slug: slug)
+        }
+        .onChange(of: mode) { _, newMode in
+            applyAgentForMode(newMode)
         }
         .onDisappear {
             sseClient?.cancel()
@@ -297,13 +315,22 @@ struct SpotlightContentView: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            // (Removed the decorative 🦞 wordmark — it duplicated
-            // visually with the active agent's avatar emoji in the
-            // dropdown label, especially when Pilot was selected
-            // ['🦞 KinClaw Pilot' had two lobsters side-by-side].
-            // The dropdown's emoji alone is sufficient identity.)
-            agentMenu
+            // Mode-aware identity slot:
+            //   .chat / .cowork → agentMenu (mode-filtered dropdown)
+            //   .code           → static "🦞 kincode" label, no picker
+            //                     (kincode is the only Code-mode kernel)
+            if mode == .code {
+                HStack(spacing: 6) {
+                    Text("🦞")
+                        .font(.system(size: 14))
+                    Text("kincode")
+                        .font(.system(size: 13, weight: .semibold))
+                }
                 .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                agentMenu
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
 
             // Session history (📚) — popover with all saved
             // chats for the active agent + "+ New chat" + delete.
@@ -386,64 +413,73 @@ struct SpotlightContentView: View {
 
     private var agentMenu: some View {
         Menu {
-            // Nested submenus = collapsed-by-default groups. The
-            // top-level dropdown shows just the 4 group titles +
-            // their counts; users click / hover to expand each.
+            // Mode-scoped dropdown — Chat shows ONLY cloud groups
+            // (Selah / Heal / Core / Faith); Cowork shows ONLY KinClaw
+            // computer-use souls. This is the conceptual heart of the
+            // three-tab split: each tab has a distinct purpose, so its
+            // agent pool is distinct too. Code mode never reaches this
+            // menu (kincode is fixed; the picker is replaced upstream
+            // with a static label).
 
-            // ── KinClaw computer-use souls (7 today) ──
-            if !kinClawSouls.isEmpty {
-                Menu("🦞  KinClaw  (\(kinClawSouls.count))") {
-                    ForEach(kinClawSouls) { agentMenuRow($0) }
+            switch mode {
+            case .cowork:
+                // ── KinClaw computer-use souls (7 today) ──
+                if !kinClawSouls.isEmpty {
+                    Menu("🦞  KinClaw  (\(kinClawSouls.count))") {
+                        ForEach(kinClawSouls) { agentMenuRow($0) }
+                    }
+                } else if !isLoadingAgents {
+                    Text("🦞  No KinClaw souls — is kinclaw running on :5001?")
+                        .foregroundColor(.secondary)
                 }
-            }
 
-            // (Solo agents group removed — those generic LocalKin
-            // souls under ~/.localkin/souls/ are now filtered out
-            // at loadAgents and don't reach the picker.)
-
-            // ── Core — `localkin/scripts/serve.sh` AGENTS array,
-            //     17 publicly tunneled agents at *.localkin.dev.
-            //     Some overlap with Selah / Heal (guyon, tcm) but
-            //     Core is the entry-point group that surfaces them. ──
-            if !coreAgents.isEmpty {
-                Menu("⭐  Core  (\(coreAgents.count))") {
-                    ForEach(coreAgents) { agentMenuRow($0) }
+            case .chat:
+                // ── Core — `localkin/scripts/serve.sh` AGENTS array,
+                //     17 publicly tunneled agents at *.localkin.dev. ──
+                if !coreAgents.isEmpty {
+                    Menu("⭐  Core  (\(coreAgents.count))") {
+                        ForEach(coreAgents) { agentMenuRow($0) }
+                    }
                 }
-            }
 
-            // ── Cloud Faith / Selah masters ──
-            if !spiritualAgents.isEmpty {
-                Menu("📜  Faith / Selah  (\(spiritualAgents.count))") {
-                    ForEach(spiritualAgents) { agentMenuRow($0) }
+                // ── Cloud Faith / Selah masters ──
+                if !spiritualAgents.isEmpty {
+                    Menu("📜  Faith / Selah  (\(spiritualAgents.count))") {
+                        ForEach(spiritualAgents) { agentMenuRow($0) }
+                    }
+                } else if !isLoadingAgents && cloudErrorReason != nil {
+                    Text("📜  Faith — \(cloudErrorReason ?? "unreachable")")
+                        .foregroundColor(.secondary)
                 }
-            } else if !isLoadingAgents && cloudErrorReason != nil {
-                Text("📜  Faith — \(cloudErrorReason ?? "unreachable")")
-                    .foregroundColor(.secondary)
-            }
 
-            // ── Cloud Heal / 岐黄 masters ──
-            if !tcmAgents.isEmpty {
-                Menu("🌿  Heal / 岐黄  (\(tcmAgents.count))") {
-                    ForEach(tcmAgents) { agentMenuRow($0) }
+                // ── Cloud Heal / 岐黄 masters ──
+                if !tcmAgents.isEmpty {
+                    Menu("🌿  Heal / 岐黄  (\(tcmAgents.count))") {
+                        ForEach(tcmAgents) { agentMenuRow($0) }
+                    }
+                } else if !isLoadingAgents && cloudErrorReason != nil {
+                    Text("🌿  Heal — \(cloudErrorReason ?? "unreachable")")
+                        .foregroundColor(.secondary)
                 }
-            } else if !isLoadingAgents && cloudErrorReason != nil {
-                Text("🌿  Heal — \(cloudErrorReason ?? "unreachable")")
-                    .foregroundColor(.secondary)
-            }
 
-            // ── Cloud agents that don't match either vertical
-            //     (defensive — empty today, here in case the catalog
-            //     gains a new domain like "qa" before the UI does) ──
-            if !otherCloudAgents.isEmpty {
-                Menu("☁️  Other cloud  (\(otherCloudAgents.count))") {
-                    ForEach(otherCloudAgents.prefix(80)) { agentMenuRow($0) }
+                // ── Cloud agents in unrecognized domains ──
+                if !otherCloudAgents.isEmpty {
+                    Menu("☁️  Other cloud  (\(otherCloudAgents.count))") {
+                        ForEach(otherCloudAgents.prefix(80)) { agentMenuRow($0) }
+                    }
                 }
+
+            case .code:
+                // Unreachable — header swaps the picker for a static
+                // "🦞 kincode" label when mode == .code. Defensive
+                // empty case.
+                EmptyView()
             }
 
             // ── No groups at all → empty / loading ──
-            if allAgents.isEmpty {
+            if mode == .chat && cloudAgents.isEmpty {
                 if isLoadingAgents {
-                    Text("Loading…").foregroundColor(.secondary)
+                    Text("Loading cloud agents…").foregroundColor(.secondary)
                 } else if let err = loadError {
                     Text(err).foregroundColor(.secondary)
                 }
@@ -1122,33 +1158,82 @@ struct SpotlightContentView: View {
         if merged.isEmpty {
             loadError = "No agents available — start kinclaw locally or check your internet."
         } else if selectedAgent == nil {
-            selectedAgent = pickDefaultAgent(merged: merged, local: local, cloud: cloud)
+            // Pick by current mode — Chat tab gets a cloud default,
+            // Cowork tab gets Pilot, Code skips agent selection.
+            selectedAgent = pickDefaultAgent(for: mode)
         }
         isLoadingAgents = false
     }
 
-    /// Pick the default agent surfaced when KinClaw Mac launches.
+    /// Pick the default agent surfaced when KinClaw Mac launches OR
+    /// when the user switches modes.
     ///
-    /// Priority order:
-    ///   1. Last-used agent (if persisted slug still resolves in
-    ///      the current catalog) — respects user choice across
-    ///      sessions.
-    ///   2. KinClaw Pilot (the dock's marquee soul — operates the
-    ///      Mac via the 5 claws + skills). Per Jacky 2026-05-03.
-    ///   3. Any other KinClaw soul (Coder / Critic / etc.)
-    ///   4. Any other local soul (~/.localkin/souls/).
-    ///   5. First cloud agent (Selah Irenaeus, alphabetically).
-    private func pickDefaultAgent(merged: [Agent], local: [Agent],
-                                  cloud: [Agent]) -> Agent? {
-        let lastUsed = UserDefaults.standard.string(forKey: "kinclaw.lastAgent")
-        if let slug = lastUsed,
-           let agent = merged.first(where: { $0.slug == slug }) {
-            return agent
+    /// Per-mode logic:
+    ///   .chat   → last-used cloud agent (kinclaw.chat.lastAgent),
+    ///             else first Core, else first Faith, else first cloud
+    ///   .cowork → last-used KinClaw soul (kinclaw.cowork.lastSoul),
+    ///             else KinClaw Pilot, else first KinClaw soul
+    ///   .code   → no agent (kincode is fixed)
+    private func pickDefaultAgent(for mode: ChatMode) -> Agent? {
+        switch mode {
+        case .code:
+            return nil
+        case .chat:
+            if !chatLastAgentSlug.isEmpty,
+               let agent = cloudAgents.first(where: { $0.slug == chatLastAgentSlug }) {
+                return agent
+            }
+            return coreAgents.first
+                ?? spiritualAgents.first
+                ?? tcmAgents.first
+                ?? otherCloudAgents.first
+        case .cowork:
+            if !coworkLastSoulSlug.isEmpty,
+               let soul = kinClawSouls.first(where: { $0.slug == coworkLastSoulSlug }) {
+                return soul
+            }
+            return kinClawSouls.first(where: { $0.name == "KinClaw Pilot" })
+                ?? kinClawSouls.first
         }
-        if let pilot = local.first(where: { $0.name == "KinClaw Pilot" }) {
-            return pilot
+    }
+
+    /// Switch the active agent to whatever's appropriate for the
+    /// given mode. Called from onChange(mode). Code mode is a no-op
+    /// — its UI doesn't consume selectedAgent.
+    private func applyAgentForMode(_ newMode: ChatMode) {
+        if newMode == .code {
+            return
         }
-        return local.first ?? cloud.first
+        // If the currently-selected agent is already valid for the
+        // new mode (e.g. user re-selected Chat after a brief Cowork
+        // detour with the same Selah picked), keep it.
+        if let cur = selectedAgent, agentBelongsToMode(cur, mode: newMode) {
+            return
+        }
+        // Otherwise jump to the per-mode default.
+        if let next = pickDefaultAgent(for: newMode) {
+            selectedAgent = next
+        }
+    }
+
+    /// True if `agent` belongs to the agent pool of `mode`.
+    private func agentBelongsToMode(_ agent: Agent, mode: ChatMode) -> Bool {
+        switch mode {
+        case .chat:   return !agent.isLocal     // cloud only
+        case .cowork: return agent.name.hasPrefix("KinClaw")
+        case .code:   return false              // never matches
+        }
+    }
+
+    /// Write the current agent slug under the per-mode key so it
+    /// survives a relaunch + restoration on next mode switch.
+    private func persistAgentForCurrentMode(slug: String?) {
+        guard let s = slug else { return }
+        switch mode {
+        case .chat:   chatLastAgentSlug = s
+        case .cowork: coworkLastSoulSlug = s
+        case .code:   break
+        }
     }
 
     // MARK: - Send (router → cloud / local)
