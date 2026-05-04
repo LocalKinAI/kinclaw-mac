@@ -288,7 +288,12 @@ private struct BackendSettingsTab: View {
     @AppStorage("kinclaw.backend.stt") private var stt = "http://localhost:8000"
     @AppStorage("kinclaw.backend.tts") private var tts = "http://localhost:8001"
 
+    // Kincode (Code mode kernel — Stage 1 / 5).
+    @AppStorage("kinclaw.kincode.autostart") private var kincodeAutostart = true
+    @AppStorage("kinclaw.kincode.port") private var kincodePort = 5002
+
     @State private var localStatus = "Probing…"
+    @State private var kincodeStatus = "Probing…"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -319,6 +324,30 @@ private struct BackendSettingsTab: View {
                 SettingsCaption("Port / binary changes apply on next supervisor restart. Quit + relaunch to apply.")
             }
 
+            SettingsCard("Kincode (Code mode)") {
+                SettingsRow(label: "Autostart") {
+                    Toggle("", isOn: $kincodeAutostart)
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                }
+                SettingsRow(label: "Port") {
+                    TextField("5002", value: $kincodePort, format: .number)
+                        .frame(width: 80)
+                        .textFieldStyle(.roundedBorder)
+                }
+                SettingsRow(label: "Status") {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(kincodeStatus.contains("Running")
+                                  ? Color.green : Color.red)
+                            .frame(width: 6, height: 6)
+                        Text(kincodeStatus)
+                            .font(.system(size: 12))
+                    }
+                }
+                SettingsCaption("Coding agent on :5002. Disable autostart to skip the subprocess if you don't use Code mode. Apply on relaunch.")
+            }
+
             SettingsCard("Sidecars") {
                 SettingsRow(label: "SearXNG") {
                     TextField("", text: $searxng)
@@ -335,7 +364,12 @@ private struct BackendSettingsTab: View {
                 SettingsCaption("Hot-reloaded — voice / search calls use the new endpoints immediately.")
             }
         }
-        .task { await refreshStatus() }
+        .task {
+            // Both probes run concurrently — neither blocks the other.
+            async let kc: Void = refreshStatus()
+            async let kk: Void = refreshKincodeStatus()
+            _ = await (kc, kk)
+        }
     }
 
     private func refreshStatus() async {
@@ -344,6 +378,41 @@ private struct BackendSettingsTab: View {
             localStatus = "Running — \(souls.count) soul\(souls.count == 1 ? "" : "s")"
         } catch {
             localStatus = "Not reachable"
+        }
+    }
+
+    /// Hits kincode's /api/health (and /api/state for the model
+    /// label, when the health probe succeeds). State JSON is cheap
+    /// — the agent has at most one assistant message in memory at
+    /// idle so the response is tiny.
+    private func refreshKincodeStatus() async {
+        guard let url = URL(string: "http://localhost:\(kincodePort)/api/health") else {
+            kincodeStatus = "Not reachable"
+            return
+        }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 1.5
+        do {
+            let (_, response) = try await URLSession.shared.data(for: req)
+            if let http = response as? HTTPURLResponse,
+               (200...299).contains(http.statusCode) {
+                // Optionally fetch the model + provider label for richer status.
+                if let stateURL = URL(string: "http://localhost:\(kincodePort)/api/state") {
+                    var sreq = URLRequest(url: stateURL)
+                    sreq.timeoutInterval = 1.0
+                    if let (data, _) = try? await URLSession.shared.data(for: sreq),
+                       let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let model = obj["model"] as? String {
+                        kincodeStatus = "Running — \(model)"
+                        return
+                    }
+                }
+                kincodeStatus = "Running"
+            } else {
+                kincodeStatus = "Not reachable"
+            }
+        } catch {
+            kincodeStatus = "Not reachable"
         }
     }
 
