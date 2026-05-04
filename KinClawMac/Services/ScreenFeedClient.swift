@@ -23,11 +23,6 @@ final class ScreenFeedClient: ObservableObject {
     /// nil during the first poll or when the feed isn't reachable.
     @Published private(set) var image: NSImage?
 
-    /// "Reminders" / "Safari" / "" — what the kinclaw kernel says
-    /// it's tracking. "" means whole-display capture (not pinned to
-    /// a specific app).
-    @Published private(set) var trackedApp: String = ""
-
     /// True after at least one successful image fetch. Lets the UI
     /// show a "connecting…" placeholder until the first frame lands
     /// instead of a misleading "feed offline" message during boot.
@@ -41,7 +36,6 @@ final class ScreenFeedClient: ObservableObject {
 
     private let baseURL: URL
     private var imageTask: Task<Void, Never>?
-    private var infoTask: Task<Void, Never>?
 
     init(port: Int = 5001) {
         self.baseURL = URL(string: "http://localhost:\(port)")!
@@ -54,9 +48,6 @@ final class ScreenFeedClient: ObservableObject {
         imageTask = Task { [weak self] in
             await self?.imageLoop()
         }
-        infoTask = Task { [weak self] in
-            await self?.infoLoop()
-        }
     }
 
     /// Stop polling. Called when the user leaves Cowork mode (back
@@ -65,15 +56,12 @@ final class ScreenFeedClient: ObservableObject {
     func stop() {
         imageTask?.cancel()
         imageTask = nil
-        infoTask?.cancel()
-        infoTask = nil
     }
 
     deinit {
-        // Tasks capture self weakly so deinit doesn't hang on them
-        // — they observe the cancellation flag set by .cancel().
+        // Task captures self weakly so deinit doesn't hang on it —
+        // it observes the cancellation flag set by .cancel().
         imageTask?.cancel()
-        infoTask?.cancel()
     }
 
     // MARK: - Polling loops
@@ -84,15 +72,6 @@ final class ScreenFeedClient: ObservableObject {
             // Server caches 800ms; 1.5s leaves headroom for actual
             // capture variance + network round trip.
             try? await Task.sleep(nanoseconds: 1_500_000_000)
-        }
-    }
-
-    private func infoLoop() async {
-        while !Task.isCancelled {
-            await fetchInfoOnce()
-            // Tracked-app changes are infrequent (user switching
-            // foreground apps); 5s polling is plenty.
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
         }
     }
 
@@ -130,20 +109,6 @@ final class ScreenFeedClient: ObservableObject {
         }
     }
 
-    private func fetchInfoOnce() async {
-        let url = baseURL.appendingPathComponent("/api/screen/info")
-        var req = URLRequest(url: url)
-        req.timeoutInterval = 2
-        do {
-            let (data, _) = try await URLSession.shared.data(for: req)
-            if let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let app = obj["tracked_app"] as? String {
-                trackedApp = app
-            }
-        } catch {
-            // Non-fatal — we just keep the previous label.
-        }
-    }
 }
 
 // URL.appending(queryItems:) is iOS 16+ / macOS 13+. Mac is on 14+

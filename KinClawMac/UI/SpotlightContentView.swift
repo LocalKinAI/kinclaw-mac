@@ -165,24 +165,37 @@ struct SpotlightContentView: View {
         .frame(minWidth: 320, minHeight: 380)
     }
 
-    /// Main column — mode bar on top, then the active surface body.
-    /// The body switches between three sibling views (chat / cowork /
-    /// code) based on `mode`. Chat is the existing fully-wired surface;
-    /// Cowork and Code are placeholders until Stages 3-4.
+    /// Main column. Layout hierarchy (top → bottom):
+    ///
+    ///   1. titlebar (28pt reserve) — ModeBar lives in the overlay
+    ///      that floats here, so the FIRST thing the eye lands on is
+    ///      "what am I trying to do" (Chat / Cowork / Code).
+    ///   2. agentBar (Chat/Cowork only) — secondary row with the
+    ///      mode-scoped agent picker + history / clear / tts. Code
+    ///      mode skips this row; CodePane's own repoBar serves the
+    ///      same secondary role for that surface.
+    ///   3. mode body — chat / cowork / code, each consuming the
+    ///      remaining vertical space.
+    ///
+    /// The reorder (mode primary, agent secondary) reflects the
+    /// conceptual hierarchy: the user's first decision is what kind
+    /// of work they're doing; only after that does "with whom" matter.
     private var mainStack: some View {
         VStack(spacing: 0) {
-            // 28pt reservation for the titlebar row. The titlebar-
+            // 28pt reservation for the titlebar row. The ModeBar-
             // overlay header floats here visually, but in layout we
-            // need a placeholder so chat content starts BELOW it.
+            // need a placeholder so content starts BELOW it.
             Color.clear.frame(height: 28)
 
             Divider().opacity(0.15)
 
-            // Three-pill mode switcher (Chat / Cowork / Code). Persists
-            // across launches via ChatMode.persist().
-            ModeBar(mode: $mode)
-
-            Divider().opacity(0.15)
+            // Secondary row — agent picker and utility buttons. Code
+            // mode has CodePane's own repoBar acting as its secondary
+            // row, so we skip ours there to avoid double bars.
+            if mode != .code {
+                agentBar
+                Divider().opacity(0.15)
+            }
 
             Group {
                 switch mode {
@@ -297,43 +310,47 @@ struct SpotlightContentView: View {
         }
     }
 
-    /// Header floating in the titlebar row. Pinned to the top via
-    /// .ignoresSafeArea(.top) — without this SwiftUI inserts a
-    /// safe-area inset and pushes the header down clear of the
-    /// titlebar.
+    /// Titlebar overlay — sits in the 28pt row alongside the macOS
+    /// traffic-light buttons. Hosts the **ModeBar** (Chat / Cowork /
+    /// Code) as the primary identity of the panel: what the user is
+    /// trying to do is the highest-level question. Settings (⚙) is
+    /// the only other titlebar resident — it's truly global, not
+    /// mode-scoped.
+    ///
+    /// Pinned via .ignoresSafeArea(.top) — without it SwiftUI inserts
+    /// a safe-area inset and the bar drops below the traffic lights.
     private var titlebarHeaderOverlay: some View {
-        header
-            .padding(.leading, 72)   // clear the traffic-light buttons
-            .padding(.trailing, 14)
-            .padding(.vertical, 3)
-            .frame(height: 28)
-            .frame(maxWidth: .infinity)
-            .ignoresSafeArea(.container, edges: .top)
+        HStack(spacing: 10) {
+            ModeBar(mode: $mode)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            SettingsLink {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 13))
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Settings")
+        }
+        .padding(.leading, 72)   // clear the traffic-light buttons
+        .padding(.trailing, 14)
+        .padding(.vertical, 3)
+        .frame(height: 28)
+        .frame(maxWidth: .infinity)
+        .ignoresSafeArea(.container, edges: .top)
     }
 
-    // MARK: - Header (soul/agent picker)
-
-    private var header: some View {
+    /// Secondary row (Chat/Cowork only): mode-scoped agent picker on
+    /// the left, utility buttons (history / clear / tts) on the right.
+    /// Code mode skips this — CodePane's own repoBar is the secondary
+    /// row for that surface, with a different identity (the repo
+    /// path, not an agent).
+    private var agentBar: some View {
         HStack(spacing: 10) {
-            // Mode-aware identity slot:
-            //   .chat / .cowork → agentMenu (mode-filtered dropdown)
-            //   .code           → static "🦞 kincode" label, no picker
-            //                     (kincode is the only Code-mode kernel)
-            if mode == .code {
-                HStack(spacing: 6) {
-                    Text("🦞")
-                        .font(.system(size: 14))
-                    Text("kincode")
-                        .font(.system(size: 13, weight: .semibold))
-                }
+            agentMenu
                 .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                agentMenu
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
 
-            // Session history (📚) — popover with all saved
-            // chats for the active agent + "+ New chat" + delete.
+            // Session history (📚) — popover with all saved chats
+            // for the active agent + "+ New chat" + delete.
             Button {
                 showingHistoryPopover.toggle()
             } label: {
@@ -361,7 +378,6 @@ struct SpotlightContentView: View {
                         onDelete: { session in
                             ChatSessionStore.delete(id: session.id,
                                                      agentSlug: agent.slug)
-                            // If the deleted one was active, start fresh
                             if session.id == currentSessionID {
                                 startNewSession()
                             }
@@ -370,7 +386,6 @@ struct SpotlightContentView: View {
                 }
             }
 
-            // Quick actions
             if !messages.isEmpty {
                 Button {
                     clearChat()
@@ -395,21 +410,16 @@ struct SpotlightContentView: View {
             }
             .buttonStyle(.plain)
             .help(ttsEnabled ? "Speech on" : "Speech off")
-
-            // SwiftUI's native SettingsLink (macOS 14+) opens the
-            // Settings { } scene reliably regardless of activation
-            // state. Manual `NSApp.sendAction(showSettingsWindow:)`
-            // gets silently dropped while a nonactivating panel
-            // owns focus — SettingsLink bypasses that path entirely.
-            SettingsLink {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 13))
-                    .foregroundColor(.secondary)
-            }
-            .buttonStyle(.plain)
-            .help("Settings")
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
     }
+
+    // MARK: - Agent picker (Chat / Cowork only)
+    // (The old monolithic `header` was split into agentBar + the new
+    //  ModeBar-driven titlebarHeaderOverlay. agentMenu is still the
+    //  picker — see below.)
+
 
     private var agentMenu: some View {
         Menu {

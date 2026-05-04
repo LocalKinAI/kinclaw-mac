@@ -20,29 +20,26 @@ struct ScreenFeedView: View {
     }
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
-            // Image fills the available frame, aspect-fit so the user
-            // always sees the full captured rect (letterbox top/bottom
-            // when the panel is wider than 16:9).
-            Group {
-                if let img = client.image {
-                    Image(nsImage: img)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .transition(.opacity)
-                } else {
-                    placeholder
-                }
+        // Image fills the available frame, aspect-fit so the user
+        // always sees the full captured rect (letterbox top/bottom
+        // when the panel is wider than 16:9). No overlay label —
+        // the screen frame itself is sufficient signal that we're
+        // showing the desktop; the red "🔴 LIVE · App" tag was noise
+        // borrowed from video-conferencing UI conventions and didn't
+        // earn its space in a desktop chat panel.
+        Group {
+            if let img = client.image {
+                Image(nsImage: img)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .transition(.opacity)
+            } else {
+                placeholder
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.black.opacity(0.6))
-            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-
-            // Label overlay — top-left, "🔴 LIVE · App". Mirrors the
-            // browser UI that ships with kinclaw so users coming from
-            // the web client recognize it.
-            label
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black.opacity(0.6))
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         .frame(height: 220)
         .padding(.horizontal, 12)
         .padding(.top, 8)
@@ -70,31 +67,5 @@ struct ScreenFeedView: View {
                     .foregroundColor(.secondary)
             }
         }
-    }
-
-    private var label: some View {
-        HStack(spacing: 5) {
-            Circle()
-                .fill(Color.red.opacity(client.hasFirstFrame ? 0.85 : 0.3))
-                .frame(width: 6, height: 6)
-            Text(labelText)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundColor(.white)
-        }
-        .padding(.horizontal, 7)
-        .padding(.vertical, 3)
-        .background(
-            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                .fill(Color.black.opacity(0.55))
-        )
-        .padding(8)
-    }
-
-    private var labelText: String {
-        let app = client.trackedApp
-        if app.isEmpty {
-            return client.hasFirstFrame ? "LIVE" : "Connecting"
-        }
-        return "LIVE · \(app)"
     }
 }
