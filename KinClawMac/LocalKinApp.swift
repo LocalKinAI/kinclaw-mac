@@ -55,8 +55,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 🦞 NSStatusItem in the menubar.
     private(set) var menuBar: MenuBarController!
 
-    /// Local kinclaw subprocess manager.
+    /// Local kinclaw subprocess manager (port 5001 — Chat / Cowork).
     let supervisor = KinClawSupervisor()
+
+    /// Local kincode subprocess manager (port 5002 — Code mode).
+    /// Eager-spawned by default; the user can opt out via Settings →
+    /// Backend → Kincode autostart.
+    let kincodeSupervisor = KinCodeSupervisor()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // One-shot migration: if the user has chat history saved
@@ -109,12 +114,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         //    existing one on :5001). Runs async so the UI doesn't
         //    block on the boot probe.
         Task { await supervisor.start() }
+
+        // 7. Bring up kincode on :5002 in parallel — Code mode's
+        //    backend. Independent of kinclaw: if kinclaw fails the
+        //    user still gets Code mode, and vice versa. Runs async
+        //    too; both probes happen concurrently.
+        Task { await kincodeSupervisor.start() }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        // Clean shutdown of our owned kinclaw subprocess. Adopted
-        // external kinclaws are left alone — they belong to the user.
+        // Clean shutdown of our owned subprocesses. Adopted externals
+        // (either kernel) are left alone — they belong to the user.
         supervisor.stop()
+        kincodeSupervisor.stop()
     }
 
     /// Opens (or focuses) the SwiftUI Settings scene. The legacy
