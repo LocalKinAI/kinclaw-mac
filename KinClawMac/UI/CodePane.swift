@@ -80,7 +80,27 @@ struct CodePane: View {
         VStack(spacing: 0) {
             repoBar
             Divider().opacity(0.15)
-            messagesArea
+
+            // Two-column body: file tree left, chat right. The
+            // sidebar is hidden when no repo is picked (empty state
+            // already covers that messaging in messagesArea).
+            HStack(spacing: 0) {
+                if !repoPath.isEmpty {
+                    FileTreeView(rootPath: repoPath) { picked in
+                        // Repo-relativize so the agent sees the same
+                        // path it'd write itself; absolute paths work
+                        // too but are noisier in the chat.
+                        let rel = picked.hasPrefix(repoPath + "/")
+                            ? String(picked.dropFirst(repoPath.count + 1))
+                            : picked
+                        appendToInput(rel)
+                    }
+                    .frame(width: 160)
+                    Divider().opacity(0.15)
+                }
+                messagesArea
+            }
+
             Divider().opacity(0.15)
             inputBar
         }
@@ -92,6 +112,21 @@ struct CodePane: View {
             streamTask?.cancel()
             streamTask = nil
         }
+    }
+
+    /// Insert a snippet into the input field at the cursor (or end).
+    /// Used by the file-tree click handler — clicking foo.swift in
+    /// the tree lets the user say "explain `foo.swift`" without
+    /// retyping the path.
+    private func appendToInput(_ snippet: String) {
+        if inputText.isEmpty {
+            inputText = snippet + " "
+        } else if inputText.hasSuffix(" ") {
+            inputText += snippet + " "
+        } else {
+            inputText += " " + snippet + " "
+        }
+        inputFocused = true
     }
 
     // MARK: - Repo bar
@@ -208,11 +243,25 @@ struct CodePane: View {
             }
         case .assistant:
             HStack(alignment: .top) {
-                Text(msg.text.isEmpty ? "…" : msg.text)
-                    .font(.system(size: 12))
-                    .foregroundColor(.primary)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                if msg.text.isEmpty {
+                    // Pre-stream placeholder. Plain Text avoids the
+                    // MarkdownParser running on an empty string every
+                    // delta tick (parser is cheap but still ~µs).
+                    Text("…")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                } else {
+                    // Same MarkdownView the Chat surface uses so
+                    // fenced code blocks, lists, and headings render
+                    // properly — kincode replies are heavy on
+                    // ```code``` blocks, plain Text would show the
+                    // backticks raw and collapse the formatting.
+                    MarkdownView(text: msg.text)
+                        .font(.system(size: 12))
+                        .foregroundColor(.primary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
                 Spacer(minLength: 0)
             }
         case .toolCall:
@@ -236,21 +285,30 @@ struct CodePane: View {
                     .fill(Color.blue.opacity(0.08))
             )
         case .toolResult:
-            HStack(alignment: .top, spacing: 6) {
-                Image(systemName: msg.toolError == nil
-                                  ? "checkmark"
-                                  : "exclamationmark.triangle")
-                    .font(.system(size: 10))
-                    .foregroundColor(msg.toolError == nil
-                                     ? .green.opacity(0.85)
-                                     : .orange.opacity(0.9))
-                Text(truncate(msg.text, max: 220))
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(.secondary)
-                    .lineLimit(4)
-                    .textSelection(.enabled)
+            // file_edit results carry a unified diff with ANSI color
+            // codes — render them as a colored diff block instead of
+            // truncated monospace. Other tools (bash, file_read, glob,
+            // grep, web_*) keep the simple truncated row.
+            if msg.toolName == "file_edit" && msg.toolError == nil {
+                DiffView(raw: msg.text)
+                    .padding(.leading, 18)
+            } else {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: msg.toolError == nil
+                                      ? "checkmark"
+                                      : "exclamationmark.triangle")
+                        .font(.system(size: 10))
+                        .foregroundColor(msg.toolError == nil
+                                         ? .green.opacity(0.85)
+                                         : .orange.opacity(0.9))
+                    Text(truncate(msg.text, max: 220))
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .lineLimit(4)
+                        .textSelection(.enabled)
+                }
+                .padding(.leading, 18)  // align under the parent tool_call
             }
-            .padding(.leading, 18)  // align under the parent tool_call
         case .error:
             HStack(alignment: .top, spacing: 6) {
                 Image(systemName: "exclamationmark.octagon")
