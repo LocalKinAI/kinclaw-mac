@@ -175,7 +175,14 @@ struct SpotlightContentView: View {
                 case .chat:
                     chatBody
                 case .cowork:
-                    CoworkPane()
+                    // Cowork wraps the same chat surface as Chat mode
+                    // and pre-pends the kinclaw screen feed. State
+                    // (messages, agent picker, sse) is shared via the
+                    // parent — switching modes mid-conversation keeps
+                    // history intact.
+                    CoworkPane(kinclawPort: 5001) {
+                        chatBody
+                    }
                 case .code:
                     CodePane()
                 }
