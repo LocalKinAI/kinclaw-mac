@@ -127,10 +127,21 @@ final class KinCodeSupervisor: ObservableObject {
         state = .starting
         let p = Process()
         p.executableURL = URL(fileURLWithPath: binary)
-        p.arguments = [
+        var args = [
             "-serve",
             "-port", "\(port)",
         ]
+        // Pass the default soul so kincode runs with its proper
+        // persona + brain config (ollama / kimi-k2.5:cloud) rather
+        // than the bare `defaultSystemPrompt()` fallback. Mirrors how
+        // KinClawSupervisor passes -soul to kinclaw.
+        if let soulPath = Self.defaultSoulPath() {
+            args.append(contentsOf: ["-soul", soulPath])
+            print("[KinCodeSupervisor] soul: \(soulPath)")
+        } else {
+            print("[KinCodeSupervisor] no soul found — kincode will use built-in default prompt")
+        }
+        p.arguments = args
 
         // Inherit env. kincode reads ANTHROPIC_API_KEY / OPENAI_API_KEY
         // from env on first use; if neither is set the agent will
@@ -242,6 +253,39 @@ final class KinCodeSupervisor: ObservableObject {
     private static func findBinary() -> String? {
         for path in candidatePaths {
             if FileManager.default.isExecutableFile(atPath: path) {
+                return path
+            }
+        }
+        return nil
+    }
+
+    /// Locate the canonical kincode soul (`coder.soul.md`). Mirrors
+    /// the binary-search order — first found wins. Returns nil if no
+    /// soul is reachable, in which case kincode uses its built-in
+    /// defaultSystemPrompt and the auto-fallback ollama brain.
+    ///
+    /// The soul is the source of truth for kincode's persona AND its
+    /// default brain (provider=ollama, model=kimi-k2.5:cloud). Without
+    /// it kincode boots with a bare prompt and hardcoded fallback —
+    /// works, but loses the "rules" that make replies tight.
+    private static func defaultSoulPath() -> String? {
+        let home = NSHomeDirectory()
+        let candidates: [String] = [
+            // 1. Embedded inside the .app bundle (M6 will populate)
+            Bundle.main.url(forResource: "coder", withExtension: "soul.md")?.path,
+            // 2. Local dev repo — most common during development
+            "\(home)/Documents/Workspace/kincode/souls/coder.soul.md",
+            // 3. Homebrew (Apple Silicon)
+            "/opt/homebrew/share/kincode/souls/coder.soul.md",
+            // 4. Homebrew (Intel) / manual install
+            "/usr/local/share/kincode/souls/coder.soul.md",
+            // 5. User-level (~/.kincode/souls/) — for hand-installed
+            //    or hand-customized copies
+            "\(home)/.kincode/souls/coder.soul.md",
+        ].compactMap { $0 }
+
+        for path in candidates {
+            if FileManager.default.fileExists(atPath: path) {
                 return path
             }
         }
