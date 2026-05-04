@@ -19,30 +19,173 @@ import AppKit
 /// the existing UserDefaults plist already collects them — no new
 /// storage layer needed for the settings themselves.
 struct KinClawMacSettingsView: View {
-    var body: some View {
-        TabView {
-            GeneralSettingsTab()
-                .tabItem { Label("General", systemImage: "gearshape") }
+    @State private var selectedTab: Tab = .general
 
-            HotkeySettingsTab()
-                .tabItem { Label("Hotkey", systemImage: "command") }
-
-            BackendSettingsTab()
-                .tabItem { Label("Backend", systemImage: "server.rack") }
-
-            AgentsSettingsTab()
-                .tabItem { Label("Agents", systemImage: "person.3") }
-
-            VoiceSettingsTab()
-                .tabItem { Label("Voice", systemImage: "waveform") }
-
-            DataSettingsTab()
-                .tabItem { Label("Data", systemImage: "externaldrive") }
-
-            AboutSettingsTab()
-                .tabItem { Label("About", systemImage: "info.circle") }
+    enum Tab: String, CaseIterable, Identifiable {
+        case general, hotkey, backend, agents, voice, data, about
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .general: return "General"
+            case .hotkey:  return "Hotkey"
+            case .backend: return "Backend"
+            case .agents:  return "Agents"
+            case .voice:   return "Voice"
+            case .data:    return "Data"
+            case .about:   return "About"
+            }
         }
-        .frame(width: 520, height: 420)
+        var icon: String {
+            switch self {
+            case .general: return "gearshape"
+            case .hotkey:  return "command"
+            case .backend: return "server.rack"
+            case .agents:  return "person.3"
+            case .voice:   return "waveform"
+            case .data:    return "externaldrive"
+            case .about:   return "info.circle"
+            }
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            tabStrip
+            Divider().opacity(0.15)
+            tabContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity,
+                       alignment: .topLeading)
+        }
+        .frame(width: 540, height: 460)
+        .background(.ultraThinMaterial)
+        .preferredColorScheme(.dark)
+    }
+
+    // Pill-style tab strip that mirrors the spotlight panel's
+    // header buttons — small icons + labels on a translucent strip,
+    // active tab highlighted with the green accent. Replaces the
+    // default macOS Settings TabView chrome (which felt mismatched
+    // next to the glass-blur main panel).
+    private var tabStrip: some View {
+        HStack(spacing: 4) {
+            ForEach(Tab.allCases) { tab in
+                Button {
+                    selectedTab = tab
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: tab.icon)
+                            .font(.system(size: 11, weight: .semibold))
+                        Text(tab.label)
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(selectedTab == tab
+                                  ? Color.green.opacity(0.18)
+                                  : Color.clear)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(selectedTab == tab
+                                    ? Color.green.opacity(0.4)
+                                    : Color.clear,
+                                    lineWidth: 0.5)
+                    )
+                    .foregroundColor(selectedTab == tab
+                                     ? .green
+                                     : .secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 12)
+        .padding(.bottom, 10)
+    }
+
+    @ViewBuilder
+    private var tabContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                switch selectedTab {
+                case .general: GeneralSettingsTab()
+                case .hotkey:  HotkeySettingsTab()
+                case .backend: BackendSettingsTab()
+                case .agents:  AgentsSettingsTab()
+                case .voice:   VoiceSettingsTab()
+                case .data:    DataSettingsTab()
+                case .about:   AboutSettingsTab()
+                }
+            }
+            .padding(16)
+        }
+    }
+}
+
+// Card container mimicking the bubble surfaces in the main panel:
+// rounded rectangle, secondary-background fill, subtle border.
+private struct SettingsCard<Content: View>: View {
+    let title: String?
+    @ViewBuilder let content: () -> Content
+
+    init(_ title: String? = nil, @ViewBuilder content: @escaping () -> Content) {
+        self.title = title
+        self.content = content
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let title = title {
+                Text(title.uppercased())
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(.secondary.opacity(0.85))
+                    .tracking(0.5)
+            }
+            VStack(alignment: .leading, spacing: 12) {
+                content()
+            }
+            .padding(14)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color.platformSecondaryBackground.opacity(0.55))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(Color.secondary.opacity(0.15), lineWidth: 0.5)
+            )
+        }
+    }
+}
+
+// Helper for "label : control" rows inside SettingsCard. Aligns
+// labels to a fixed column for a tidy two-column look.
+private struct SettingsRow<Trailing: View>: View {
+    let label: String
+    @ViewBuilder let trailing: () -> Trailing
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Text(label)
+                .font(.system(size: 12))
+                .foregroundColor(.primary.opacity(0.85))
+                .frame(width: 120, alignment: .leading)
+            trailing()
+            Spacer()
+        }
+    }
+}
+
+private struct SettingsCaption: View {
+    let text: String
+    init(_ text: String) { self.text = text }
+    var body: some View {
+        Text(text)
+            .font(.system(size: 10))
+            .foregroundColor(.secondary.opacity(0.7))
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -69,32 +212,36 @@ private struct GeneralSettingsTab: View {
     }
 
     var body: some View {
-        Form {
-            Section("Launch") {
+        VStack(alignment: .leading, spacing: 14) {
+            SettingsCard("Launch") {
                 Toggle("Launch at login", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, enabled in
                         applyLaunchAtLogin(enabled)
                     }
-                Picker("On startup", selection: $startupBehavior) {
-                    ForEach(StartupBehavior.allCases) { b in
-                        Text(b.label).tag(b.rawValue)
+                SettingsRow(label: "On startup") {
+                    Picker("", selection: $startupBehavior) {
+                        ForEach(StartupBehavior.allCases) { b in
+                            Text(b.label).tag(b.rawValue)
+                        }
                     }
+                    .labelsHidden()
+                    .frame(maxWidth: 280)
                 }
             }
 
-            Section("Language") {
-                Picker("Interface & agent replies", selection: $lang) {
-                    Text("Auto (system locale)").tag("auto")
-                    Text("中文").tag("zh")
-                    Text("English").tag("en")
+            SettingsCard("Language") {
+                SettingsRow(label: "Replies") {
+                    Picker("", selection: $lang) {
+                        Text("Auto (system locale)").tag("auto")
+                        Text("中文").tag("zh")
+                        Text("English").tag("en")
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 280)
                 }
-                Text("Cloud agents honor this for replies (X-Lang header). UI labels stay bilingual; full localization comes later.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                SettingsCaption("Cloud agents honor this via X-Lang header. UI labels stay bilingual; full localization comes later.")
             }
         }
-        .formStyle(.grouped)
-        .padding()
     }
 
     private func applyLaunchAtLogin(_ enabled: Bool) {
@@ -116,18 +263,12 @@ private struct GeneralSettingsTab: View {
 
 private struct HotkeySettingsTab: View {
     var body: some View {
-        Form {
-            Section("Global hotkey") {
-                LabeledContent("Toggle KinClaw") {
-                    KeyboardShortcuts.Recorder(for: .toggleKinClaw)
-                }
-                Text("Click the field to record a new shortcut. Default is ⌘⌥K. Pick something macOS doesn't already use — Spotlight (⌘Space), Alfred / Raycast (⌥Space) etc.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+        SettingsCard("Global hotkey") {
+            SettingsRow(label: "Toggle KinClaw") {
+                KeyboardShortcuts.Recorder(for: .toggleKinClaw)
             }
+            SettingsCaption("Click the field to record a new shortcut. Default is ⌘⌥K. Pick something macOS doesn't already use — Spotlight (⌘Space), Alfred / Raycast (⌥Space) etc.")
         }
-        .formStyle(.grouped)
-        .padding()
     }
 }
 
@@ -143,46 +284,50 @@ private struct BackendSettingsTab: View {
     @State private var localStatus = "Probing…"
 
     var body: some View {
-        Form {
-            Section("Local kinclaw") {
-                LabeledContent("Port") {
+        VStack(alignment: .leading, spacing: 14) {
+            SettingsCard("Local kinclaw") {
+                SettingsRow(label: "Port") {
                     TextField("5001", value: $port, format: .number)
                         .frame(width: 80)
                         .textFieldStyle(.roundedBorder)
                 }
-                LabeledContent("Binary override") {
+                SettingsRow(label: "Binary override") {
                     HStack {
                         TextField("auto-detect", text: $binaryOverride)
                             .textFieldStyle(.roundedBorder)
                         Button("Pick…") { pickBinary() }
+                            .controlSize(.small)
                     }
                 }
-                LabeledContent("Status", value: localStatus)
-                Text("Changes take effect on next supervisor restart. Quit + relaunch KinClaw Mac to apply.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                SettingsRow(label: "Status") {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(localStatus.contains("Running")
+                                  ? Color.green : Color.red)
+                            .frame(width: 6, height: 6)
+                        Text(localStatus)
+                            .font(.system(size: 12))
+                    }
+                }
+                SettingsCaption("Port / binary changes apply on next supervisor restart. Quit + relaunch to apply.")
             }
 
-            Section("Sidecars") {
-                LabeledContent("SearXNG") {
+            SettingsCard("Sidecars") {
+                SettingsRow(label: "SearXNG") {
                     TextField("", text: $searxng)
                         .textFieldStyle(.roundedBorder)
                 }
-                LabeledContent("STT") {
+                SettingsRow(label: "STT") {
                     TextField("", text: $stt)
                         .textFieldStyle(.roundedBorder)
                 }
-                LabeledContent("TTS") {
+                SettingsRow(label: "TTS") {
                     TextField("", text: $tts)
                         .textFieldStyle(.roundedBorder)
                 }
-                Text("Hot-reloaded — voice / search calls use the new endpoints immediately.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                SettingsCaption("Hot-reloaded — voice / search calls use the new endpoints immediately.")
             }
         }
-        .formStyle(.grouped)
-        .padding()
         .task { await refreshStatus() }
     }
 
@@ -231,29 +376,31 @@ private struct AgentsSettingsTab: View {
     }
 
     var body: some View {
-        Form {
-            Section("Default on launch") {
-                Picker("Selected agent", selection: $defaultMode) {
-                    ForEach(DefaultMode.allCases) { m in
-                        Text(m.label).tag(m.rawValue)
+        VStack(alignment: .leading, spacing: 14) {
+            SettingsCard("Default on launch") {
+                SettingsRow(label: "Selected agent") {
+                    Picker("", selection: $defaultMode) {
+                        ForEach(DefaultMode.allCases) { m in
+                            Text(m.label).tag(m.rawValue)
+                        }
                     }
+                    .labelsHidden()
+                    .frame(maxWidth: 280)
                 }
             }
 
-            Section("Visible groups in picker") {
+            SettingsCard("Visible groups in picker") {
                 Toggle("🦞  KinClaw  (local computer-use)", isOn: $showKinClaw)
                 Toggle("⭐  Core  (api.localkin.dev landing)", isOn: $showCore)
                 Toggle("📜  Faith / Selah  (spiritual masters)", isOn: $showFaith)
                 Toggle("🌿  Heal / 岐黄  (TCM masters)", isOn: $showHeal)
             }
 
-            Section("Welcome screen") {
+            SettingsCard("Welcome screen") {
                 Toggle("Show suggestion chips", isOn: $showSuggestionChips)
                 Toggle("Show recent agents on hover", isOn: $showRecentRow)
             }
         }
-        .formStyle(.grouped)
-        .padding()
     }
 }
 
@@ -266,44 +413,46 @@ private struct VoiceSettingsTab: View {
     @AppStorage("kinclaw.voice.autoContinue") private var autoContinue = false
 
     var body: some View {
-        Form {
-            Section("Speech-to-Text (microphone)") {
-                LabeledContent("Silence threshold") {
+        VStack(alignment: .leading, spacing: 14) {
+            SettingsCard("Speech-to-Text (microphone)") {
+                SettingsRow(label: "Silence threshold") {
                     HStack {
                         Slider(value: $silenceDB, in: -60 ... -20, step: 1)
+                            .frame(maxWidth: 200)
                         Text("\(Int(silenceDB)) dB")
                             .font(.system(.caption, design: .monospaced))
-                            .frame(width: 50, alignment: .trailing)
+                            .foregroundColor(.secondary)
                     }
                 }
                 Toggle("Voice-mode auto-continue (continuous conversation)",
                        isOn: $autoContinue)
-                Text("Lower threshold = stops sooner on silence. -35dB suits a typical office; raise to -20dB for noisy rooms.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                SettingsCaption("Lower threshold = stops sooner on silence. -35 dB suits a typical office; raise toward -20 dB for noisier rooms.")
             }
 
-            Section("Text-to-Speech (replies spoken)") {
-                Picker("Voice", selection: $speaker) {
-                    Text("Auto (zh: zf_xiaoxiao, en: af_heart)").tag("auto")
-                    Text("zf_xiaoxiao (中文女声)").tag("zf_xiaoxiao")
-                    Text("zf_xiaobei (中文女声)").tag("zf_xiaobei")
-                    Text("zm_yunjian (中文男声)").tag("zm_yunjian")
-                    Text("af_heart (English)").tag("af_heart")
-                    Text("am_michael (English M)").tag("am_michael")
+            SettingsCard("Text-to-Speech (replies spoken)") {
+                SettingsRow(label: "Voice") {
+                    Picker("", selection: $speaker) {
+                        Text("Auto (zh: xiaoxiao · en: af_heart)").tag("auto")
+                        Text("zf_xiaoxiao (中文女声)").tag("zf_xiaoxiao")
+                        Text("zf_xiaobei (中文女声)").tag("zf_xiaobei")
+                        Text("zm_yunjian (中文男声)").tag("zm_yunjian")
+                        Text("af_heart (English F)").tag("af_heart")
+                        Text("am_michael (English M)").tag("am_michael")
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 280)
                 }
-                LabeledContent("Speed") {
+                SettingsRow(label: "Speed") {
                     HStack {
                         Slider(value: $speed, in: 0.5 ... 2.0, step: 0.1)
+                            .frame(maxWidth: 200)
                         Text(String(format: "%.1fx", speed))
                             .font(.system(.caption, design: .monospaced))
-                            .frame(width: 50, alignment: .trailing)
+                            .foregroundColor(.secondary)
                     }
                 }
             }
         }
-        .formStyle(.grouped)
-        .padding()
     }
 }
 
@@ -316,21 +465,24 @@ private struct DataSettingsTab: View {
     @State private var showingClearConfirm = false
 
     var body: some View {
-        Form {
-            Section("Locations") {
+        VStack(alignment: .leading, spacing: 14) {
+            SettingsCard("Locations") {
                 pathRow("~/.kinclaw/", size: kinclawSize, action: revealKinclaw)
                 pathRow("~/.localkin/", size: localkinSize, action: revealLocalkin)
             }
 
-            Section("Sessions") {
-                LabeledContent("Total saved",
-                               value: "\(sessionsCount) session\(sessionsCount == 1 ? "" : "s")")
+            SettingsCard("Sessions") {
+                SettingsRow(label: "Total saved") {
+                    Text("\(sessionsCount) session\(sessionsCount == 1 ? "" : "s")")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                }
                 Button(role: .destructive) {
                     showingClearConfirm = true
                 } label: {
-                    Label("Clear all sessions…",
-                          systemImage: "trash")
+                    Label("Clear all sessions…", systemImage: "trash")
                 }
+                .controlSize(.small)
                 .alert("Delete all chat sessions?",
                        isPresented: $showingClearConfirm) {
                     Button("Delete all", role: .destructive) { clearAllSessions() }
@@ -338,13 +490,9 @@ private struct DataSettingsTab: View {
                 } message: {
                     Text("This deletes \(sessionsCount) session JSON file(s) under ~/.kinclaw/sessions/. Cannot be undone.")
                 }
-                Text("Individual sessions can be deleted via the 🕐 history popover in the chat header.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                SettingsCaption("Individual sessions can be deleted via the 🕐 history popover in the chat header.")
             }
         }
-        .formStyle(.grouped)
-        .padding()
         .task { await refresh() }
     }
 
@@ -352,10 +500,10 @@ private struct DataSettingsTab: View {
                           action: @escaping () -> Void) -> some View {
         HStack {
             Text(path)
-                .font(.system(.body, design: .monospaced))
+                .font(.system(size: 12, design: .monospaced))
             Spacer()
             Text(size)
-                .font(.caption)
+                .font(.system(size: 11, design: .monospaced))
                 .foregroundColor(.secondary)
             Button("Reveal") { action() }
                 .controlSize(.small)
@@ -420,29 +568,68 @@ private struct AboutSettingsTab: View {
     }
 
     var body: some View {
-        Form {
-            Section("Build") {
-                LabeledContent("Version", value: version)
-                LabeledContent("Bundle ID",
-                               value: Bundle.main.bundleIdentifier ?? "?")
+        VStack(alignment: .leading, spacing: 14) {
+            // Hero: 🦞 + product name + version
+            HStack(spacing: 14) {
+                Text("🦞")
+                    .font(.system(size: 42))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("KinClaw Mac")
+                        .font(.system(size: 18, weight: .semibold))
+                    Text(version)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.secondary)
+                    Text(Bundle.main.bundleIdentifier ?? "?")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(.secondary.opacity(0.7))
+                }
+                Spacer()
             }
-            Section("Status") {
-                LabeledContent("Local kinclaw",
-                               value: supervisor.statusDescription)
-                    .foregroundColor(supervisor.statusColor)
+            .padding(.bottom, 4)
+
+            SettingsCard("Status") {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(supervisor.statusColor)
+                        .frame(width: 6, height: 6)
+                    Text(supervisor.statusDescription)
+                        .font(.system(size: 12))
+                        .foregroundColor(supervisor.statusColor)
+                    Spacer()
+                }
             }
-            Section("Links") {
-                Link("kinclaw on GitHub",
-                     destination: URL(string: "https://github.com/LocalKinAI/kinclaw")!)
-                Link("LocalKin Dev",
-                     destination: URL(string: "https://www.localkin.dev")!)
-                Link("Report an issue",
-                     destination: URL(string: "https://github.com/LocalKinAI/kinclaw-mac/issues/new")!)
+
+            SettingsCard("Links") {
+                aboutLink("kinclaw on GitHub",
+                          url: "https://github.com/LocalKinAI/kinclaw",
+                          icon: "arrow.up.right.square")
+                aboutLink("LocalKin Dev",
+                          url: "https://www.localkin.dev",
+                          icon: "arrow.up.right.square")
+                aboutLink("Report an issue",
+                          url: "https://github.com/LocalKinAI/kinclaw-mac/issues/new",
+                          icon: "exclamationmark.bubble")
             }
         }
-        .formStyle(.grouped)
-        .padding()
         .task { await supervisor.refresh() }
+    }
+
+    @ViewBuilder
+    private func aboutLink(_ title: String, url: String, icon: String) -> some View {
+        Button {
+            if let u = URL(string: url) { NSWorkspace.shared.open(u) }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                Text(title)
+                    .font(.system(size: 12))
+                Spacer()
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 
