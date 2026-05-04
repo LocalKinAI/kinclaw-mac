@@ -22,6 +22,10 @@ struct KinClawEvent: Codable {
     let id: String?
     let name: String?
     let params: [String: String]?
+    /// Pre-computed display string for tool_call ("ls -la /tmp",
+    /// "src/main.go"). Emitted by kincode; kinclaw events leave this
+    /// nil and the UI derives a label from `params`.
+    let summary: String?
 
     // tool_result / screen_frame / record_done payloads
     let output: String?
@@ -29,6 +33,10 @@ struct KinClawEvent: Codable {
     let urls: [String]?
     let path: String?
     let url: String?
+
+    // usage stats (kincode emits at end of turn)
+    let input_tokens: Int?
+    let output_tokens: Int?
 
     // error
     let message: String?
@@ -325,6 +333,50 @@ final class KinClawAPIClient {
             let msg = String(data: body, encoding: .utf8) ?? ""
             throw KinClawAPIError.server(status: http.statusCode, body: msg)
         }
+    }
+}
+
+// MARK: - Kincode flavor (Code mode)
+
+/// kincode (Code mode) shares the kinclaw transport shape — same
+/// POST /api/chat, GET /api/events, DELETE /api/chat — so we reuse
+/// KinClawAPIClient with a different baseURL. The kincode-specific
+/// surface (`/api/repo` to chdir the agent, `/api/state` for status)
+/// is added here as an extension.
+extension KinClawAPIClient {
+
+    /// Singleton pointing at the local kincode server (default :5002).
+    /// Used by Code mode (CodePane) for chat and repo control.
+    static let kincode = KinClawAPIClient(
+        baseURL: URL(string: "http://localhost:5002")!
+    )
+
+    /// `POST /api/repo {"path": "..."}` — chdir the kincode subprocess
+    /// into the user's chosen repo. All subsequent bash / file_* tool
+    /// calls operate relative to this dir.
+    func setRepo(_ path: String) async throws {
+        let url = baseURL.appendingPathComponent("api/repo")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(["path": path])
+        let (data, response) = try await sessionDataFor(request: request)
+        try checkOK(response as? HTTPURLResponse, body: data)
+    }
+
+    /// `GET /api/state` — current repo / model / provider / message
+    /// count. Used by CodePane to label the repo header.
+    struct ServerState: Codable {
+        let repo: String?
+        let model: String?
+        let provider: String?
+        let message_count: Int?
+    }
+    func fetchState() async throws -> ServerState {
+        let url = baseURL.appendingPathComponent("api/state")
+        let (data, response) = try await sessionData(from: url)
+        try checkOK(response as? HTTPURLResponse, body: data)
+        return try decoder.decode(ServerState.self, from: data)
     }
 }
 
