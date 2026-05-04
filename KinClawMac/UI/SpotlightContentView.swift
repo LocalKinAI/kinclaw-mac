@@ -1165,9 +1165,12 @@ struct SpotlightContentView: View {
 
         if merged.isEmpty {
             loadError = "No agents available — start kinclaw locally or check your internet."
-        } else if selectedAgent == nil {
-            // Pick by current mode — Chat tab gets a cloud default,
-            // Cowork tab gets Pilot, Code skips agent selection.
+        } else if selectedAgent == nil
+                  || (selectedAgent.map { !agentBelongsToMode($0, mode: mode) } ?? false) {
+            // Re-validate after every catalog refresh — handles the
+            // race where the user switched to Cowork before kinclaw
+            // souls were loaded (selectedAgent stayed in cloud-land
+            // from Chat). Once souls land, swap to the right default.
             selectedAgent = pickDefaultAgent(for: mode)
         }
         isLoadingAgents = false
@@ -1213,15 +1216,16 @@ struct SpotlightContentView: View {
             return
         }
         // If the currently-selected agent is already valid for the
-        // new mode (e.g. user re-selected Chat after a brief Cowork
-        // detour with the same Selah picked), keep it.
+        // new mode (defensive — pools are mutually exclusive today,
+        // so this branch rarely fires, but it's correct).
         if let cur = selectedAgent, agentBelongsToMode(cur, mode: newMode) {
             return
         }
-        // Otherwise jump to the per-mode default.
-        if let next = pickDefaultAgent(for: newMode) {
-            selectedAgent = next
-        }
+        // Always assign — even nil. Leaving a stale cross-mode agent
+        // (e.g. Selah from Chat) selected while showing Cowork's
+        // KinClaw-only menu is the bug we're fixing here. nil shows
+        // "Choose an agent" / loading state until catalog refreshes.
+        selectedAgent = pickDefaultAgent(for: newMode)
     }
 
     /// True if `agent` belongs to the agent pool of `mode`.
