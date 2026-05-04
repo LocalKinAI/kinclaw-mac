@@ -47,6 +47,11 @@ struct CodePane: View {
     /// append to this bubble. Reset on turn_done.
     @State private var streamingMessageID: UUID?
 
+    /// Active session id. One session per repo in v1; switching
+    /// repos creates or loads a different one.
+    @State private var sessionID: UUID = UUID()
+    @State private var sessionCreatedAt: Date = Date()
+
     @FocusState private var inputFocused: Bool
 
     private let client = KinClawAPIClient.kincode
@@ -107,10 +112,22 @@ struct CodePane: View {
         .onAppear {
             inputFocused = true
             startStreamIfNeeded()
+            loadSessionIfNeeded()
         }
         .onDisappear {
             streamTask?.cancel()
             streamTask = nil
+            // Save on every disappear — covers mode switches without
+            // waiting for app quit. save() is cheap (atomic write).
+            saveSession()
+        }
+        .onChange(of: repoPath) { _, _ in
+            // Repo changed → start a fresh session (or resume the
+            // existing one for this repo).
+            messages.removeAll()
+            sessionID = UUID()
+            sessionCreatedAt = Date()
+            loadSessionIfNeeded()
         }
     }
 
@@ -169,6 +186,21 @@ struct CodePane: View {
                     .foregroundColor(.orange)
                     .lineLimit(1)
                     .truncationMode(.middle)
+            }
+
+            // Fresh session — persists the current one and starts a
+            // new id. Visible only when there's something to discard
+            // (avoid cluttering the empty state).
+            if !messages.isEmpty {
+                Button {
+                    startNewSession()
+                } label: {
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("New session (saves current)")
             }
         }
         .padding(.horizontal, 12)
@@ -463,10 +495,14 @@ struct CodePane: View {
         case .turnDone:
             isStreaming = false
             streamingMessageID = nil
+            // Persist after each completed turn — survives app
+            // quit, hotkey-driven panel close, repo switch.
+            saveSession()
         case .error:
             appendError(event.message ?? "(unknown error)")
             isStreaming = false
             streamingMessageID = nil
+            saveSession()
         default:
             // hello / soulSwitched / screenFrame / recordDone don't
             // apply to Code mode — drop quietly.
@@ -512,6 +548,80 @@ struct CodePane: View {
         let home = NSHomeDirectory()
         if path.hasPrefix(home) { return "~" + path.dropFirst(home.count) }
         return path
+    }
+
+    // MARK: - Session persistence
+
+    /// Resume the most-recent session for the active repo, if any.
+    /// No-op when no repo is picked yet (sessions are repo-scoped).
+    private func loadSessionIfNeeded() {
+        guard !repoPath.isEmpty else { return }
+        guard let session = CodeSessionStore.mostRecent(repoPath: repoPath) else {
+            return
+        }
+        sessionID = session.id
+        sessionCreatedAt = session.createdAt
+        messages = session.messages.map { CodeMessage(
+            id: $0.id,
+            role: codeRoleFromPersisted($0.role),
+            text: $0.text,
+            toolName: $0.toolName,
+            toolError: $0.toolError
+        ) }
+    }
+
+    /// Persist current state. Cheap (atomic JSON write); called on
+    /// turn_done, view disappear, error events.
+    private func saveSession() {
+        guard !repoPath.isEmpty, !messages.isEmpty else { return }
+        let persisted = messages.map { msg in
+            PersistedCodeMessage(
+                id: msg.id,
+                role: persistedRole(msg.role),
+                text: msg.text,
+                toolName: msg.toolName,
+                toolError: msg.toolError
+            )
+        }
+        let session = CodeSession(
+            id: sessionID,
+            repoPath: repoPath,
+            messages: persisted,
+            createdAt: sessionCreatedAt,
+            updatedAt: Date()
+        )
+        CodeSessionStore.save(session)
+    }
+
+    private func persistedRole(_ r: CodeMessage.Role) -> PersistedCodeMessage.Role {
+        switch r {
+        case .user:       return .user
+        case .assistant:  return .assistant
+        case .toolCall:   return .toolCall
+        case .toolResult: return .toolResult
+        case .error:      return .error
+        }
+    }
+
+    private func codeRoleFromPersisted(_ r: PersistedCodeMessage.Role) -> CodeMessage.Role {
+        switch r {
+        case .user:       return .user
+        case .assistant:  return .assistant
+        case .toolCall:   return .toolCall
+        case .toolResult: return .toolResult
+        case .error:      return .error
+        }
+    }
+
+    /// Start a fresh session for the active repo. Old session stays
+    /// on disk (one file per session id) — multi-session-per-repo is
+    /// supported by the schema, this just doesn't surface a picker yet.
+    fileprivate func startNewSession() {
+        // Persist the current one before discarding the in-memory state.
+        saveSession()
+        messages.removeAll()
+        sessionID = UUID()
+        sessionCreatedAt = Date()
     }
 }
 
