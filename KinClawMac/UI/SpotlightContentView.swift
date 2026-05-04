@@ -511,19 +511,36 @@ struct SpotlightContentView: View {
                 // bubble append so they animate as one event.
                 .animation(.easeInOut(duration: 0.18), value: messages.count)
             }
-            // Anchor at messages.last?.id with .bottom in BOTH
-            // streaming + settled cases. With short content the
-            // scroll just stays where it is (no pushing things
-            // off-screen); with long content it tracks the tail.
-            // Skip animation while streaming — the bubble height
-            // changes rapidly during tool calls; animating a
-            // scrollTo to a moving target produced page-shake.
+            // Two scroll triggers, two distinct strategies:
+            //
+            // 1. messages.count changes (user sent + assistant stub
+            //    appended). Scroll target = the just-sent USER
+            //    message, anchored bottom. The empty assistant bubble
+            //    above it is too small + still being laid out for
+            //    scrollTo to land correctly — using messages.last?.id
+            //    here was producing a "blank screen, scroll up to find
+            //    your message" bug because ScrollView resolved the
+            //    target to a not-yet-rendered cell.
+            //
+            //    DispatchQueue.main.async defers the scroll to the
+            //    next runloop tick, after LazyVStack has materialized
+            //    the new cells.
+            //
+            // 2. scrollTrigger bumps (text deltas / tool calls land in
+            //    the streaming bubble). Scroll target = LAST message
+            //    (the assistant being filled in), anchored bottom.
+            //    The bubble is now real with measurable height; this
+            //    follows the streaming tail correctly.
             .onChange(of: messages.count) { _, _ in
-                if isStreaming {
-                    proxy.scrollTo(messages.last?.id, anchor: .bottom)
-                } else {
-                    withAnimation(.easeOut(duration: 0.15)) {
-                        proxy.scrollTo(messages.last?.id, anchor: .bottom)
+                let target = messages.last(where: { $0.isUser })?.id
+                    ?? messages.last?.id
+                DispatchQueue.main.async {
+                    if isStreaming {
+                        proxy.scrollTo(target, anchor: .bottom)
+                    } else {
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            proxy.scrollTo(target, anchor: .bottom)
+                        }
                     }
                 }
             }
