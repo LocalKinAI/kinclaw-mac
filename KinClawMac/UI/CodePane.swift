@@ -85,27 +85,7 @@ struct CodePane: View {
         VStack(spacing: 0) {
             repoBar
             Divider().opacity(0.15)
-
-            // Two-column body: file tree left, chat right. The
-            // sidebar is hidden when no repo is picked (empty state
-            // already covers that messaging in messagesArea).
-            HStack(spacing: 0) {
-                if !repoPath.isEmpty {
-                    FileTreeView(rootPath: repoPath) { picked in
-                        // Repo-relativize so the agent sees the same
-                        // path it'd write itself; absolute paths work
-                        // too but are noisier in the chat.
-                        let rel = picked.hasPrefix(repoPath + "/")
-                            ? String(picked.dropFirst(repoPath.count + 1))
-                            : picked
-                        appendToInput(rel)
-                    }
-                    .frame(width: 160)
-                    Divider().opacity(0.15)
-                }
-                messagesArea
-            }
-
+            messagesArea
             Divider().opacity(0.15)
             inputBar
         }
@@ -129,21 +109,6 @@ struct CodePane: View {
             sessionCreatedAt = Date()
             loadSessionIfNeeded()
         }
-    }
-
-    /// Insert a snippet into the input field at the cursor (or end).
-    /// Used by the file-tree click handler — clicking foo.swift in
-    /// the tree lets the user say "explain `foo.swift`" without
-    /// retyping the path.
-    private func appendToInput(_ snippet: String) {
-        if inputText.isEmpty {
-            inputText = snippet + " "
-        } else if inputText.hasSuffix(" ") {
-            inputText += snippet + " "
-        } else {
-            inputText += " " + snippet + " "
-        }
-        inputFocused = true
     }
 
     // MARK: - Repo bar

@@ -199,17 +199,15 @@ struct SpotlightContentView: View {
 
             Group {
                 switch mode {
-                case .chat:
+                case .chat, .cowork:
+                    // Chat and Cowork share the same chat surface —
+                    // the only difference is the agent pool (cloud vs
+                    // KinClaw souls), enforced by the mode-scoped
+                    // agentMenu in agentBar above. The screen / input
+                    // claws are tools the AGENT uses when invoked;
+                    // the user's actual desktop is right there, no
+                    // need to embed a preview.
                     chatBody
-                case .cowork:
-                    // Cowork wraps the same chat surface as Chat mode
-                    // and pre-pends the kinclaw screen feed. State
-                    // (messages, agent picker, sse) is shared via the
-                    // parent — switching modes mid-conversation keeps
-                    // history intact.
-                    CoworkPane(kinclawPort: 5001) {
-                        chatBody
-                    }
                 case .code:
                     CodePane()
                 }
