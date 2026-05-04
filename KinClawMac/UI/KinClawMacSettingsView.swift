@@ -57,8 +57,15 @@ struct KinClawMacSettingsView: View {
                        alignment: .topLeading)
         }
         .frame(width: 540, height: 460)
-        .background(.ultraThinMaterial)
         .preferredColorScheme(.dark)
+        // Inject NSVisualEffectView .hudWindow .behindWindow into
+        // the host NSWindow so Settings looks identical to the main
+        // SpotlightWindow — true desktop-show-through glass, not
+        // the SwiftUI-only .ultraThinMaterial layer that blurs only
+        // against the window's own background.
+        .background(WindowAccessor { window in
+            applyGlassChrome(to: window)
+        })
     }
 
     // Pill-style tab strip that mirrors the spotlight panel's
