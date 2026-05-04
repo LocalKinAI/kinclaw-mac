@@ -187,7 +187,7 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         if lang.hasPrefix("zh") {
             return "zf_xiaoxiao"   // Chinese female default
         }
-        return "af_heart"          // English female default
+        return "af_bella"          // English female default
     }
 }
 

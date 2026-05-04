@@ -439,10 +439,11 @@ private struct VoiceSettingsTab: View {
             SettingsCard("Text-to-Speech (replies spoken)") {
                 SettingsRow(label: "Voice") {
                     Picker("", selection: $speaker) {
-                        Text("Auto (zh: xiaoxiao · en: af_heart)").tag("auto")
+                        Text("Auto (zh: xiaoxiao · en: af_bella)").tag("auto")
                         Text("zf_xiaoxiao (中文女声)").tag("zf_xiaoxiao")
                         Text("zf_xiaobei (中文女声)").tag("zf_xiaobei")
                         Text("zm_yunjian (中文男声)").tag("zm_yunjian")
+                        Text("af_bella (English F · default)").tag("af_bella")
                         Text("af_heart (English F)").tag("af_heart")
                         Text("am_michael (English M)").tag("am_michael")
                     }
