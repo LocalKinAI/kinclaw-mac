@@ -177,7 +177,42 @@ start-helpers: ## Start kinclaw + kincode as detached daemons (PPID=1, survive s
 	@# weather, web, music_*, imsg_send...) without any copy step.
 	@# Edits to the dev repo's SKILL.md become live on next helper
 	@# restart — no install.sh required.
-	@KINCLAW_DEV_SKILLS="$(KINCLAW_REPO)/skills"; \
+	@# Pre-query corelocationcli so the model's system prompt has
+	@# {{location}} filled with real city + lat/lon. Without this,
+	@# pilot sees `位置: ` (empty) and replies "I don't have GPS,
+	@# tell me your city" — even though the location skill IS
+	@# loaded. Empirically reproducible: kimi-k2.5:cloud reads the
+	@# empty position field as ground truth ("model has no
+	@# location") and refuses to call the skill.
+	@#
+	@# Format: KINCLAW_LOCATION="lat,lon[,city[,country]]". We pull
+	@# all four via corelocationcli's separate -format calls (one
+	@# round-trip each, ~80ms total). Silently skip if
+	@# corelocationcli isn't installed — pilot still works for
+	@# everything except location-aware queries.
+	@# corelocationcli's -format flag is broken in current versions
+	@# (always returns "lat lon" regardless of format string). --json
+	@# is reliable — full structured data including locality, country,
+	@# postalCode, etc. Pipe through python3 (always present on
+	@# macOS) to extract the lat,lon,city,country tuple kinclaw
+	@# expects in $$KINCLAW_LOCATION.
+	@KINCLAW_LOCATION_VAL=""; \
+	if command -v corelocationcli >/dev/null 2>&1; then \
+	  printf "  → fetching GPS for system prompt context..."; \
+	  KINCLAW_LOCATION_VAL=$$(corelocationcli -once --json 2>/dev/null | \
+	    python3 -c 'import json,sys; \
+d=json.load(sys.stdin); \
+parts=[d.get("latitude",""), d.get("longitude",""), d.get("locality",""), d.get("country","")]; \
+print(",".join(parts).rstrip(","))' 2>/dev/null); \
+	  if [[ -n "$$KINCLAW_LOCATION_VAL" ]]; then \
+	    echo " ✓ ($$KINCLAW_LOCATION_VAL)"; \
+	  else \
+	    echo " ✗ (corelocationcli failed — Location Services denied?)"; \
+	  fi; \
+	else \
+	  echo "  → corelocationcli not installed (skip GPS context; \`brew install corelocationcli\` to enable)"; \
+	fi; \
+	KINCLAW_DEV_SKILLS="$(KINCLAW_REPO)/skills"; \
 	KINCODE_DEV_SKILLS="$(KINCODE_REPO)/skills"; \
 	if pgrep -x kinclaw >/dev/null 2>&1; then \
 	  echo "  → kinclaw already running on :5001 (skipping)"; \
@@ -185,10 +220,12 @@ start-helpers: ## Start kinclaw + kincode as detached daemons (PPID=1, survive s
 	  echo "  → starting kinclaw on :5001 (log: $(LOG_DIR)/kinclaw.log)"; \
 	  if [[ -f "$(PILOT_SOUL)" ]]; then \
 	    ( KINCLAW_SKILL_DIRS="$$KINCLAW_DEV_SKILLS" \
+	      KINCLAW_LOCATION="$$KINCLAW_LOCATION_VAL" \
 	      "$(LOCALKIN_BIN)/kinclaw" serve -port 5001 -no-record \
 	      -soul "$(PILOT_SOUL)" >$(LOG_DIR)/kinclaw.log 2>&1 & ); \
 	  else \
 	    ( KINCLAW_SKILL_DIRS="$$KINCLAW_DEV_SKILLS" \
+	      KINCLAW_LOCATION="$$KINCLAW_LOCATION_VAL" \
 	      "$(LOCALKIN_BIN)/kinclaw" serve -port 5001 -no-record \
 	      >$(LOG_DIR)/kinclaw.log 2>&1 & ); \
 	  fi; \
