@@ -35,6 +35,15 @@ KINCODE_REPO       := $(REPO_ROOT)/../kincode
 # after the in-bundle Resources/ which we don't currently use).
 LOCALKIN_BIN       := $(HOME)/.localkin/bin
 
+# Where the helpers' detached stdout/stderr land. Tail these when
+# something looks off (`tail -f $(LOG_DIR)/kinclaw.log`).
+LOG_DIR            := /tmp
+
+# Default soul for kinclaw. supervisor would auto-pick the same one
+# but starting helpers from the Makefile means we need to do it
+# explicitly.
+PILOT_SOUL         := $(HOME)/.localkin/souls/pilot.soul.md
+
 # Process names we kill on `make kill` / before re-signing.
 PROC_PATTERNS      := KinClawMac kinclaw kincode
 
@@ -105,8 +114,59 @@ sign-app: ## Sign the built .app with stable identifier (assumes build ran)
 sign: kill build sign-helpers sign-app ## Full sign loop: kill + build + sign helpers + sign app
 	@printf "\n✓ Signed everything. Launch with: \033[33mmake run\033[0m\n"
 
+.PHONY: start-helpers
+start-helpers: ## Start kinclaw + kincode as detached daemons (PPID=1, survive shell exit)
+	@# Start helpers BEFORE KinClawMac so the supervisors find them
+	@# already on :5001 / :5002 and adopt them cleanly. No spawn race.
+	@#
+	@# Detachment: `( cmd >log 2>&1 & )` — subshell-and-fork puts the
+	@# helper directly under launchd (PPID=1), bypassing kinclaw's
+	@# orphan-watch (which only fires when PPID changes from a non-1
+	@# starting value). Without this, the helper would exit ~2s after
+	@# `make` returns, when the make shell terminates.
+	@if pgrep -x kinclaw >/dev/null 2>&1; then \
+	  echo "  → kinclaw already running on :5001 (skipping)"; \
+	else \
+	  echo "  → starting kinclaw on :5001 (log: $(LOG_DIR)/kinclaw.log)"; \
+	  if [[ -f "$(PILOT_SOUL)" ]]; then \
+	    ( "$(LOCALKIN_BIN)/kinclaw" serve -port 5001 -no-record \
+	      -soul "$(PILOT_SOUL)" >$(LOG_DIR)/kinclaw.log 2>&1 & ); \
+	  else \
+	    ( "$(LOCALKIN_BIN)/kinclaw" serve -port 5001 -no-record \
+	      >$(LOG_DIR)/kinclaw.log 2>&1 & ); \
+	  fi; \
+	fi
+	@if pgrep -x kincode >/dev/null 2>&1; then \
+	  echo "  → kincode already running on :5002 (skipping)"; \
+	else \
+	  echo "  → starting kincode on :5002 (log: $(LOG_DIR)/kincode.log)"; \
+	  ( "$(LOCALKIN_BIN)/kincode" -serve -port 5002 -yolo \
+	    >$(LOG_DIR)/kincode.log 2>&1 & ); \
+	fi
+	@# Wait for both ports to bind before returning. Without this,
+	@# the immediately-following `open KinClawMac.app` could race
+	@# the helpers' bind() and the supervisors fail their initial
+	@# ping → spawn duplicate helpers → port-in-use cascade.
+	@printf "  → waiting for :5001 + :5002 to bind"
+	@deadline=$$(($$(date +%s) + 15)); \
+	while [[ $$(date +%s) -lt $$deadline ]]; do \
+	  k=$$(lsof -ti :5001 -sTCP:LISTEN 2>/dev/null | head -1); \
+	  c=$$(lsof -ti :5002 -sTCP:LISTEN 2>/dev/null | head -1); \
+	  if [[ -n "$$k" && -n "$$c" ]]; then \
+	    printf " ✓ (kinclaw=%s kincode=%s)\n" "$$k" "$$c"; \
+	    exit 0; \
+	  fi; \
+	  printf "."; \
+	  sleep 0.5; \
+	done; \
+	printf "\n  ⚠ helpers didn't bind within 15s — check $(LOG_DIR)/kinclaw.log + $(LOG_DIR)/kincode.log\n"
+
 .PHONY: run
-run: sign ## kill + sign + launch the app
+run: sign start-helpers ## kill + sign + start helpers detached + launch app
+	@# Helper-first ordering: by the time KinClawMac launches, kinclaw
+	@# and kincode are already serving. Each supervisor's adoption
+	@# path picks them up immediately (state = .adoptedExternal). No
+	@# spawn race, no orphan-watch confusion.
 	@APP="$$(cat .last-app-path 2>/dev/null)"; \
 	echo "==> Launching $$APP"; \
 	open "$$APP"
