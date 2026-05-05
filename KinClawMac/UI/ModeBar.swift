@@ -30,7 +30,6 @@ struct ModeBar: View {
             Spacer()
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 4)
         .opacity(emphasis)
     }
 

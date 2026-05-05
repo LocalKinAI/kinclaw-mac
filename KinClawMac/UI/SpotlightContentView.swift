@@ -182,10 +182,12 @@ struct SpotlightContentView: View {
     /// of work they're doing; only after that does "with whom" matter.
     private var mainStack: some View {
         VStack(spacing: 0) {
-            // 28pt reservation for the titlebar row. The ModeBar-
-            // overlay header floats here visually, but in layout we
-            // need a placeholder so content starts BELOW it.
-            Color.clear.frame(height: 28)
+            // 22pt reservation for the titlebar row. macOS standard
+            // traffic-light height is ~22pt; the previous 28pt left
+            // ~6pt of dead space below the ModeBar pills before the
+            // divider, which read as a noticeable gap on the glass
+            // background. Match the actual visible chrome height.
+            Color.clear.frame(height: 22)
 
             Divider().opacity(0.15)
 
@@ -229,6 +231,18 @@ struct SpotlightContentView: View {
             persistAgentForCurrentMode(slug: slug)
         }
         .onChange(of: mode) { _, newMode in
+            // Save the outgoing session and clear the surface
+            // SYNCHRONOUSLY before the agent-swap chain fires.
+            // Without this clear-first step there's a 1-frame
+            // flash where the new mode's view (chatBody) still
+            // shows the previous tab's messages because the
+            // selectedAgent change → handleAgentChange path
+            // runs on the *next* layout cycle. Tab switching
+            // should feel instant.
+            saveCurrentSession()
+            messages = []
+            currentSessionID = UUID()
+            sessionTitle = "New chat"
             applyAgentForMode(newMode)
         }
         .onDisappear {
@@ -331,8 +345,8 @@ struct SpotlightContentView: View {
         }
         .padding(.leading, 72)   // clear the traffic-light buttons
         .padding(.trailing, 14)
-        .padding(.vertical, 3)
-        .frame(height: 28)
+        .padding(.vertical, 1)
+        .frame(height: 22)
         .frame(maxWidth: .infinity)
         .ignoresSafeArea(.container, edges: .top)
     }
