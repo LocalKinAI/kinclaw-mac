@@ -466,68 +466,45 @@ struct CodePane: View {
                 Spacer(minLength: 24)
             }
         case .toolCall:
-            // Special case: todo_write renders as a checklist instead
-            // of the standard tool-call pill. The todos array lives in
-            // toolParams["todos"] as JSON (kincode JSON-encodes complex
-            // args at SSE emission). We parse + render inline so the
-            // user sees the agent's plan as a real checklist, not as
-            // "🔨 todo_write [{...}]".
+            // todo_write is its own surface — renders as the inline
+            // checklist (full-width, no fold). The todos array lives
+            // in toolParams["todos"] as JSON.
             if msg.toolName == "todo_write",
                let todos = parseTodos(from: msg.toolParams) {
                 TodoChecklistView(items: todos)
                     .padding(.leading, 28)
             } else {
-                // Standard tool-call pill — sits visually under the
-                // assistant bubble it belongs to (avatar gutter padding
-                // 28pt matches the avatar's 22pt + spacing 6).
-                HStack(spacing: 6) {
-                    Image(systemName: "hammer")
-                        .font(.system(size: 10))
-                        .foregroundColor(.blue.opacity(0.9))
-                    Text(msg.toolName ?? "tool")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(.blue.opacity(0.9))
-                    Text(msg.text)
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(Color.blue.opacity(0.08))
-                )
-                .padding(.leading, 28)
+                // Everything else: collapsible widget mirroring Cowork
+                // mode's ToolCallView. Header shows tool name + status
+                // dot + 1-line preview; click to expand for params +
+                // full output (DiffView for file_edit, markdown for
+                // structured output, mono for raw).
+                CodeToolInvocationView(msg: msg)
+                    .padding(.leading, 28)
             }
         case .toolResult:
-            // todo_write's tool_result is just a text re-render of the
-            // checklist that's already shown by the tool_call's
-            // TodoChecklistView. Skip to avoid duplication.
-            if msg.toolName == "todo_write" {
-                EmptyView()
-            } else if msg.toolName == "file_edit" && msg.toolError == nil {
-                DiffView(raw: msg.text)
-                    .padding(.leading, 28)
-            } else {
-                HStack(alignment: .top, spacing: 6) {
-                    Image(systemName: msg.toolError == nil
-                                      ? "checkmark"
-                                      : "exclamationmark.triangle")
-                        .font(.system(size: 10))
-                        .foregroundColor(msg.toolError == nil
-                                         ? .green.opacity(0.85)
-                                         : .orange.opacity(0.9))
-                    Text(truncate(msg.text, max: 220))
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundColor(.secondary)
-                        .lineLimit(4)
-                        .textSelection(.enabled)
-                }
-                .padding(.leading, 28)
+            // Legacy: pre-fold sessions persisted tool_result as a
+            // separate row. New sessions fold into the toolCall
+            // row's toolOutput, so this branch only fires when
+            // loading old sessions OR when handle() couldn't find a
+            // matching toolCall (rare edge — kincode always pairs).
+            // Render as a minimal pill so old conversations don't
+            // lose their result text.
+            HStack(alignment: .top, spacing: 6) {
+                Image(systemName: msg.toolError == nil
+                                  ? "checkmark"
+                                  : "exclamationmark.triangle")
+                    .font(.system(size: 10))
+                    .foregroundColor(msg.toolError == nil
+                                     ? .green.opacity(0.85)
+                                     : .orange.opacity(0.9))
+                Text(truncate(msg.text, max: 220))
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .lineLimit(4)
+                    .textSelection(.enabled)
             }
+            .padding(.leading, 28)
         case .error:
             HStack(alignment: .top, spacing: 6) {
                 Image(systemName: "exclamationmark.octagon")
@@ -929,15 +906,53 @@ struct CodePane: View {
                 role: .toolCall,
                 text: summary,
                 toolName: event.name,
-                toolParams: event.params
+                toolParams: event.params,
+                toolID: event.id
             ))
         case .toolResult:
-            messages.append(CodeMessage(
-                role: .toolResult,
-                text: event.output ?? "",
-                toolName: event.name,
-                toolError: event.message
-            ))
+            // Fold tool_result into the matching tool_call row's
+            // toolOutput / toolError instead of appending a separate
+            // row. The user sees one collapsible widget per tool
+            // invocation that flips from "running…" → "done" / "error"
+            // when the result arrives. Matching strategy:
+            //   1. By toolID when both events carry one (the normal
+            //      case; kincode SSE always emits id on both).
+            //   2. Fallback: most-recent toolCall row with the same
+            //      name and no output yet — covers legacy sessions
+            //      and any future server that omits ids on results.
+            // If no match found, append a stranded toolResult row so
+            // the output isn't lost (rare; means upstream emitted a
+            // result without a preceding call).
+            if let foldIdx = findMatchingToolCallIndex(
+                id: event.id, name: event.name)
+            {
+                messages[foldIdx].toolOutput = event.output ?? ""
+                if event.message != nil {
+                    // The CodeMessage init's toolError is `let`. We
+                    // can't mutate it; rebuild the row preserving
+                    // every other field. Cleaner than making it `var`
+                    // since this only fires on the (rare) error path.
+                    let prev = messages[foldIdx]
+                    messages[foldIdx] = CodeMessage(
+                        id: prev.id,
+                        role: prev.role,
+                        text: prev.text,
+                        toolName: prev.toolName,
+                        toolError: event.message,
+                        toolParams: prev.toolParams,
+                        toolID: prev.toolID,
+                        toolOutput: prev.toolOutput,
+                        attachmentCount: prev.attachmentCount
+                    )
+                }
+            } else {
+                messages.append(CodeMessage(
+                    role: .toolResult,
+                    text: event.output ?? "",
+                    toolName: event.name,
+                    toolError: event.message
+                ))
+            }
         case .turnDone:
             isStreaming = false
             streamingMessageID = nil
@@ -973,6 +988,38 @@ struct CodePane: View {
 
     private func appendError(_ msg: String) {
         messages.append(CodeMessage(role: .error, text: msg))
+    }
+
+    /// Find the toolCall row this incoming tool_result belongs to.
+    /// Search bottom-up since the matching call is always the most
+    /// recent one. Strategy:
+    ///   1. If both call and result carry an id, match exactly.
+    ///   2. Otherwise, match by name AND require toolOutput == nil
+    ///      (i.e. the call hasn't already received a result). Two
+    ///      back-to-back calls of the same tool resolve in order.
+    ///
+    /// Returns nil when no match found — caller appends a stranded
+    /// toolResult row so the output isn't lost.
+    private func findMatchingToolCallIndex(
+        id resultID: String?, name resultName: String?
+    ) -> Int? {
+        for idx in stride(from: messages.count - 1, through: 0, by: -1) {
+            let m = messages[idx]
+            guard m.role == .toolCall else { continue }
+            // ID match wins when both sides have one.
+            if let rid = resultID, let cid = m.toolID, rid == cid {
+                return idx
+            }
+            // Name + no-output-yet fallback. Skips rows that already
+            // got a result (so we don't double-fold).
+            if resultID == nil || m.toolID == nil,
+               m.toolName == resultName,
+               m.toolOutput == nil
+            {
+                return idx
+            }
+        }
+        return nil
     }
 
     /// Best-effort fallback display string when an event has params
@@ -1274,6 +1321,20 @@ struct CodeMessage: Identifiable {
     /// could expose the edits array, etc. Optional + only populated
     /// for `.toolCall` rows; other rows leave it nil.
     let toolParams: [String: String]?
+    /// Server-issued tool_call id. Used to match incoming tool_result
+    /// events back to the originating tool_call row so we can fold
+    /// the result into the same expandable widget instead of
+    /// appending a separate tool_result row. Nil for non-tool rows
+    /// and for legacy sessions loaded from disk before this field
+    /// existed (those fall back to last-toolCall-without-output
+    /// matching by name).
+    let toolID: String?
+    /// Tool output text — set by the matching tool_result event.
+    /// `var` because we mutate in-place on the existing toolCall row
+    /// when the result arrives. Stays nil while the tool is running;
+    /// CodeToolInvocationView renders a yellow "running…" status dot
+    /// when nil and a green "done" / red "error" once set.
+    var toolOutput: String?
     /// Number of image attachments on a user message. Rendered as a
     /// small "📎 N images" footer on the user bubble. Settable via
     /// var so send() can stamp it after constructing the bubble.
@@ -1285,6 +1346,8 @@ struct CodeMessage: Identifiable {
          toolName: String? = nil,
          toolError: String? = nil,
          toolParams: [String: String]? = nil,
+         toolID: String? = nil,
+         toolOutput: String? = nil,
          attachmentCount: Int = 0) {
         self.id = id
         self.role = role
@@ -1292,6 +1355,8 @@ struct CodeMessage: Identifiable {
         self.toolName = toolName
         self.toolError = toolError
         self.toolParams = toolParams
+        self.toolID = toolID
+        self.toolOutput = toolOutput
         self.attachmentCount = attachmentCount
     }
 }
