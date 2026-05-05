@@ -139,7 +139,13 @@ final class KinClawSupervisor: ObservableObject {
     private let client: KinClawAPIClient
     private let port: Int
     private var process: DisclaimedProcess?
-    private var hasAttemptedRestart = false
+    /// Crash count for backoff calculation. Reset to 0 once the
+    /// supervisor confirms the spawn is healthy (state moves to
+    /// .running with /api/souls answering). A short transient
+    /// outage racks up 1-2; a chronic problem (missing AX,
+    /// permanent port conflict) keeps growing until it caps at 30s
+    /// retry intervals.
+    private var consecutiveCrashes: Int = 0
 
     init(port: Int = 5001) {
         self.port = port
@@ -161,10 +167,24 @@ final class KinClawSupervisor: ObservableObject {
         //    port and answers /api/souls, that's a kinclaw and we
         //    use it. Saves the user from "port in use" headaches
         //    when they ran `kinclaw serve` themselves.
+        //
+        // Race hazard: the existing kinclaw might be a dying orphan
+        // from a previous KinClawMac (e.g. left by sign-app.sh's
+        // smoke test). It answers /api/souls now but exits ~1s later
+        // when its orphan-watch ticks. To avoid getting stuck in
+        // .adoptedExternal pointing at a corpse, ping again after a
+        // short delay; only adopt if it's still alive on the second
+        // check. If the second ping fails, fall through to spawning
+        // our own.
         if await client.ping() {
-            state = .adoptedExternal
-            print("[KinClawSupervisor] adopted external kinclaw on :\(port)")
-            return
+            try? await Task.sleep(nanoseconds: 1_500_000_000) // 1.5s
+            if await client.ping() {
+                state = .adoptedExternal
+                print("[KinClawSupervisor] adopted external kinclaw on :\(port)")
+                startAdoptionWatchdog()
+                return
+            }
+            print("[KinClawSupervisor] external kinclaw vanished after first ping (probably a dying orphan); spawning our own")
         }
 
         // 2. Locate a kinclaw install (binary + matching souls dir).
@@ -243,10 +263,31 @@ final class KinClawSupervisor: ObservableObject {
         let ready = await waitForReady(timeout: 15)
         if ready, let pid = process?.processIdentifier {
             state = .running(pid: pid)
+            // Spawn is healthy. Reset crash counter so the next
+            // unrelated crash (hours later) starts at 1s backoff,
+            // not the cap. Without this, a long-running session that
+            // had transient failures early would keep hitting the
+            // 30s ceiling on later (unrelated) crashes.
+            consecutiveCrashes = 0
         } else {
-            // Started but never came up — kill it and surface error.
+            // Started but never came up. Kill our process (which
+            // bypasses handleTermination's retry path because stop()
+            // nils out `process`), then schedule our own backoff
+            // retry — keeps the failure case on the same recovery
+            // ladder as a runtime crash.
             stop()
-            state = .crashed(message: "kinclaw failed to bind :\(port) within 15s")
+            consecutiveCrashes += 1
+            let delays: [UInt64] = [1, 2, 4, 8, 16, 30]
+            let idx = min(consecutiveCrashes - 1, delays.count - 1)
+            let delaySec = delays[idx]
+            state = .crashed(message: "kinclaw failed to bind :\(port) within 15s; retry in \(delaySec)s")
+            print("[KinClawSupervisor] bind timeout, retrying in \(delaySec)s (attempt #\(consecutiveCrashes))")
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: delaySec * 1_000_000_000)
+                if case .stopped = state { return }
+                if case .running = state { return }
+                await self.start()
+            }
         }
     }
 
@@ -273,7 +314,43 @@ final class KinClawSupervisor: ObservableObject {
 
     // MARK: - Internals
 
+    /// Watchdog for .adoptedExternal state. Pings /api/souls every
+    /// 5s; if it stops answering, transition state out of .adopted
+    /// and call start() to spawn our own kinclaw. Without this, an
+    /// adopted external that quietly dies (e.g. user kills their
+    /// `kinclaw serve` from another terminal) leaves the supervisor
+    /// stuck pointing at a dead port — the symptom Jacky hit after
+    /// every `make run`.
+    private func startAdoptionWatchdog() {
+        Task { @MainActor in
+            while case .adoptedExternal = state {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                if case .adoptedExternal = state {
+                    if !(await client.ping()) {
+                        print("[KinClawSupervisor] adopted external died; respawning our own")
+                        state = .stopped  // clear adoption so start() proceeds to spawn
+                        await start()
+                        return  // start() either succeeded (now .running) or failed (now .crashed); either way watchdog's job is done
+                    }
+                } else {
+                    // State changed out from under us (e.g. user
+                    // called stop()), exit watchdog.
+                    return
+                }
+            }
+        }
+    }
+
     /// Called when the spawned kinclaw exits (clean or otherwise).
+    ///
+    /// Strategy: never give up permanently — instead, exponentially
+    /// back off restart attempts. The previous "two crashes = .crashed
+    /// forever" rule left users in stuck states where the only way
+    /// out was relaunching the whole app. Now the supervisor keeps
+    /// trying every 1s → 2s → 4s → 8s → 16s → 30s (capped), so
+    /// transient failures (port briefly busy, soul file race, AX
+    /// dialog blocking startup) self-heal once the underlying issue
+    /// clears.
     private func handleTermination(_ proc: DisclaimedProcess) {
         let exitCode = proc.terminationStatus
         let reason = proc.terminationReason
@@ -289,19 +366,25 @@ final class KinClawSupervisor: ObservableObject {
         }
 
         process = nil
+        consecutiveCrashes += 1
 
-        if hasAttemptedRestart {
-            state = .crashed(message: "kinclaw crashed twice in a row (exit \(exitCode))")
-            return
-        }
-        hasAttemptedRestart = true
-        print("[KinClawSupervisor] attempting one restart…")
+        // Backoff schedule (seconds): 1, 2, 4, 8, 16, 30 (cap).
+        // Past the cap we keep trying every 30s indefinitely so a
+        // recovered upstream (e.g. user finally clicked Allow on the
+        // AX prompt, or freed up :5001) gets picked up automatically.
+        let delays: [UInt64] = [1, 2, 4, 8, 16, 30]
+        let idx = min(consecutiveCrashes - 1, delays.count - 1)
+        let delaySec = delays[idx]
+
+        state = .crashed(message: "kinclaw exited (code \(exitCode)); retry in \(delaySec)s (attempt \(consecutiveCrashes))")
+        print("[KinClawSupervisor] retrying in \(delaySec)s (attempt #\(consecutiveCrashes))")
+
         Task { @MainActor in
-            // Reset the flag after a successful 30s run.
-            try? await Task.sleep(nanoseconds: 30_000_000_000)
-            self.hasAttemptedRestart = false
-        }
-        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: delaySec * 1_000_000_000)
+            // Bail if user manually stopped, or someone else already
+            // got us running (e.g. external kinclaw bound :5001).
+            if case .stopped = state { return }
+            if case .running = state { return }
             await self.start()
         }
     }

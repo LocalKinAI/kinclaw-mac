@@ -80,7 +80,11 @@ final class KinCodeSupervisor: ObservableObject {
 
     private let port: Int
     private var process: DisclaimedProcess?
-    private var hasAttemptedRestart = false
+    /// Crash count for backoff calculation. See
+    /// KinClawSupervisor.consecutiveCrashes — same self-healing
+    /// schedule applies here so kincode :5002 also recovers from
+    /// transient failures without needing a full app relaunch.
+    private var consecutiveCrashes: Int = 0
 
     init(port: Int = 5002) {
         self.port = port
@@ -131,10 +135,21 @@ final class KinCodeSupervisor: ObservableObject {
         // 1. Adoption — if someone is already serving on :5002 and
         //    answers /api/health, that's a kincode (or close enough)
         //    and we use it.
+        //
+        // Same race protection as KinClawSupervisor: a previous
+        // KinClawMac may have left a dying kincode orphan on :5002
+        // (sign-app.sh smoke test, or app crashed mid-session).
+        // Re-ping after 1.5s to confirm it's actually alive before
+        // committing to .adoptedExternal.
         if await ping() {
-            state = .adoptedExternal
-            print("[KinCodeSupervisor] adopted external kincode on :\(port)")
-            return
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            if await ping() {
+                state = .adoptedExternal
+                print("[KinCodeSupervisor] adopted external kincode on :\(port)")
+                startAdoptionWatchdog()
+                return
+            }
+            print("[KinCodeSupervisor] external kincode vanished after first ping (probably a dying orphan); spawning our own")
         }
 
         // 2. Locate binary.
@@ -211,9 +226,23 @@ final class KinCodeSupervisor: ObservableObject {
         let ready = await waitForReady(timeout: 10)
         if ready, let pid = process?.processIdentifier {
             state = .running(pid: pid)
+            // Spawn healthy — reset backoff counter so future
+            // unrelated crashes start at 1s, not the 30s ceiling.
+            consecutiveCrashes = 0
         } else {
             stop()
-            state = .crashed(message: "kincode failed to bind :\(port) within 10s")
+            consecutiveCrashes += 1
+            let delays: [UInt64] = [1, 2, 4, 8, 16, 30]
+            let idx = min(consecutiveCrashes - 1, delays.count - 1)
+            let delaySec = delays[idx]
+            state = .crashed(message: "kincode failed to bind :\(port) within 10s; retry in \(delaySec)s")
+            print("[KinCodeSupervisor] bind timeout, retrying in \(delaySec)s (attempt #\(consecutiveCrashes))")
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: delaySec * 1_000_000_000)
+                if case .stopped = state { return }
+                if case .running = state { return }
+                await self.start()
+            }
         }
     }
 
@@ -234,6 +263,32 @@ final class KinCodeSupervisor: ObservableObject {
 
     // MARK: - Internals
 
+    /// Watchdog for .adoptedExternal — pings /api/health every 5s
+    /// and respawns our own kincode if the external dies. Mirrors
+    /// KinClawSupervisor.startAdoptionWatchdog. Without this, an
+    /// adopted external that exits leaves Code mode silently broken.
+    private func startAdoptionWatchdog() {
+        Task { @MainActor in
+            while case .adoptedExternal = state {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                if case .adoptedExternal = state {
+                    if !(await ping()) {
+                        print("[KinCodeSupervisor] adopted external died; respawning our own")
+                        state = .stopped
+                        await start()
+                        return
+                    }
+                } else {
+                    return
+                }
+            }
+        }
+    }
+
+    /// Self-healing restart schedule mirroring KinClawSupervisor:
+    /// 1s → 2s → 4s → 8s → 16s → 30s (cap), then keeps trying every
+    /// 30s indefinitely. Once spawn succeeds (state moves to
+    /// .running), consecutiveCrashes is reset to 0.
     private func handleTermination(_ proc: DisclaimedProcess) {
         let exitCode = proc.terminationStatus
         let reason = proc.terminationReason
@@ -242,18 +297,19 @@ final class KinCodeSupervisor: ObservableObject {
         // We initiated shutdown if process is already nil.
         guard process != nil else { return }
         process = nil
+        consecutiveCrashes += 1
 
-        if hasAttemptedRestart {
-            state = .crashed(message: "kincode crashed twice in a row (exit \(exitCode))")
-            return
-        }
-        hasAttemptedRestart = true
-        print("[KinCodeSupervisor] attempting one restart…")
+        let delays: [UInt64] = [1, 2, 4, 8, 16, 30]
+        let idx = min(consecutiveCrashes - 1, delays.count - 1)
+        let delaySec = delays[idx]
+
+        state = .crashed(message: "kincode exited (code \(exitCode)); retry in \(delaySec)s (attempt \(consecutiveCrashes))")
+        print("[KinCodeSupervisor] retrying in \(delaySec)s (attempt #\(consecutiveCrashes))")
+
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 30_000_000_000)
-            self.hasAttemptedRestart = false
-        }
-        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: delaySec * 1_000_000_000)
+            if case .stopped = state { return }
+            if case .running = state { return }
             await self.start()
         }
     }
