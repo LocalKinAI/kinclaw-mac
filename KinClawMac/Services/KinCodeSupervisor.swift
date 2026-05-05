@@ -92,6 +92,22 @@ final class KinCodeSupervisor: ObservableObject {
         return true
     }
 
+    /// Read the user's last-picked Code-mode repo from UserDefaults
+    /// (CodePane writes this via @AppStorage on every applyRepo).
+    /// Used as the spawn cwd so kincode is in the right directory
+    /// from the very first call — no race with the async
+    /// POST /api/repo, no chance of an early turn seeing "/".
+    /// Returns nil if no repo has been picked yet, or if the saved
+    /// path no longer exists / isn't a directory.
+    private static func savedRepoPath() -> String? {
+        guard let path = UserDefaults.standard.string(forKey: "kinclaw.kincode.repo"),
+              !path.isEmpty else { return nil }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir),
+              isDir.boolValue else { return nil }
+        return path
+    }
+
     // MARK: - Public API
 
     /// Start (or adopt) a local kincode -serve. No-op if disabled
@@ -142,12 +158,24 @@ final class KinCodeSupervisor: ObservableObject {
             print("[KinCodeSupervisor] no soul found — kincode will use built-in default prompt")
         }
 
+        // Spawn cwd: prefer the user's last-picked Code-mode repo
+        // so kincode boots already in the right directory. Without
+        // this, kincode inherits whatever cwd the .app launched
+        // from (typically "/" via Launch Services), and an early
+        // user turn can race ahead of the async POST /api/repo —
+        // agent sees `/` for its first `pwd` / `bash`, reports it
+        // back, and the wrong answer sticks in conversation memory.
+        let spawnCwd = Self.savedRepoPath()
+        if let cwd = spawnCwd {
+            print("[KinCodeSupervisor] cwd: \(cwd) (from kinclaw.kincode.repo)")
+        }
+
         do {
             let p = try DisclaimedProcess.spawn(
                 executablePath: binary,
                 arguments: args,
                 environment: ProcessInfo.processInfo.environment,
-                currentDirectory: nil
+                currentDirectory: spawnCwd
             )
             p.terminationHandler = { [weak self] proc in
                 Task { @MainActor in
