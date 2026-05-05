@@ -172,19 +172,53 @@ final class KinClawAPIClient {
 
     // MARK: - Chat
 
-    /// `POST /api/chat {message}` — kick a turn. Reply streams over
-    /// the events channel; this call returns once the server has
-    /// accepted the message (typically immediately). Server tracks
-    /// conversation history per-soul so we send only the new user
-    /// message.
-    func sendChat(_ message: String) async throws {
+    /// `POST /api/chat {message, images?}` — kick a turn. Reply
+    /// streams over the events channel; this call returns once the
+    /// server has accepted the message (typically immediately).
+    /// Server tracks conversation history per-soul so we send only
+    /// the new user message.
+    ///
+    /// `images` is non-nil when the user attached pictures. kincode
+    /// translates these into Anthropic vision blocks / OpenAI
+    /// image_url parts at the provider level — non-vision models
+    /// will reject the turn at API time.
+    func sendChat(_ message: String,
+                  images: [ImageAttachment] = []) async throws {
         let url = baseURL.appendingPathComponent("api/chat")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(["message": message])
+        struct Body: Encodable {
+            let message: String
+            let images: [ImageAttachment]?
+        }
+        let body = Body(message: message,
+                        images: images.isEmpty ? nil : images)
+        request.httpBody = try JSONEncoder().encode(body)
         let (data, response) = try await sessionDataFor(request: request)
         try checkOK(response as? HTTPURLResponse, body: data)
+    }
+
+    /// One image attached to a chat turn. mediaType ∈ {image/png,
+    /// image/jpeg, image/gif, image/webp}. data is the raw base64
+    /// (no data: URL prefix — kincode provider layer adds prefix
+    /// when calling OpenAI; Anthropic uses raw base64 directly).
+    struct ImageAttachment: Encodable, Identifiable, Hashable {
+        let id: UUID
+        let mediaType: String
+        let data: String
+
+        init(mediaType: String, data: String, id: UUID = UUID()) {
+            self.id = id
+            self.mediaType = mediaType
+            self.data = data
+        }
+
+        // ID is a client-side handle for SwiftUI ForEach; not sent.
+        enum CodingKeys: String, CodingKey {
+            case mediaType = "media_type"
+            case data
+        }
     }
 
     /// `DELETE /api/chat` — cancel the in-flight turn via the

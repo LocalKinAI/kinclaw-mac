@@ -43,6 +43,12 @@ struct CodePane: View {
     @State private var streamTask: Task<Void, Never>?
     @State private var connectError: String?
 
+    /// Pending image attachments — populated by the paperclip picker
+    /// and the drag-and-drop receiver. Cleared on send. Each entry
+    /// owns the base64-encoded payload; thumbnails decode on demand
+    /// from `data` for the chip preview.
+    @State private var pendingImages: [KinClawAPIClient.ImageAttachment] = []
+
     /// Currently-streaming assistant message ID — text_delta events
     /// append to this bubble. Reset on turn_done.
     @State private var streamingMessageID: UUID?
@@ -71,8 +77,14 @@ struct CodePane: View {
     // MARK: - Computed
 
     private var canSend: Bool {
-        !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !isStreaming
+        // Send is allowed if there's text OR pending images. An
+        // images-only turn lets the user drop a screenshot and ask
+        // "what's this?" without typing anything (kincode forwards
+        // an empty string + images to the model).
+        let hasText = !inputText
+            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasImages = !pendingImages.isEmpty
+        return (hasText || hasImages) && !isStreaming
     }
 
     private var recents: [String] {
@@ -378,17 +390,31 @@ struct CodePane: View {
         switch msg.role {
         case .user:
             // Right-aligned green-tinted bubble — exact same shape
-            // and styling as Chat/Cowork's user bubble.
+            // and styling as Chat/Cowork's user bubble. Adds a
+            // "📎 N images" footer when attachmentCount > 0 so the
+            // user can verify their drop / paperclip pick attached.
             HStack(alignment: .top, spacing: 6) {
                 Spacer(minLength: 24)
-                Text(msg.text)
-                    .font(.system(size: 13))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Color.green.opacity(0.18))
-                    .foregroundColor(.primary)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                    .textSelection(.enabled)
+                VStack(alignment: .trailing, spacing: 3) {
+                    if !msg.text.isEmpty {
+                        Text(msg.text)
+                            .font(.system(size: 13))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(Color.green.opacity(0.18))
+                            .foregroundColor(.primary)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                            .textSelection(.enabled)
+                    }
+                    if msg.attachmentCount > 0 {
+                        Label(
+                            "\(msg.attachmentCount) image\(msg.attachmentCount == 1 ? "" : "s")",
+                            systemImage: "paperclip"
+                        )
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                    }
+                }
             }
         case .assistant:
             // 🦞 avatar + secondary-bg bubble — same shape as
@@ -518,36 +544,120 @@ struct CodePane: View {
     // MARK: - Input bar
     //
     // Same visual primitives as chatBody.inputBar — secondary-bg
-    // pill with rounded 10pt corner. No paperclip / mic since
-    // Code mode doesn't take attachments or voice (typing is the
-    // right input modality for coding).
+    // pill with rounded 10pt corner. Paperclip + drop target wire
+    // image attachments through to /api/chat's `images` array (vision
+    // models only — Anthropic claude-3+ / OpenAI gpt-4o); paperclip
+    // opens NSOpenPanel filtered to PNG/JPG/GIF/WEBP.
 
     private var inputBar: some View {
-        HStack(spacing: 8) {
-            TextField("Message kincode…",
-                      text: $inputText,
-                      axis: .vertical)
-                .textFieldStyle(.plain)
-                .font(.system(size: 13))
-                .lineLimit(1...5)
-                .focused($inputFocused)
-                .onSubmit { send() }
-
-            Button {
-                send()
-            } label: {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 22))
-                    .foregroundColor(canSend ? .green : .secondary.opacity(0.4))
+        VStack(alignment: .leading, spacing: 6) {
+            // Pending-image chip strip. Hidden when no images attached.
+            // Each chip shows a 32pt thumbnail + filename suffix + ×
+            // button. Click × to remove without losing the rest.
+            if !pendingImages.isEmpty {
+                attachmentStrip
             }
-            .buttonStyle(.plain)
-            .disabled(!canSend)
-            .keyboardShortcut(.return, modifiers: .command)
+
+            HStack(spacing: 8) {
+                Button {
+                    pickImages()
+                } label: {
+                    Image(systemName: "paperclip")
+                        .font(.system(size: 14))
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Attach images (PNG, JPG, GIF, WEBP)")
+
+                TextField("Message kincode…",
+                          text: $inputText,
+                          axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13))
+                    .lineLimit(1...5)
+                    .focused($inputFocused)
+                    .onSubmit { send() }
+
+                Button {
+                    send()
+                } label: {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 22))
+                        .foregroundColor(canSend ? .green : .secondary.opacity(0.4))
+                }
+                .buttonStyle(.plain)
+                .disabled(!canSend)
+                .keyboardShortcut(.return, modifiers: .command)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(Color.platformSecondaryBackground.opacity(0.5))
         .clipShape(RoundedRectangle(cornerRadius: 10))
+        // Drag-and-drop receiver: accept image file URLs dropped from
+        // Finder / screenshots. Decodes synchronously off the main
+        // thread inside ingestImage().
+        .onDrop(of: [.fileURL, .image], isTargeted: nil) { providers in
+            handleDrop(providers: providers)
+        }
+    }
+
+    @ViewBuilder
+    private var attachmentStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(pendingImages) { att in
+                    attachmentChip(att)
+                }
+            }
+        }
+        .frame(height: 38)
+    }
+
+    @ViewBuilder
+    private func attachmentChip(_ att: KinClawAPIClient.ImageAttachment)
+        -> some View
+    {
+        HStack(spacing: 4) {
+            if let nsImage = decodeImagePreview(att.data) {
+                Image(nsImage: nsImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 28, height: 28)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+            } else {
+                Image(systemName: "photo")
+                    .frame(width: 28, height: 28)
+                    .foregroundColor(.secondary)
+            }
+            Text(att.mediaType
+                .replacingOccurrences(of: "image/", with: ""))
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                .foregroundColor(.secondary)
+            Button {
+                pendingImages.removeAll { $0.id == att.id }
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 3)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color.platformSecondaryBackground.opacity(0.7))
+        )
+    }
+
+    /// Best-effort thumbnail decode for the chip strip. Returns nil
+    /// (caller falls back to a generic photo glyph) on failure rather
+    /// than crashing — a corrupt base64 payload would still send to
+    /// the model fine; only the preview is missing.
+    private func decodeImagePreview(_ base64: String) -> NSImage? {
+        guard let data = Data(base64Encoded: base64) else { return nil }
+        return NSImage(data: data)
     }
 
     // MARK: - Actions
@@ -588,7 +698,17 @@ struct CodePane: View {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         inputText = ""
 
-        messages.append(CodeMessage(role: .user, text: text))
+        // Snapshot + clear pending images. The user sees them clear
+        // immediately; the local message bubble shows an attachment
+        // count so they don't lose track of what was sent.
+        let images = pendingImages
+        pendingImages = []
+
+        var bubble = CodeMessage(role: .user, text: text)
+        if !images.isEmpty {
+            bubble.attachmentCount = images.count
+        }
+        messages.append(bubble)
         isStreaming = true
 
         // Open assistant placeholder so streaming deltas have a target.
@@ -598,12 +718,87 @@ struct CodePane: View {
 
         Task {
             do {
-                try await client.sendChat(text)
+                try await client.sendChat(text, images: images)
             } catch {
                 appendError("send failed: \(error.localizedDescription)")
                 isStreaming = false
             }
         }
+    }
+
+    /// Open NSOpenPanel filtered to image types. Encodes selected
+    /// files to base64 and appends to pendingImages. Caps at 8 per
+    /// turn — each PNG can be hundreds of KB and the model context
+    /// budget chokes past that.
+    private func pickImages() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.allowedContentTypes = [.png, .jpeg, .gif, .webP]
+        panel.message = "Attach images for kincode"
+        if panel.runModal() == .OK {
+            for url in panel.urls.prefix(8) {
+                ingestImage(at: url)
+            }
+        }
+    }
+
+    /// Read a local file, sniff its media type from the extension,
+    /// base64-encode, and append to pendingImages. Silent on
+    /// failure — the user can re-attach if the picker glitched.
+    private func ingestImage(at url: URL) {
+        guard let data = try? Data(contentsOf: url) else { return }
+        let ext = url.pathExtension.lowercased()
+        let mediaType: String
+        switch ext {
+        case "png":   mediaType = "image/png"
+        case "jpg",
+             "jpeg": mediaType = "image/jpeg"
+        case "gif":   mediaType = "image/gif"
+        case "webp":  mediaType = "image/webp"
+        default:      return  // unsupported format
+        }
+        guard pendingImages.count < 8 else { return }
+        pendingImages.append(KinClawAPIClient.ImageAttachment(
+            mediaType: mediaType,
+            data: data.base64EncodedString()
+        ))
+    }
+
+    /// Drag-and-drop handler. Resolves each provider into a URL or
+    /// raw image data and routes through ingestImage. Always returns
+    /// true so SwiftUI doesn't bounce the drop visual.
+    private func handleDrop(providers: [NSItemProvider]) -> Bool {
+        for provider in providers {
+            if provider.canLoadObject(ofClass: URL.self) {
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    if let url = url {
+                        DispatchQueue.main.async { ingestImage(at: url) }
+                    }
+                }
+            } else if provider.hasItemConformingToTypeIdentifier("public.image") {
+                provider.loadDataRepresentation(forTypeIdentifier: "public.image") {
+                    data, _ in
+                    guard let data = data,
+                          NSImage(data: data) != nil
+                    else { return }
+                    // Default to PNG for raw drops (screenshots,
+                    // pasteboard images) — every vision model
+                    // accepts it.
+                    let att = KinClawAPIClient.ImageAttachment(
+                        mediaType: "image/png",
+                        data: data.base64EncodedString()
+                    )
+                    DispatchQueue.main.async {
+                        if pendingImages.count < 8 {
+                            pendingImages.append(att)
+                        }
+                    }
+                }
+            }
+        }
+        return true
     }
 
     /// Idempotent — won't double-subscribe if start runs twice.
@@ -993,18 +1188,24 @@ struct CodeMessage: Identifiable {
     /// could expose the edits array, etc. Optional + only populated
     /// for `.toolCall` rows; other rows leave it nil.
     let toolParams: [String: String]?
+    /// Number of image attachments on a user message. Rendered as a
+    /// small "📎 N images" footer on the user bubble. Settable via
+    /// var so send() can stamp it after constructing the bubble.
+    var attachmentCount: Int = 0
 
     init(id: UUID = UUID(),
          role: Role,
          text: String,
          toolName: String? = nil,
          toolError: String? = nil,
-         toolParams: [String: String]? = nil) {
+         toolParams: [String: String]? = nil,
+         attachmentCount: Int = 0) {
         self.id = id
         self.role = role
         self.text = text
         self.toolName = toolName
         self.toolError = toolError
         self.toolParams = toolParams
+        self.attachmentCount = attachmentCount
     }
 }
