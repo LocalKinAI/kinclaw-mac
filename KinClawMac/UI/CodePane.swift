@@ -54,6 +54,11 @@ struct CodePane: View {
     @State private var activeProvider: String = ""
     @State private var activeModel: String = ""
 
+    /// Brain presets loaded from the user's local Ollama install
+    /// (`:11434/api/tags`). Populated on .task; falls back to a
+    /// minimum static list if Ollama is unreachable.
+    @State private var brainPresets: [BrainPreset] = BrainPreset.fallbackPresets
+
     /// Active session id. One session per repo in v1; switching
     /// repos creates or loads a different one.
     @State private var sessionID: UUID = UUID()
@@ -118,6 +123,10 @@ struct CodePane: View {
             // (in streamLoop's success path) since kincode might
             // still be booting on first onAppear.
             Task { await refreshState() }
+            // Load the user's actual Ollama models for the brain
+            // dropdown. Cached for the rest of the session;
+            // "Reload from Ollama" in the menu refreshes manually.
+            Task { await reloadBrainPresets() }
         }
         .onDisappear {
             streamTask?.cancel()
@@ -788,27 +797,35 @@ struct CodePane: View {
     /// Kincode card is where the default is set.
     private var brainMenu: some View {
         Menu {
-            ForEach(BrainPreset.presets) { preset in
-                Button {
-                    switchBrain(to: preset)
-                } label: {
-                    let isCurrent = (preset.provider == activeProvider
-                                     && preset.model == activeModel)
-                    HStack {
-                        Text(preset.label)
-                        Spacer()
-                        if let tag = preset.tag {
-                            Text(tag)
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                        }
-                        if isCurrent {
-                            Image(systemName: "checkmark")
+            if brainPresets.isEmpty {
+                Text("Ollama not reachable on :11434")
+                    .foregroundColor(.secondary)
+            } else {
+                ForEach(brainPresets) { preset in
+                    Button {
+                        switchBrain(to: preset)
+                    } label: {
+                        let isCurrent = (preset.provider == activeProvider
+                                         && preset.model == activeModel)
+                        HStack {
+                            Text(preset.label)
+                            Spacer()
+                            if let tag = preset.tag {
+                                Text(tag)
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                            if isCurrent {
+                                Image(systemName: "checkmark")
+                            }
                         }
                     }
                 }
             }
             Divider()
+            Button("Reload from Ollama") {
+                Task { await reloadBrainPresets() }
+            }
             Text("Default brain → Settings → Backend")
                 .foregroundColor(.secondary)
         } label: {
@@ -834,10 +851,23 @@ struct CodePane: View {
     /// when known, else the raw model string for custom configs.
     private var brainLabel: String {
         if activeModel.isEmpty { return "loading…" }
-        if let preset = BrainPreset.find(provider: activeProvider, model: activeModel) {
+        if let preset = BrainPreset.find(provider: activeProvider,
+                                          model: activeModel,
+                                          in: brainPresets) {
             return preset.label
         }
-        return activeModel  // unrecognized custom brain
+        return activeModel  // model installed but not in current catalog snapshot
+    }
+
+    /// Re-query Ollama for installed models. Called on .task and
+    /// from the "Reload from Ollama" menu item. Empty result means
+    /// Ollama is unreachable — keep the existing list rather than
+    /// blanking the menu.
+    fileprivate func reloadBrainPresets() async {
+        let fresh = await OllamaCatalog.loadPresets()
+        if !fresh.isEmpty {
+            await MainActor.run { brainPresets = fresh }
+        }
     }
 
     /// POST /api/brain. Server side cancels any in-flight turn first

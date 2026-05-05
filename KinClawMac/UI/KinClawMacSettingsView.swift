@@ -303,6 +303,12 @@ private struct BackendSettingsTab: View {
     @State private var localStatus = "Probing…"
     @State private var kincodeStatus = "Probing…"
 
+    /// Brain presets loaded from local Ollama. Same source as
+    /// CodePane's dropdown — Settings just persists the choice
+    /// instead of live-switching. Defaults to the static fallback
+    /// while loading; replaced when /api/tags returns.
+    @State private var brainPresets: [BrainPreset] = BrainPreset.fallbackPresets
+
     /// Human-readable label for the current Default brain selection.
     /// Empty pref = use whatever soul says (kimi-k2.6:cloud).
     private var brainDefaultLabel: String {
@@ -310,7 +316,8 @@ private struct BackendSettingsTab: View {
             return "From soul"
         }
         if let preset = BrainPreset.find(provider: defaultBrainProvider,
-                                          model: defaultBrainModel) {
+                                          model: defaultBrainModel,
+                                          in: brainPresets) {
             return preset.label
         }
         return defaultBrainModel.isEmpty ? "From soul" : defaultBrainModel
@@ -371,7 +378,11 @@ private struct BackendSettingsTab: View {
                             }
                         }
                         Divider()
-                        ForEach(BrainPreset.presets) { preset in
+                        if brainPresets.isEmpty {
+                            Text("Ollama not reachable on :11434")
+                                .foregroundColor(.secondary)
+                        }
+                        ForEach(brainPresets) { preset in
                             Button {
                                 defaultBrainProvider = preset.provider
                                 defaultBrainModel = preset.model
@@ -388,6 +399,15 @@ private struct BackendSettingsTab: View {
                                         && defaultBrainModel == preset.model {
                                         Image(systemName: "checkmark")
                                     }
+                                }
+                            }
+                        }
+                        Divider()
+                        Button("Reload from Ollama") {
+                            Task {
+                                let fresh = await OllamaCatalog.loadPresets()
+                                if !fresh.isEmpty {
+                                    await MainActor.run { brainPresets = fresh }
                                 }
                             }
                         }
@@ -434,10 +454,21 @@ private struct BackendSettingsTab: View {
             }
         }
         .task {
-            // Both probes run concurrently — neither blocks the other.
+            // All three probes run concurrently — neither blocks
+            // the others.
             async let kc: Void = refreshStatus()
             async let kk: Void = refreshKincodeStatus()
-            _ = await (kc, kk)
+            async let ol: Void = loadBrainPresets()
+            _ = await (kc, kk, ol)
+        }
+    }
+
+    /// Load installed Ollama models for the Default-brain dropdown.
+    /// Empty result keeps the static fallback list visible.
+    private func loadBrainPresets() async {
+        let fresh = await OllamaCatalog.loadPresets()
+        if !fresh.isEmpty {
+            await MainActor.run { brainPresets = fresh }
         }
     }
 

@@ -45,40 +45,21 @@ struct BrainPreset: Identifiable, Hashable {
         return "local"
     }
 
-    static let presets: [BrainPreset] = [
-        // Ollama Cloud — the default. Free if user has Ollama Cloud.
+    /// Minimal fallback used only when Ollama is unreachable on app
+    /// launch (rare — the supervisor + the existing kinclaw kernel
+    /// both depend on Ollama, so a working setup will always have it).
+    /// The dynamic catalog (`OllamaCatalog.loadPresets`) replaces this
+    /// list with the user's actual installed models.
+    static let fallbackPresets: [BrainPreset] = [
         BrainPreset(provider: "ollama", model: "kimi-k2.6:cloud",
-                    label: "Kimi K2.6", needsEnv: nil),
-        BrainPreset(provider: "ollama", model: "kimi-k2.5:cloud",
-                    label: "Kimi K2.5", needsEnv: nil),
-        BrainPreset(provider: "ollama", model: "deepseek-v4-pro:cloud",
-                    label: "DeepSeek V4 Pro", needsEnv: nil),
-        BrainPreset(provider: "ollama", model: "minimax-m2.7:cloud",
-                    label: "Minimax M2.7", needsEnv: nil),
-
-        // Local Ollama — works fully offline.
-        BrainPreset(provider: "ollama", model: "qwen3:8b",
-                    label: "Qwen3 8B (local)", needsEnv: nil),
-        BrainPreset(provider: "ollama", model: "llama3.3:8b",
-                    label: "Llama 3.3 8B (local)", needsEnv: nil),
-
-        // Anthropic — needs ANTHROPIC_API_KEY or kincode -login.
-        BrainPreset(provider: "anthropic", model: "claude-sonnet-4-6",
-                    label: "Claude Sonnet 4.6", needsEnv: "ANTHROPIC_API_KEY"),
-        BrainPreset(provider: "anthropic", model: "claude-haiku-4-5-20251001",
-                    label: "Claude Haiku 4.5", needsEnv: "ANTHROPIC_API_KEY"),
-
-        // OpenAI.
-        BrainPreset(provider: "openai", model: "gpt-4o",
-                    label: "GPT-4o", needsEnv: "OPENAI_API_KEY"),
-        BrainPreset(provider: "openai", model: "gpt-4-turbo",
-                    label: "GPT-4 Turbo", needsEnv: "OPENAI_API_KEY"),
+                    label: "kimi-k2.6 (cloud)", needsEnv: nil),
     ]
 
-    /// Find the preset matching a (provider, model) combo, if any.
-    /// Returns nil for unknown combos so callers can fall back to
-    /// "Custom — <model>" in the UI rather than misrepresenting.
-    static func find(provider: String, model: String) -> BrainPreset? {
+    /// Find the preset matching a (provider, model) combo within a
+    /// candidate list. Returns nil for unknown combos so callers can
+    /// fall back to displaying the raw model string.
+    static func find(provider: String, model: String,
+                     in presets: [BrainPreset]) -> BrainPreset? {
         presets.first { $0.provider == provider && $0.model == model }
     }
 }
