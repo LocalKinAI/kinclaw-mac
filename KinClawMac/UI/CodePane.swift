@@ -47,6 +47,13 @@ struct CodePane: View {
     /// append to this bubble. Reset on turn_done.
     @State private var streamingMessageID: UUID?
 
+    /// Live brain (provider/model) reported by /api/state. Distinct
+    /// from the persisted *default* brain in Settings — the dropdown
+    /// here switches the running subprocess via /api/brain only,
+    /// next launch uses Settings' default.
+    @State private var activeProvider: String = ""
+    @State private var activeModel: String = ""
+
     /// Active session id. One session per repo in v1; switching
     /// repos creates or loads a different one.
     @State private var sessionID: UUID = UUID()
@@ -106,6 +113,11 @@ struct CodePane: View {
             // operated on the wrong directory while the UI looked
             // pointed at the user's saved repo.
             syncRepoIfPersisted()
+            // Fetch live brain (provider/model) for the dropdown
+            // label. Refresh again after the SSE stream connects
+            // (in streamLoop's success path) since kincode might
+            // still be booting on first onAppear.
+            Task { await refreshState() }
         }
         .onDisappear {
             streamTask?.cancel()
@@ -183,7 +195,13 @@ struct CodePane: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
-            .frame(maxWidth: .infinity, alignment: .leading)
+
+            // Brain picker — live switch via POST /api/brain. Doesn't
+            // persist (Settings → Backend → Kincode is where you set
+            // the default). Compact: emoji + truncated model label.
+            brainMenu
+
+            Spacer(minLength: 0)
 
             // Status dot — green when SSE is live, orange when
             // reconnecting. Replaces the prominent "kincode unreachable
@@ -758,6 +776,99 @@ struct CodePane: View {
     fileprivate func interruptTurn() {
         Task {
             try? await client.cancelTurn()
+        }
+    }
+
+    // MARK: - Brain picker
+
+    /// Compact brain dropdown next to the repo picker. Shows the
+    /// currently-active model (truncated) with a 🧠 prefix; clicking
+    /// opens a list of presets. Switching is a live action — POSTs
+    /// /api/brain — and DOES NOT persist. The Settings → Backend →
+    /// Kincode card is where the default is set.
+    private var brainMenu: some View {
+        Menu {
+            ForEach(BrainPreset.presets) { preset in
+                Button {
+                    switchBrain(to: preset)
+                } label: {
+                    let isCurrent = (preset.provider == activeProvider
+                                     && preset.model == activeModel)
+                    HStack {
+                        Text(preset.label)
+                        Spacer()
+                        if let tag = preset.tag {
+                            Text(tag)
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                        if isCurrent {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+            Divider()
+            Text("Default brain → Settings → Backend")
+                .foregroundColor(.secondary)
+        } label: {
+            HStack(spacing: 3) {
+                Text("🧠")
+                    .font(.system(size: 11))
+                Text(brainLabel)
+                    .font(.system(size: 11, weight: .medium))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundColor(.secondary)
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Switch brain for this session (default: Settings → Backend)")
+    }
+
+    /// Display label for the current brain — preset's pretty name
+    /// when known, else the raw model string for custom configs.
+    private var brainLabel: String {
+        if activeModel.isEmpty { return "loading…" }
+        if let preset = BrainPreset.find(provider: activeProvider, model: activeModel) {
+            return preset.label
+        }
+        return activeModel  // unrecognized custom brain
+    }
+
+    /// POST /api/brain. Server side cancels any in-flight turn first
+    /// and rebuilds the provider; on success we re-fetch /api/state to
+    /// pick up the new model. Errors (e.g. missing API key) come back
+    /// through the API client and surface as connectError text.
+    private func switchBrain(to preset: BrainPreset) {
+        Task {
+            do {
+                try await client.switchBrain(provider: preset.provider,
+                                             model: preset.model)
+                await refreshState()
+                connectError = nil
+            } catch {
+                connectError = "brain switch failed — \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// Pull the live state (provider + model) from /api/state. Called
+    /// onAppear and after every successful brain switch. Failure is
+    /// silent — Mac stays on the old activeModel label until next try.
+    fileprivate func refreshState() async {
+        do {
+            let state = try await client.fetchState()
+            await MainActor.run {
+                activeProvider = state.provider ?? ""
+                activeModel = state.model ?? ""
+            }
+        } catch {
+            // ignore — kincode might still be booting
         }
     }
 }

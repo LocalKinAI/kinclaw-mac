@@ -391,6 +391,32 @@ extension KinClawAPIClient {
         let (data, response) = try await sessionDataFor(request: request)
         try checkOK(response as? HTTPURLResponse, body: data)
     }
+
+    /// `POST /api/brain` — switch the running agent's provider/model
+    /// at runtime. Cancels any in-flight turn first server-side.
+    /// `apiKey` and `endpoint` are optional; when omitted the server
+    /// reads from env (ANTHROPIC_API_KEY / OPENAI_API_KEY) and uses
+    /// per-provider defaults.
+    func switchBrain(provider: String, model: String,
+                     apiKey: String? = nil,
+                     endpoint: String? = nil) async throws {
+        let url = baseURL.appendingPathComponent("api/brain")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        struct Body: Codable {
+            let provider: String
+            let model: String
+            let api_key: String?
+            let endpoint: String?
+        }
+        request.httpBody = try JSONEncoder().encode(Body(
+            provider: provider, model: model,
+            api_key: apiKey, endpoint: endpoint
+        ))
+        let (data, response) = try await sessionDataFor(request: request)
+        try checkOK(response as? HTTPURLResponse, body: data)
+    }
 }
 
 // MARK: - Tiny helpers

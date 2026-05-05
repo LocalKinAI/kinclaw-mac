@@ -294,8 +294,27 @@ private struct BackendSettingsTab: View {
     @AppStorage("kinclaw.kincode.autostart") private var kincodeAutostart = true
     @AppStorage("kinclaw.kincode.port") private var kincodePort = 5002
 
+    // Default brain — what the supervisor passes via -provider/-model
+    // when it spawns kincode at app launch. Live-switch in the Code
+    // tab (POST /api/brain) doesn't touch these.
+    @AppStorage("kinclaw.kincode.brain.provider") private var defaultBrainProvider = ""
+    @AppStorage("kinclaw.kincode.brain.model") private var defaultBrainModel = ""
+
     @State private var localStatus = "Probing…"
     @State private var kincodeStatus = "Probing…"
+
+    /// Human-readable label for the current Default brain selection.
+    /// Empty pref = use whatever soul says (kimi-k2.6:cloud).
+    private var brainDefaultLabel: String {
+        if defaultBrainProvider.isEmpty {
+            return "From soul"
+        }
+        if let preset = BrainPreset.find(provider: defaultBrainProvider,
+                                          model: defaultBrainModel) {
+            return preset.label
+        }
+        return defaultBrainModel.isEmpty ? "From soul" : defaultBrainModel
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -337,6 +356,54 @@ private struct BackendSettingsTab: View {
                         .frame(width: 80)
                         .textFieldStyle(.roundedBorder)
                 }
+                SettingsRow(label: "Default brain") {
+                    Menu {
+                        Button {
+                            defaultBrainProvider = ""
+                            defaultBrainModel = ""
+                        } label: {
+                            HStack {
+                                Text("From soul (kimi-k2.6:cloud)")
+                                Spacer()
+                                if defaultBrainProvider.isEmpty {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                        Divider()
+                        ForEach(BrainPreset.presets) { preset in
+                            Button {
+                                defaultBrainProvider = preset.provider
+                                defaultBrainModel = preset.model
+                            } label: {
+                                HStack {
+                                    Text(preset.label)
+                                    Spacer()
+                                    if let tag = preset.tag {
+                                        Text(tag)
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    if defaultBrainProvider == preset.provider
+                                        && defaultBrainModel == preset.model {
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(brainDefaultLabel)
+                                .font(.system(size: 12))
+                                .lineLimit(1)
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                }
                 SettingsRow(label: "Status") {
                     HStack(spacing: 6) {
                         Circle()
@@ -347,7 +414,7 @@ private struct BackendSettingsTab: View {
                             .font(.system(size: 12))
                     }
                 }
-                SettingsCaption("Coding agent on :5002. Disable autostart to skip the subprocess if you don't use Code mode. Apply on relaunch.")
+                SettingsCaption("Coding agent on :5002. Default brain is what the supervisor spawns kincode with — switch live in the Code tab without touching this. Apply on relaunch.")
             }
 
             SettingsCard("Sidecars") {

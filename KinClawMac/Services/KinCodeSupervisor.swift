@@ -157,6 +157,18 @@ final class KinCodeSupervisor: ObservableObject {
         } else {
             print("[KinCodeSupervisor] no soul found — kincode will use built-in default prompt")
         }
+        // Default brain — Settings → Backend → Kincode "Default brain"
+        // writes these UserDefault keys. CLI flags > soul.brain in
+        // kincode's resolution, so passing them here overrides whatever
+        // the soul says (which is fine — Settings is explicit user
+        // intent). Empty pref means "use soul's brain config",
+        // i.e. don't pass -provider/-model and let kincode read soul.
+        let savedProvider = UserDefaults.standard.string(forKey: "kinclaw.kincode.brain.provider") ?? ""
+        let savedModel = UserDefaults.standard.string(forKey: "kinclaw.kincode.brain.model") ?? ""
+        if !savedProvider.isEmpty && !savedModel.isEmpty {
+            args.append(contentsOf: ["-provider", savedProvider, "-model", savedModel])
+            print("[KinCodeSupervisor] brain: \(savedProvider) / \(savedModel) (Settings)")
+        }
 
         // Spawn cwd: prefer the user's last-picked Code-mode repo
         // so kincode boots already in the right directory. Without
