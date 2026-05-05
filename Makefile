@@ -287,10 +287,60 @@ doctor: ## Show signing state + running processes (diagnostic)
 	  fi; \
 	done; \
 	[[ $$found -eq 0 ]] && echo "  (none running)" || true
-	@printf "\n\033[1m─── TCC permissions ───\033[0m\n"
-	@printf "  (open System Settings → Privacy & Security to verify)\n"
-	@printf "  Accessibility:    grant to %s/kinclaw\n" "$(LOCALKIN_BIN)"
-	@printf "  Screen Recording: grant to %s/kinclaw\n" "$(LOCALKIN_BIN)"
+	@printf "\n\033[1m─── TCC permissions (actual state) ───\033[0m\n"
+	@# Accessibility: read kinclaw's startup log. kinclaw queries
+	@# AXIsProcessTrusted() at boot and prints ✓ / ✗ — most reliable
+	@# signal we have without reading TCC.db (which needs Full Disk
+	@# Access).
+	@if [ -f "$(LOG_DIR)/kinclaw.log" ]; then \
+	  ax="$$(grep 'Accessibility' $(LOG_DIR)/kinclaw.log | tail -1)"; \
+	  if echo "$$ax" | grep -q "✓"; then \
+	    printf "  Accessibility:    \033[32m✓ granted\033[0m (kinclaw verified at boot)\n"; \
+	  elif echo "$$ax" | grep -q "✗"; then \
+	    printf "  Accessibility:    \033[31m✗ NOT granted\033[0m — open System Settings → Privacy → Accessibility, toggle %s/kinclaw\n" "$(LOCALKIN_BIN)"; \
+	  else \
+	    printf "  Accessibility:    \033[33m? unknown\033[0m (no log entry — restart helpers)\n"; \
+	  fi; \
+	else \
+	  printf "  Accessibility:    \033[33m? unknown\033[0m (no log; run \033[36mmake run\033[0m first)\n"; \
+	fi
+	@# Screen Recording: probe via /usr/sbin/screencapture (it errors
+	@# out fast when caller lacks the permission). NOT perfect — this
+	@# tests the SHELL's permission, not kinclaw's, but they're usually
+	@# the same on dev machines. Real check would be a kinclaw RPC.
+	@if /usr/sbin/screencapture -t png -x /tmp/.kinclawmac-sr-probe.png 2>/dev/null && \
+	    [ -s /tmp/.kinclawmac-sr-probe.png ]; then \
+	  printf "  Screen Recording: \033[32m✓ granted\033[0m (capture probe succeeded)\n"; \
+	  rm -f /tmp/.kinclawmac-sr-probe.png; \
+	else \
+	  printf "  Screen Recording: \033[31m✗ NOT granted\033[0m — open System Settings → Privacy → Screen Recording, toggle %s/kinclaw\n" "$(LOCALKIN_BIN)"; \
+	  rm -f /tmp/.kinclawmac-sr-probe.png 2>/dev/null; \
+	fi
+	@# CDHash exposes WHY macOS may re-prompt across rebuilds: every
+	@# rebuild changes this. Apple Developer cert at M6 will fix
+	@# (Designated Requirement based on Team ID, cdhash-agnostic).
+	@printf "\n  Current cdhash: %s\n" \
+	  "$$(codesign -dvvvv $(LOCALKIN_BIN)/kinclaw 2>&1 | awk -F= '/^CDHash=/{print $$2}')"
+	@printf "  \033[2m(every \`make sign\` changes this; ad-hoc TCC may re-prompt for Screen Recording in particular)\033[0m\n"
+
+.PHONY: tcc-reset
+tcc-reset: ## Wipe TCC entries for kinclaw + kincode + KinClawMac (forces clean re-grant)
+	@# When ad-hoc TCC entries get stale (multiple cdhashes accumulated,
+	@# user denied once and macOS suppresses re-prompts), tccutil reset
+	@# clears the slate. Next launch fires fresh dialogs.
+	@echo "==> Resetting Accessibility for the LocalKin family..."
+	@tccutil reset Accessibility dev.localkin.kinclaw 2>&1 | sed 's/^/  /' || true
+	@tccutil reset Accessibility dev.localkin.kincode 2>&1 | sed 's/^/  /' || true
+	@tccutil reset Accessibility dev.localkin.kinclawmac 2>&1 | sed 's/^/  /' || true
+	@echo "==> Resetting Screen Recording for the LocalKin family..."
+	@tccutil reset ScreenCapture dev.localkin.kinclaw 2>&1 | sed 's/^/  /' || true
+	@tccutil reset ScreenCapture dev.localkin.kincode 2>&1 | sed 's/^/  /' || true
+	@tccutil reset ScreenCapture dev.localkin.kinclawmac 2>&1 | sed 's/^/  /' || true
+	@echo "==> Resetting Apple Events for the LocalKin family..."
+	@tccutil reset AppleEvents dev.localkin.kinclaw 2>&1 | sed 's/^/  /' || true
+	@tccutil reset AppleEvents dev.localkin.kincode 2>&1 | sed 's/^/  /' || true
+	@tccutil reset AppleEvents dev.localkin.kinclawmac 2>&1 | sed 's/^/  /' || true
+	@printf "\n✓ TCC reset. Next \033[33mmake run\033[0m will re-prompt fresh.\n"
 
 .PHONY: clean
 clean: kill ## Drop DerivedData for KinClawMac (forces full rebuild next time)
