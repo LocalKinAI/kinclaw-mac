@@ -56,7 +56,7 @@ struct KinClawMacSettingsView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity,
                        alignment: .topLeading)
         }
-        .frame(width: 540, height: 460)
+        .frame(width: 620, height: 460)
         .preferredColorScheme(.dark)
         // Inject NSVisualEffectView .hudWindow .behindWindow into
         // the host NSWindow so Settings looks identical to the main
@@ -84,6 +84,8 @@ struct KinClawMacSettingsView: View {
                             .font(.system(size: 11, weight: .semibold))
                         Text(tab.label)
                             .font(.system(size: 11, weight: .medium))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                     }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
