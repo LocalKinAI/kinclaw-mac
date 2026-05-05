@@ -409,6 +409,17 @@ struct CodePane: View {
                             .foregroundColor(.primary)
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
+                        // Brain footer — Claude.ai / ChatGPT-style
+                        // "via <model>" tag below the bubble. Only
+                        // shown on the most recent assistant message
+                        // (mid-session brain switches would mis-tag
+                        // older messages with the new brain otherwise).
+                        if isLatestAssistant(msg) && !activeModel.isEmpty {
+                            Text("via \(brainLabel)")
+                                .font(.system(size: 9))
+                                .foregroundColor(.secondary.opacity(0.6))
+                                .padding(.top, 2)
+                        }
                     }
                 }
                 .padding(.horizontal, 12)
@@ -592,6 +603,12 @@ struct CodePane: View {
             do {
                 connectError = nil
                 let stream = client.eventStream()
+                // First successful subscribe = kincode is up. Re-fetch
+                // /api/state to populate activeProvider/activeModel —
+                // the onAppear refreshState call may have raced with
+                // kincode's boot and silently failed, leaving the 🧠
+                // label stuck on "loading…".
+                Task { await refreshState() }
                 for try await event in stream {
                     if Task.isCancelled { break }
                     handle(event)
@@ -829,15 +846,18 @@ struct CodePane: View {
             Text("Default brain → Settings → Backend")
                 .foregroundColor(.secondary)
         } label: {
-            HStack(spacing: 3) {
+            HStack(spacing: 4) {
                 Text("🧠")
-                    .font(.system(size: 11))
+                    .font(.system(size: 12))
                 Text(brainLabel)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(activeModel.isEmpty
+                                     ? .secondary
+                                     : .primary.opacity(0.85))
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .semibold))
+                    .font(.system(size: 9, weight: .semibold))
                     .foregroundColor(.secondary)
             }
         }
@@ -857,6 +877,14 @@ struct CodePane: View {
             return preset.label
         }
         return activeModel  // model installed but not in current catalog snapshot
+    }
+
+    /// True if `msg` is the most recently-appended assistant message
+    /// in the stream. Used to gate the "via <brain>" footer so only
+    /// the freshest reply carries the tag (avoids mis-attributing
+    /// older messages when the brain was switched mid-session).
+    private func isLatestAssistant(_ msg: CodeMessage) -> Bool {
+        messages.last(where: { $0.role == .assistant })?.id == msg.id
     }
 
     /// Re-query Ollama for installed models. Called on .task and
