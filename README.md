@@ -114,24 +114,37 @@ Two stacks — KinClaw (engine + native shells, **all open**) vs LocalKin platfo
 
 ## Build from source
 
+Clone this repo plus the two helper kernels side-by-side, then `make run`:
+
 ```bash
 brew install xcodegen
+cd ~/Documents/Workspace
 git clone https://github.com/LocalKinAI/kinclaw-mac
-cd kinclaw-mac
-xcodegen generate
-open KinClawMac.xcodeproj
-# ⌘R
-```
-
-For local agents you'll also need `kinclaw` on PATH (or in `~/Documents/Workspace/kinclaw/`):
-
-```bash
 git clone https://github.com/LocalKinAI/kinclaw
-cd kinclaw
-go build -o kinclaw ./cmd/kinclaw/
+git clone https://github.com/LocalKinAI/kincode
+cd kinclaw-mac
+make run                # kill old → build all → sign all → launch
 ```
 
-The KinClaw Mac supervisor auto-spawns kinclaw at `localhost:5001` on launch.
+`make run` is the recommended dev loop. It:
+
+1. Kills any running `KinClawMac` / `kinclaw` / `kincode` processes
+2. Regenerates `KinClawMac.xcodeproj` from `project.yml` (XcodeGen)
+3. Builds + ad-hoc-codesigns `kinclaw` and `kincode` into `~/.localkin/bin/` with stable bundle IDs (`dev.localkin.kinclaw` / `dev.localkin.kincode`)
+4. Builds + signs `KinClawMac.app` with stable ID `dev.localkin.kinclawmac` and hardened runtime
+5. Launches the freshly signed `.app`
+
+Stable bundle IDs are the whole point: macOS TCC keys Accessibility / Screen Recording grants by bundle identifier, so re-signing with the same ID survives rebuilds. No more re-authorizing on every code change.
+
+Other targets (run `make help` for the full list):
+
+| Target          | What it does |
+|-----------------|--------------|
+| `make sign`     | Build + sign everything, but don't launch |
+| `make build`    | Just `xcodebuild`, no signing |
+| `make kill`     | Stop the app + helper subprocesses |
+| `make doctor`   | Show signing state + running processes — first thing to run when something looks off |
+| `make clean`    | Drop DerivedData + kill (forces a full rebuild next time) |
 
 ---
 
