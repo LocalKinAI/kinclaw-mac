@@ -38,6 +38,12 @@ struct KinClawEvent: Codable {
     let input_tokens: Int?
     let output_tokens: Int?
 
+    // user_message: image-attachment count (kincode plan mode).
+    let image_count: Int?
+
+    // plan_mode broadcast: true = entered plan mode, false = exited.
+    let plan_mode: Bool?
+
     // error
     let message: String?
 }
@@ -55,6 +61,7 @@ extension KinClawEvent {
         case recordDone    = "record_done"
         case soulSwitched  = "soul_switched"
         case turnDone      = "turn_done"
+        case planMode      = "plan_mode"
         case error
     }
 
@@ -219,6 +226,24 @@ final class KinClawAPIClient {
             case mediaType = "media_type"
             case data
         }
+    }
+
+    /// `POST /api/plan_mode {enabled}` — flip kincode's plan-mode
+    /// gate. While on, the agent denies write/exec/spawn tools and
+    /// prepends a directive teaching the model to emit a markdown
+    /// plan instead. Returns the post-toggle state (server may
+    /// refuse e.g. mid-turn).
+    func setPlanMode(_ enabled: Bool) async throws -> Bool {
+        let url = baseURL.appendingPathComponent("api/plan_mode")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(["enabled": enabled])
+        let (data, response) = try await sessionDataFor(request: request)
+        try checkOK(response as? HTTPURLResponse, body: data)
+        struct Reply: Decodable { let enabled: Bool }
+        let reply = try JSONDecoder().decode(Reply.self, from: data)
+        return reply.enabled
     }
 
     /// `DELETE /api/chat` — cancel the in-flight turn via the

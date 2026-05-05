@@ -49,6 +49,13 @@ struct CodePane: View {
     /// from `data` for the chip preview.
     @State private var pendingImages: [KinClawAPIClient.ImageAttachment] = []
 
+    /// Plan mode: when true, kincode denies write/exec/spawn tools
+    /// and the model emits a markdown plan instead. Synced bi-
+    /// directionally — UI toggle POSTs /api/plan_mode, server SSE
+    /// broadcasts plan_mode events that update this state. Initial
+    /// value comes from the /api/state probe on .task.
+    @State private var planMode: Bool = false
+
     /// Currently-streaming assistant message ID — text_delta events
     /// append to this bubble. Reset on turn_done.
     @State private var streamingMessageID: UUID?
@@ -551,6 +558,13 @@ struct CodePane: View {
 
     private var inputBar: some View {
         VStack(alignment: .leading, spacing: 6) {
+            // Plan-mode banner: shown above attachments when on, so
+            // the user knows kincode won't actually modify anything
+            // until they toggle off.
+            if planMode {
+                planModeBanner
+            }
+
             // Pending-image chip strip. Hidden when no images attached.
             // Each chip shows a 32pt thumbnail + filename suffix + ×
             // button. Click × to remove without losing the rest.
@@ -568,6 +582,20 @@ struct CodePane: View {
                 }
                 .buttonStyle(.plain)
                 .help("Attach images (PNG, JPG, GIF, WEBP)")
+
+                Button {
+                    togglePlanMode()
+                } label: {
+                    Image(systemName: planMode
+                          ? "list.bullet.rectangle.fill"
+                          : "list.bullet.rectangle")
+                        .font(.system(size: 14))
+                        .foregroundColor(planMode ? .orange : .secondary)
+                }
+                .buttonStyle(.plain)
+                .help(planMode
+                      ? "Plan mode is ON — kincode will plan, not execute. Click to disable."
+                      : "Enable plan mode — kincode plans only, no file writes or shell.")
 
                 TextField("Message kincode…",
                           text: $inputText,
@@ -612,6 +640,38 @@ struct CodePane: View {
             }
         }
         .frame(height: 38)
+    }
+
+    /// Plan-mode banner: thin orange-tinted pill above the input
+    /// reminding the user that kincode will plan but not execute
+    /// while the toggle is on. Tapping the banner toggles off, same
+    /// as clicking the icon — gives the user two paths back to
+    /// normal mode.
+    @ViewBuilder
+    private var planModeBanner: some View {
+        Button {
+            togglePlanMode()
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "list.bullet.rectangle.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                Text("Plan mode — read-only, no edits / shell. Tap to disable.")
+                    .font(.system(size: 10, weight: .medium))
+                Spacer(minLength: 0)
+            }
+            .foregroundColor(.orange.opacity(0.95))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.orange.opacity(0.10))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(Color.orange.opacity(0.3), lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder
@@ -801,6 +861,25 @@ struct CodePane: View {
         return true
     }
 
+    /// Flip plan mode locally + on the server. Optimistic update —
+    /// the SSE plan_mode event will reconcile if the server refused
+    /// (e.g. mid-turn). On error we revert and surface a status
+    /// message so the user sees the toggle didn't take.
+    private func togglePlanMode() {
+        let target = !planMode
+        planMode = target  // optimistic
+        Task {
+            do {
+                let confirmed = try await client.setPlanMode(target)
+                planMode = confirmed
+            } catch {
+                // Revert + log. The user will see the icon flip back.
+                planMode = !target
+                appendError("plan mode toggle failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
     /// Idempotent — won't double-subscribe if start runs twice.
     private func startStreamIfNeeded() {
         guard streamTask == nil else { return }
@@ -870,6 +949,13 @@ struct CodePane: View {
             isStreaming = false
             streamingMessageID = nil
             saveSession()
+        case .planMode:
+            // Server-side plan-mode change — could be from this UI
+            // (echo of our /api/plan_mode POST) or from a sibling
+            // window. Sync the toggle either way.
+            if let p = event.plan_mode {
+                planMode = p
+            }
         default:
             // hello / soulSwitched / screenFrame / recordDone don't
             // apply to Code mode — drop quietly.

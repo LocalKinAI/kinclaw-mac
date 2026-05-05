@@ -1517,7 +1517,8 @@ struct SpotlightContentView: View {
                 scrollTrigger += 1
             }
         case .hello, .userMessage, .turnDone,
-             .soulSwitched, .none:
+             .soulSwitched, .planMode, .none:
+            // plan_mode is Code-mode-only; Spotlight ignores it.
             break
         }
     }
