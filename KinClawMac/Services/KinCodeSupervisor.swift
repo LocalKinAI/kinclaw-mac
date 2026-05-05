@@ -45,16 +45,22 @@ final class KinCodeSupervisor: ObservableObject {
             paths.append(bundled.path)
         }
 
-        // 2. Local dev repo — most common case for KinClaw devs
+        // 2. ~/.localkin/bin/kincode — STABLE INSTALLED BINARY,
+        // produced by kincode's scripts/install.sh. Ad-hoc codesigned
+        // with identifier dev.localkin.kincode for TCC stability
+        // across rebuilds. Same approach as KinClawSupervisor.
+        paths.append("\(home)/.localkin/bin/kincode")
+
+        // 3. Local dev repo — fallback before install.sh has run.
         paths.append("\(home)/Documents/Workspace/kincode/kincode")
 
-        // 3. Homebrew (Apple Silicon)
+        // 4. Homebrew (Apple Silicon)
         paths.append("/opt/homebrew/bin/kincode")
 
-        // 4. Homebrew (Intel) / manual install
+        // 5. Homebrew (Intel) / manual install
         paths.append("/usr/local/bin/kincode")
 
-        // 5. `go install`
+        // 6. `go install`
         paths.append("\(home)/go/bin/kincode")
 
         return paths

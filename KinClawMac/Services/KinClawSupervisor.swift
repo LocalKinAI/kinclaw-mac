@@ -35,7 +35,7 @@ final class KinClawSupervisor: ObservableObject {
         let home = NSHomeDirectory()
         var c = [KinClawInstall]()
 
-        // 1. Embedded inside the .app (M6 will populate)
+        // 1. Embedded inside the .app (M6 will populate after codesign).
         if let bundled = Bundle.main.url(forResource: "kinclaw",
                                           withExtension: nil) {
             c.append(.init(
@@ -45,7 +45,45 @@ final class KinClawSupervisor: ObservableObject {
                     .appendingPathComponent("souls").path))
         }
 
-        // 2. Local dev repo — most common case for KinClaw devs
+        // 2. ~/.localkin/bin/kinclaw — STABLE INSTALLED BINARY.
+        // The dev's `scripts/install.sh` copies the freshly-built
+        // kinclaw here and ad-hoc-codesigns it with a stable
+        // identifier. macOS TCC re-prompts on every cdhash change for
+        // unsigned binaries; the installed-and-signed copy at this
+        // path keeps the signed identifier stable across rebuilds, so
+        // re-auth pain drops dramatically. The dev path below is
+        // kept as a fallback for users without an installed copy yet.
+        //
+        // Souls path: prefer ~/.localkin/souls/ (LocalKin family
+        // shared dir per kinclaw v1.10.0 storage cleanup), fall back
+        // to the dev repo's souls/ if the family dir is empty.
+        let installedBin = "\(home)/.localkin/bin/kinclaw"
+        if FileManager.default.isExecutableFile(atPath: installedBin) {
+            // Soul lookup is opinionated: we want pilot.soul.md
+            // specifically (KinClaw Mac's marquee soul). install.sh
+            // copies the kinclaw-repo souls into ~/.localkin/souls/
+            // so post-install the family dir wins. Pre-install (or
+            // if user nuked the family dir), fall back to the dev
+            // repo's souls/ directly.
+            let familySouls = "\(home)/.localkin/souls"
+            let devSouls = "\(home)/Documents/Workspace/kinclaw/souls"
+            var souls: String? = nil
+            if FileManager.default.fileExists(atPath: "\(familySouls)/pilot.soul.md") {
+                souls = familySouls
+            } else if FileManager.default.fileExists(atPath: "\(devSouls)/pilot.soul.md") {
+                souls = devSouls
+            } else if FileManager.default.fileExists(atPath: familySouls) {
+                souls = familySouls  // last-resort: any souls dir is better than none
+            }
+            c.append(.init(
+                binary: installedBin,
+                workingDir: nil,
+                soulsDir: souls))
+        }
+
+        // 3. Local dev repo — fallback for devs who haven't run
+        //    install.sh yet. Re-authorizes on every rebuild; that's
+        //    why install.sh exists.
         let devRepo = "\(home)/Documents/Workspace/kinclaw"
         if FileManager.default.isExecutableFile(atPath: "\(devRepo)/kinclaw") {
             c.append(.init(
@@ -54,7 +92,7 @@ final class KinClawSupervisor: ObservableObject {
                 soulsDir: "\(devRepo)/souls"))
         }
 
-        // 3. Homebrew (Apple Silicon)
+        // 4. Homebrew (Apple Silicon)
         if FileManager.default.isExecutableFile(
             atPath: "/opt/homebrew/bin/kinclaw") {
             c.append(.init(
@@ -63,7 +101,7 @@ final class KinClawSupervisor: ObservableObject {
                 soulsDir: "/opt/homebrew/share/kinclaw/souls"))
         }
 
-        // 4. Homebrew (Intel) / manual install
+        // 5. Homebrew (Intel) / manual install
         if FileManager.default.isExecutableFile(
             atPath: "/usr/local/bin/kinclaw") {
             c.append(.init(
@@ -72,7 +110,7 @@ final class KinClawSupervisor: ObservableObject {
                 soulsDir: "/usr/local/share/kinclaw/souls"))
         }
 
-        // 5. `go install` — requires souls to exist somewhere else
+        // 6. `go install` — requires souls to exist somewhere else
         let goBin = "\(home)/go/bin/kinclaw"
         if FileManager.default.isExecutableFile(atPath: goBin) {
             c.append(.init(
