@@ -341,17 +341,22 @@ doctor: ## Show signing state + running processes (diagnostic)
 	else \
 	  printf "  Accessibility:    \033[33m? unknown\033[0m (no log; run \033[36mmake run\033[0m first)\n"; \
 	fi
-	@# Screen Recording: probe via /usr/sbin/screencapture (it errors
-	@# out fast when caller lacks the permission). NOT perfect — this
-	@# tests the SHELL's permission, not kinclaw's, but they're usually
-	@# the same on dev machines. Real check would be a kinclaw RPC.
-	@if /usr/sbin/screencapture -t png -x /tmp/.kinclawmac-sr-probe.png 2>/dev/null && \
-	    [ -s /tmp/.kinclawmac-sr-probe.png ]; then \
-	  printf "  Screen Recording: \033[32m✓ granted\033[0m (capture probe succeeded)\n"; \
-	  rm -f /tmp/.kinclawmac-sr-probe.png; \
+	@# Screen Recording: read kinclaw's log. kinclaw probes via
+	@# sckit.ListDisplays at boot and prints ✓/✗. This is what the
+	@# AGENT actually has, not what the calling terminal has — the
+	@# previous /usr/sbin/screencapture probe tested the wrong
+	@# process (made the user think their grant didn't work).
+	@if [ -f "$(LOG_DIR)/kinclaw.log" ]; then \
+	  sr="$$(grep 'Screen Recording' $(LOG_DIR)/kinclaw.log | tail -1)"; \
+	  if echo "$$sr" | grep -q "✓"; then \
+	    printf "  Screen Recording: \033[32m✓ granted\033[0m (kinclaw verified at boot)\n"; \
+	  elif echo "$$sr" | grep -q "✗"; then \
+	    printf "  Screen Recording: \033[31m✗ NOT granted\033[0m — open System Settings → Privacy → Screen Recording, toggle %s/kinclaw\n" "$(LOCALKIN_BIN)"; \
+	  else \
+	    printf "  Screen Recording: \033[33m? unknown\033[0m (no log entry — restart helpers to re-probe)\n"; \
+	  fi; \
 	else \
-	  printf "  Screen Recording: \033[31m✗ NOT granted\033[0m — open System Settings → Privacy → Screen Recording, toggle %s/kinclaw\n" "$(LOCALKIN_BIN)"; \
-	  rm -f /tmp/.kinclawmac-sr-probe.png 2>/dev/null; \
+	  printf "  Screen Recording: \033[33m? unknown\033[0m (no log; run \033[36mmake run\033[0m first)\n"; \
 	fi
 	@# CDHash exposes WHY macOS may re-prompt across rebuilds: every
 	@# rebuild changes this. Apple Developer cert at M6 will fix
