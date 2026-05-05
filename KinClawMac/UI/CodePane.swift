@@ -87,7 +87,12 @@ struct CodePane: View {
             Divider().opacity(0.15)
             messagesArea
             Divider().opacity(0.15)
+            // Outer paddings match chatBody.inputBar wrapping —
+            // 12pt horizontal, 8pt vertical around the rounded
+            // input pill.
             inputBar
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
         }
         .onAppear {
             inputFocused = true
@@ -212,65 +217,139 @@ struct CodePane: View {
         }
     }
 
+    /// Welcome card — mirrors the Chat/Cowork welcomeCard layout.
+    /// Centered identity (🦞 + name) plus suggestion chips that
+    /// fill the input on click. Same visual rhythm as the cloud-
+    /// agent welcome so the three tabs feel like one product.
     @ViewBuilder
     private var emptyState: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "chevron.left.forwardslash.chevron.right")
-                .font(.system(size: 30, weight: .light))
-                .foregroundColor(.secondary)
-            Text("Code mode")
-                .font(.system(size: 14, weight: .semibold))
+        VStack(spacing: 8) {
+            Text("🦞")
+                .font(.system(size: 44))
+                .padding(.bottom, 4)
+
+            Text("kincode")
+                .font(.system(size: 18, weight: .semibold))
+
             Text(repoPath.isEmpty
-                 ? "Pick a repo above, then ask kincode to refactor, debug, or explain code."
-                 : "Ask kincode to refactor, debug, or explain code in this repo.")
+                 ? "Pick a repo above to start"
+                 : "Repo-aware coding agent")
                 .font(.system(size: 11))
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 20)
+                .foregroundColor(.secondary.opacity(0.85))
+                .padding(.top, 2)
+
+            // Suggestion chips — same visual style as Chat/Cowork's
+            // welcomeCard. Click fills the input field.
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(suggestionPrompts, id: \.self) { prompt in
+                    Button {
+                        inputText = prompt
+                        inputFocused = true
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.up.right")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundColor(.secondary.opacity(0.6))
+                            Text(prompt)
+                                .font(.system(size: 12))
+                                .foregroundColor(.primary.opacity(0.85))
+                                .lineLimit(2)
+                                .multilineTextAlignment(.leading)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(Color.platformSecondaryBackground.opacity(0.5))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(Color.secondary.opacity(0.15),
+                                        lineWidth: 0.5)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.top, 14)
+            .padding(.horizontal, 18)
+            .frame(maxWidth: .infinity)
+
+            Text("⌘⏎ to send · ✏ for new session")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary.opacity(0.55))
+                .padding(.top, 12)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private var suggestionPrompts: [String] {
+        if repoPath.isEmpty {
+            return [
+                "Pick a repo, then ask me to explain its layout",
+                "Show me what files are in this project",
+            ]
+        }
+        return [
+            "Walk me through the main entry points",
+            "Find all TODO comments and summarize",
+            "Suggest the next high-leverage cleanup",
+        ]
     }
 
     @ViewBuilder
     private func messageRow(_ msg: CodeMessage) -> some View {
         switch msg.role {
         case .user:
-            HStack {
-                Spacer(minLength: 30)
+            // Right-aligned green-tinted bubble — exact same shape
+            // and styling as Chat/Cowork's user bubble.
+            HStack(alignment: .top, spacing: 6) {
+                Spacer(minLength: 24)
                 Text(msg.text)
-                    .font(.system(size: 12))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Color.green.opacity(0.55))
-                    )
+                    .font(.system(size: 13))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.green.opacity(0.18))
+                    .foregroundColor(.primary)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .textSelection(.enabled)
             }
         case .assistant:
-            HStack(alignment: .top) {
-                if msg.text.isEmpty {
-                    // Pre-stream placeholder. Plain Text avoids the
-                    // MarkdownParser running on an empty string every
-                    // delta tick (parser is cheap but still ~µs).
-                    Text("…")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                } else {
-                    // Same MarkdownView the Chat surface uses so
-                    // fenced code blocks, lists, and headings render
-                    // properly — kincode replies are heavy on
-                    // ```code``` blocks, plain Text would show the
-                    // backticks raw and collapse the formatting.
-                    MarkdownView(text: msg.text)
-                        .font(.system(size: 12))
-                        .foregroundColor(.primary)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+            // 🦞 avatar + secondary-bg bubble — same shape as
+            // Chat/Cowork's assistantBubble.
+            HStack(alignment: .top, spacing: 6) {
+                Text("🦞")
+                    .font(.system(size: 16))
+                    .frame(width: 22, height: 22, alignment: .top)
+                    .padding(.top, 4)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    if msg.text.isEmpty {
+                        StreamingDots(color: .secondary, size: 5, spacing: 5)
+                            .padding(.vertical, 2)
+                    } else {
+                        MarkdownView(text: msg.text)
+                            .font(.system(size: 13))
+                            .foregroundColor(.primary)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
-                Spacer(minLength: 0)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.platformSecondaryBackground.opacity(0.6))
+                .foregroundColor(.primary)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .textSelection(.enabled)
+
+                Spacer(minLength: 24)
             }
         case .toolCall:
+            // Tool call pill — sits visually under the assistant
+            // bubble it belongs to (avatar gutter padding 28pt
+            // matches the avatar's 22pt + spacing 6).
             HStack(spacing: 6) {
                 Image(systemName: "hammer")
                     .font(.system(size: 10))
@@ -283,6 +362,7 @@ struct CodePane: View {
                     .foregroundColor(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                Spacer(minLength: 0)
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
@@ -290,14 +370,11 @@ struct CodePane: View {
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
                     .fill(Color.blue.opacity(0.08))
             )
+            .padding(.leading, 28)
         case .toolResult:
-            // file_edit results carry a unified diff with ANSI color
-            // codes — render them as a colored diff block instead of
-            // truncated monospace. Other tools (bash, file_read, glob,
-            // grep, web_*) keep the simple truncated row.
             if msg.toolName == "file_edit" && msg.toolError == nil {
                 DiffView(raw: msg.text)
-                    .padding(.leading, 18)
+                    .padding(.leading, 28)
             } else {
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: msg.toolError == nil
@@ -313,7 +390,7 @@ struct CodePane: View {
                         .lineLimit(4)
                         .textSelection(.enabled)
                 }
-                .padding(.leading, 18)  // align under the parent tool_call
+                .padding(.leading, 28)
             }
         case .error:
             HStack(alignment: .top, spacing: 6) {
@@ -321,26 +398,35 @@ struct CodePane: View {
                     .font(.system(size: 11))
                     .foregroundColor(.red.opacity(0.85))
                 Text(msg.text)
-                    .font(.system(size: 11))
+                    .font(.system(size: 12))
                     .foregroundColor(.red.opacity(0.85))
                     .textSelection(.enabled)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
             .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(Color.red.opacity(0.08))
             )
+            .padding(.leading, 28)
         }
     }
 
     // MARK: - Input bar
+    //
+    // Same visual primitives as chatBody.inputBar — secondary-bg
+    // pill with rounded 10pt corner. No paperclip / mic since
+    // Code mode doesn't take attachments or voice (typing is the
+    // right input modality for coding).
 
     private var inputBar: some View {
         HStack(spacing: 8) {
-            TextField("Message kincode…", text: $inputText, axis: .vertical)
+            TextField("Message kincode…",
+                      text: $inputText,
+                      axis: .vertical)
                 .textFieldStyle(.plain)
-                .lineLimit(1...6)
+                .font(.system(size: 13))
+                .lineLimit(1...5)
                 .focused($inputFocused)
                 .onSubmit { send() }
 
@@ -348,15 +434,17 @@ struct CodePane: View {
                 send()
             } label: {
                 Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 18))
+                    .font(.system(size: 22))
                     .foregroundColor(canSend ? .green : .secondary.opacity(0.4))
             }
             .buttonStyle(.plain)
             .disabled(!canSend)
-            .keyboardShortcut(.return, modifiers: [])
+            .keyboardShortcut(.return, modifiers: .command)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+        .background(Color.platformSecondaryBackground.opacity(0.5))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
     // MARK: - Actions
