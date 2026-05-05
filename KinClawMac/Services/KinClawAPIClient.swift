@@ -378,6 +378,19 @@ extension KinClawAPIClient {
         try checkOK(response as? HTTPURLResponse, body: data)
         return try decoder.decode(ServerState.self, from: data)
     }
+
+    /// `POST /api/clear` — wipe the agent's conversation memory back
+    /// to system-prompt-only state. Cancels any in-flight turn first.
+    /// Used by Code mode's "new session" button to recover from
+    /// stuck error states (e.g. a malformed history that 400s on
+    /// every retry) without restarting the kincode subprocess.
+    func clearConversation() async throws {
+        let url = baseURL.appendingPathComponent("api/clear")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        let (data, response) = try await sessionDataFor(request: request)
+        try checkOK(response as? HTTPURLResponse, body: data)
+    }
 }
 
 // MARK: - Tiny helpers

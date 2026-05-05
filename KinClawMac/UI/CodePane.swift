@@ -98,6 +98,14 @@ struct CodePane: View {
             inputFocused = true
             startStreamIfNeeded()
             loadSessionIfNeeded()
+            // Sync the persisted repo to kincode's cwd. Without this,
+            // kincode boots in whatever cwd the supervisor spawn used
+            // (~/Documents/Workspace/kinclaw or wherever the .app
+            // launches from), regardless of what the UI's repo
+            // dropdown shows. Result: agent's bash/file_* tools
+            // operated on the wrong directory while the UI looked
+            // pointed at the user's saved repo.
+            syncRepoIfPersisted()
         }
         .onDisappear {
             streamTask?.cancel()
@@ -106,13 +114,37 @@ struct CodePane: View {
             // waiting for app quit. save() is cheap (atomic write).
             saveSession()
         }
-        .onChange(of: repoPath) { _, _ in
+        .onChange(of: repoPath) { _, newPath in
             // Repo changed → start a fresh session (or resume the
             // existing one for this repo).
             messages.removeAll()
             sessionID = UUID()
             sessionCreatedAt = Date()
             loadSessionIfNeeded()
+            // Re-sync to kincode whenever the repo state changes from
+            // anywhere — applyRepo posts immediately on user click,
+            // but onAppear-driven loads also need the sync.
+            if !newPath.isEmpty {
+                Task { try? await client.setRepo(newPath) }
+            }
+        }
+    }
+
+    /// Push the persisted `repoPath` to kincode's `/api/repo` so the
+    /// subprocess's cwd matches what the UI shows. No-op when no
+    /// repo has been picked yet.
+    private func syncRepoIfPersisted() {
+        guard !repoPath.isEmpty else { return }
+        Task {
+            do {
+                try await client.setRepo(repoPath)
+                connectError = nil
+            } catch {
+                // Don't surface as a fatal — kincode might still be
+                // booting. The streamLoop's reconnect path picks it
+                // up; next user message triggers another setRepo
+                // attempt via send().
+            }
         }
     }
 
@@ -164,10 +196,26 @@ struct CodePane: View {
                 .frame(width: 6, height: 6)
                 .help(connectError ?? "kincode :5002 connected")
 
-            // Fresh session — saves current + starts new id.
-            // Always rendered for visual symmetry with Chat / Cowork's
-            // 3-button right cluster (visible mass even with empty
-            // history); disabled when there's nothing to save.
+            // Stop button — interrupts the in-flight turn via
+            // DELETE /api/chat. Only visible while streaming, so the
+            // repoBar visual mass fluctuates with turn state but
+            // never shows a useless dimmed icon.
+            if isStreaming {
+                Button {
+                    interruptTurn()
+                } label: {
+                    Image(systemName: "stop.circle")
+                        .font(.system(size: 13))
+                        .foregroundColor(.red.opacity(0.8))
+                }
+                .buttonStyle(.plain)
+                .help("Stop the agent (\u{2318}.)")
+                .keyboardShortcut(".", modifiers: .command)
+            }
+
+            // Fresh session — saves current + starts new id + clears
+            // kincode server-side memory (so a stuck error doesn't
+            // resurrect through retry).
             Button {
                 startNewSession()
             } label: {
@@ -179,7 +227,7 @@ struct CodePane: View {
             }
             .buttonStyle(.plain)
             .disabled(messages.isEmpty)
-            .help("New session (saves current)")
+            .help("New session (saves current + clears kincode memory)")
         }
         .padding(.horizontal, 12)
         .padding(.top, 2)
@@ -678,12 +726,39 @@ struct CodePane: View {
     /// Start a fresh session for the active repo. Old session stays
     /// on disk (one file per session id) — multi-session-per-repo is
     /// supported by the schema, this just doesn't surface a picker yet.
+    ///
+    /// Also clears kincode's SERVER-SIDE conversation memory via
+    /// POST /api/clear. Without this, a stuck error state (e.g. a
+    /// malformed history that 400s on every retry) would survive a
+    /// "new session" click — kincode keeps the bad messages around
+    /// until restart. Best-effort: if the call fails, local state
+    /// still resets and the user can manually fix kincode by quit +
+    /// relaunch.
     fileprivate func startNewSession() {
-        // Persist the current one before discarding the in-memory state.
+        // Persist the current one before discarding in-memory state.
         saveSession()
         messages.removeAll()
         sessionID = UUID()
         sessionCreatedAt = Date()
+        isStreaming = false
+        streamingMessageID = nil
+
+        Task {
+            try? await client.clearConversation()
+        }
+    }
+
+    /// Cancel the in-flight turn via DELETE /api/chat. The agent's
+    /// chatHandler goroutine observes the ctx cancellation, exits
+    /// cleanly, and pushes turn_done as usual — handle() will then
+    /// flip isStreaming false. We DON'T optimistically flip it here
+    /// because we want the visual confirmation when the agent really
+    /// stops (cancellation propagation can take a beat through the
+    /// provider HTTP timeout).
+    fileprivate func interruptTurn() {
+        Task {
+            try? await client.cancelTurn()
+        }
     }
 }
 
