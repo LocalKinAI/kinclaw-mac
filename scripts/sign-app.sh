@@ -1,28 +1,42 @@
 #!/usr/bin/env bash
 # sign-app.sh — ad-hoc codesign the built KinClawMac.app with a stable
-# bundle identifier + hardened runtime, signing every embedded
-# framework/dylib/helper deeply (inside-out, as macOS requires).
+# bundle identifier, in a single `--deep` pass so embedded frameworks
+# / dylibs / helpers all share signing parentage.
 #
 # Why a stable identifier:
 #   TCC (accessibility, screen recording) keys permissions by bundle
-#   identifier + code requirement. Without a stable identifier, every
-#   rebuild looks like a different app and macOS forgets the user's
-#   "Allow" — leading to the "我每次都要授权吗" pain.
+#   identifier + path. Re-applying the same identifier on every
+#   rebuild keeps macOS thinking it's the same app, so the user's
+#   "Allow" survives. Without this you re-authorize every time you
+#   change a Swift file — the "我每次都要授权吗" pain.
 #
-#   `dev.localkin.kinclawmac` is what project.yml sets via
-#   PRODUCT_BUNDLE_IDENTIFIER. We re-apply it explicitly in case Xcode
-#   stripped the signature on copy (DerivedData/Build/Products) or
-#   regenerated under a different ad-hoc identity.
+# Why NO hardened runtime here:
+#   Hardened runtime turns on library validation, which requires
+#   embedded dylibs to have the same Team ID as the host executable.
+#   Ad-hoc signatures don't have a Team ID — macOS synthesizes one
+#   per file from the cdhash, so two separately-signed ad-hoc files
+#   look like "different teams" and the loader rejects them with
+#   "mapping process and mapped file have different Team IDs".
 #
-# Helper binaries (kinclaw + kincode) get signed via their own
-# install.sh scripts in sibling repos — those handle their own stable
-# identifiers (dev.localkin.kinclaw / dev.localkin.kincode) and place
-# the result in ~/.localkin/bin/ where the supervisors look first.
+#   For dev builds without an Apple Developer cert ($99/year) we
+#   can't notarize anyway, so hardened runtime gains nothing and
+#   only risks breaking dylib loading. We add it back when the cert
+#   lands at M6.
+#
+# Why a single `--deep` pass:
+#   --deep recursively signs every nested binary (frameworks, dylibs,
+#   helpers in Contents/MacOS) under one parent invocation. That
+#   keeps signing metadata consistent across the bundle. Calling
+#   `codesign --sign -` on each piece separately produces a fresh
+#   synthetic team ID per call, breaking any inter-binary checks.
+#
+# Helper binaries (kinclaw + kincode) get signed by their own
+# install.sh in sibling repos — those handle stable identifiers
+# (dev.localkin.kinclaw / dev.localkin.kincode) and place the result
+# in ~/.localkin/bin/ where the supervisors look first.
 #
 # Usage:
 #   scripts/sign-app.sh <path-to-KinClawMac.app>
-#
-# Exits non-zero on any signing failure; quiet on success.
 
 set -euo pipefail
 
@@ -39,54 +53,19 @@ if [[ ! -d "$APP" ]]; then
   exit 1
 fi
 
-# Sign embedded frameworks first (inside-out is mandatory). KinClawMac
-# embeds KeyboardShortcuts via SwiftPM. Future SPM additions land in
-# Contents/Frameworks/ automatically and pick up this loop.
-FW_DIR="$APP/Contents/Frameworks"
-if [[ -d "$FW_DIR" ]]; then
-  while IFS= read -r -d '' fw; do
-    echo "  → signing framework: $(basename "$fw")"
-    codesign --force --sign - \
-      --options=runtime \
-      --timestamp=none \
-      "$fw"
-  done < <(find "$FW_DIR" -maxdepth 1 -mindepth 1 \
-    \( -name '*.framework' -o -name '*.dylib' \) -print0)
-fi
-
-# Sign any standalone helper executables under Contents/MacOS/ besides
-# the main one. KinClawMac doesn't currently ship helpers in-bundle
-# (kinclaw + kincode are in ~/.localkin/bin/), but if someone later
-# bundles a helper this picks it up automatically.
-MACOS_DIR="$APP/Contents/MacOS"
-if [[ -d "$MACOS_DIR" ]]; then
-  while IFS= read -r -d '' helper; do
-    name="$(basename "$helper")"
-    # Skip the main binary — it gets signed below as part of the .app.
-    if [[ "$name" == "KinClawMac" ]]; then
-      continue
-    fi
-    echo "  → signing helper: $name"
-    codesign --force --sign - \
-      --options=runtime \
-      --timestamp=none \
-      "$helper"
-  done < <(find "$MACOS_DIR" -maxdepth 1 -type f -perm +111 -print0)
-fi
-
-# Now sign the app itself with the stable identifier. --deep is
-# defensive — we already signed inside-out above, but --deep ensures
-# any nested Resources/ binaries we missed get re-signed too.
-echo "  → signing app: $(basename "$APP")"
+# Single-pass deep ad-hoc resign with the stable identifier. macOS
+# walks the bundle, signs every Mach-O it finds (Contents/Frameworks,
+# Contents/MacOS helpers, embedded packages from SwiftPM), and seals
+# the bundle with the parent identifier on top.
+echo "  → codesign --deep --force --sign - --identifier $IDENTIFIER"
 codesign --force --deep --sign - \
   --identifier "$IDENTIFIER" \
-  --options=runtime \
-  --timestamp=none \
   "$APP"
 
 # Verify the signature is valid + the identifier stuck. Without this
-# check a corrupted Info.plist or missing entitlements would silently
-# produce an unverifiable bundle.
+# check a corrupted Info.plist would silently produce an unverifiable
+# bundle that fails to launch later (silent dyld error, no obvious
+# log).
 echo
 echo "Verifying signature..."
 codesign --verify --verbose=2 "$APP" 2>&1 | sed 's/^/  /'
@@ -96,6 +75,38 @@ if [[ "$ACTUAL_ID" != "$IDENTIFIER" ]]; then
   echo "✗ Identifier mismatch: expected $IDENTIFIER, got $ACTUAL_ID" >&2
   exit 1
 fi
+
+# Also verify the .app actually launches: dyld errors (e.g. missing
+# embedded dylib, library-validation failure under hardened runtime)
+# don't surface in `codesign --verify`. We catch them here so the
+# user sees a build-time failure instead of a silent app-doesn't-
+# open-from-the-Dock failure.
+echo
+echo "Verifying executable loads (dyld smoke test)..."
+EXECUTABLE="$APP/Contents/MacOS/$(basename "$APP" .app)"
+if [[ ! -x "$EXECUTABLE" ]]; then
+  echo "✗ No executable at $EXECUTABLE" >&2
+  exit 1
+fi
+# DYLD_PRINT_LIBRARIES would dump too much; we just need to know if
+# the linker can resolve everything. Run with --help / a flag the
+# app handles, or just spawn-and-kill — for a SwiftUI app we send
+# SIGINT immediately to avoid actually showing the UI.
+( "$EXECUTABLE" >/dev/null 2>&1 & echo $! > /tmp/.kinclawmac-smoketest-pid )
+SMOKE_PID="$(cat /tmp/.kinclawmac-smoketest-pid)"
+sleep 1
+if kill -0 "$SMOKE_PID" 2>/dev/null; then
+  kill "$SMOKE_PID" 2>/dev/null || true
+  wait "$SMOKE_PID" 2>/dev/null || true
+  echo "  ✓ executable loaded cleanly (no dyld errors)"
+else
+  echo "✗ Executable died on launch — likely dyld error." >&2
+  echo "  Run directly to see the error:" >&2
+  echo "    $EXECUTABLE" >&2
+  rm -f /tmp/.kinclawmac-smoketest-pid
+  exit 1
+fi
+rm -f /tmp/.kinclawmac-smoketest-pid
 
 echo
 echo "✓ Signed: $APP"
