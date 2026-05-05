@@ -2,6 +2,98 @@
 
 All notable changes to KinClaw Mac.
 
+## [0.3.0] - 2026-05-05
+
+**Code mode polish + stable build loop.** Five additions, four of
+them surfacing kincode v0.10.0 capabilities in Code mode plus a
+build-infra fix that ends the "我每次都要授权吗" TCC re-auth pain.
+
+### Added — Inline TodoWrite checklist UI
+
+When kincode's agent calls `todo_write`, instead of the generic 🔨
+blue tool-call pill we render the todos array as an inline checklist:
+
+  ☐ pending      — outline circle, primary text
+  ◐ in_progress  — orange half-filled, uses `activeForm`
+                  ("Building ..." instead of "Build ...") for
+                  present-continuous reading
+  ☑ completed    — green check + strikethrough
+
+Header shows N/M done so progress is visible at a glance.
+
+### Added — Image input (paperclip + drag-and-drop)
+
+Drop a screenshot from Finder onto the input bar, click the new 📎
+button to pick from disk, or paste from clipboard. Up to 8 images
+per turn. Chips show 28pt thumbnails + media type + × to remove
+individually.
+
+Pipeline: Mac encodes each file to base64 → POSTs `{message,
+images:[{media_type, data}]}` to kincode's `/api/chat` → kincode
+translates to Anthropic image content blocks / OpenAI image_url
+parts → vision-capable models (claude-3+, gpt-4o) see the image.
+
+### Added — Plan-mode toggle + banner
+
+📋 list-bullet button next to the paperclip in the input bar. On =
+orange icon + thin orange banner above the input ("Plan mode —
+read-only, no edits / shell. Tap to disable."). Either path toggles
+off — icon and banner are both buttons.
+
+Server-state sync via SSE `plan_mode` events — multi-window UIs
+stay in sync. Optimistic update on toggle, revert + error message
+if `POST /api/plan_mode` fails.
+
+### Added — Stable `make` build/sign/run loop
+
+`Makefile` + `scripts/sign-app.sh` close the TCC re-auth loop. Every
+rebuild ad-hoc-codesigns the .app and the helper binaries (`kinclaw`,
+`kincode`) with stable bundle identifiers, so macOS Accessibility /
+Screen Recording grants survive across builds.
+
+```
+make help     — list targets
+make run      — kill old → build all → sign all → launch (the flow)
+make sign     — same minus the launch
+make build    — just xcodebuild (no signing)
+make kill     — stop KinClawMac + kinclaw + kincode
+make doctor   — show signing state + running PIDs (first thing
+                to run when something looks off)
+make clean    — drop DerivedData
+```
+
+Stable identifiers re-applied on every signing pass:
+  - `dev.localkin.kinclawmac` — KinClawMac.app
+  - `dev.localkin.kinclaw`    — `~/.localkin/bin/kinclaw`
+  - `dev.localkin.kincode`    — `~/.localkin/bin/kincode`
+
+Helper binaries are signed by their own `scripts/install.sh` in the
+sibling repos. The Makefile orchestrates — runs each `install.sh`
+inside-out, then signs the .app with hardened runtime + deep mode
+via `scripts/sign-app.sh`. `pgrep -x` (executable basename only)
+avoids the self-match foot-gun in `make kill` / `make doctor`.
+
+### Why this matters
+
+v0.2.0 shipped the three-mode integration. v0.3.0 makes Code mode
+actually pleasant to use day-to-day:
+
+- TodoWrite checklist UI turns kincode's plan-tracking into a real
+  artifact you can read at a glance instead of a pill that says
+  "todo_write [{...}]".
+- Image input lets you drop a screenshot and ask "what's wrong with
+  this UI" — the most-cited workflow that was awkward without it.
+- Plan mode adds the safety valve: hand kincode a non-trivial task
+  and have it research + draft a plan first, instead of yolo-modify.
+- Stable build loop = no more re-authorizing AX / Screen Recording
+  every rebuild. `make run` is the one command you need.
+
+Paired with [kincode v0.10.0](https://github.com/LocalKinAI/kincode/releases/tag/v0.10.0)
+(image input + plan mode kernel-side) and [kincode v0.9.0](https://github.com/LocalKinAI/kincode/releases/tag/v0.9.0)
+(named subagents at `~/.kincode/agents/<name>.md`).
+
+---
+
 ## [0.2.0] - 2026-05-04
 
 **Three-mode integration shipped.** KinClaw Mac is now the spotlight

@@ -18,6 +18,8 @@ Same window, same agent picker shape, three different brains. Switch tabs to swi
 
 ## Status
 
+✅ **v0.3.0** — Code mode polish: inline TodoWrite checklist, image drag-and-drop / paperclip, plan-mode toggle, and a stable `make run` build loop that ends TCC re-auth pain.
+
 ✅ **v0.2.0** — three-mode integration shipped. Chat / Cowork / Code all live, mode-scoped agent pools, per-repo Code sessions, full TCC permission handling for kinclaw subprocess.
 
 See [CHANGELOG](CHANGELOG.md) for the day-by-day. This is dev-build territory — codesign + DMG land at M6 (blocked on $99 Apple Developer cert).
