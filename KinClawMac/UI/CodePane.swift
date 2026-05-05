@@ -433,32 +433,49 @@ struct CodePane: View {
                 Spacer(minLength: 24)
             }
         case .toolCall:
-            // Tool call pill — sits visually under the assistant
-            // bubble it belongs to (avatar gutter padding 28pt
-            // matches the avatar's 22pt + spacing 6).
-            HStack(spacing: 6) {
-                Image(systemName: "hammer")
-                    .font(.system(size: 10))
-                    .foregroundColor(.blue.opacity(0.9))
-                Text(msg.toolName ?? "tool")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(.blue.opacity(0.9))
-                Text(msg.text)
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer(minLength: 0)
+            // Special case: todo_write renders as a checklist instead
+            // of the standard tool-call pill. The todos array lives in
+            // toolParams["todos"] as JSON (kincode JSON-encodes complex
+            // args at SSE emission). We parse + render inline so the
+            // user sees the agent's plan as a real checklist, not as
+            // "🔨 todo_write [{...}]".
+            if msg.toolName == "todo_write",
+               let todos = parseTodos(from: msg.toolParams) {
+                TodoChecklistView(items: todos)
+                    .padding(.leading, 28)
+            } else {
+                // Standard tool-call pill — sits visually under the
+                // assistant bubble it belongs to (avatar gutter padding
+                // 28pt matches the avatar's 22pt + spacing 6).
+                HStack(spacing: 6) {
+                    Image(systemName: "hammer")
+                        .font(.system(size: 10))
+                        .foregroundColor(.blue.opacity(0.9))
+                    Text(msg.toolName ?? "tool")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(.blue.opacity(0.9))
+                    Text(msg.text)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(Color.blue.opacity(0.08))
+                )
+                .padding(.leading, 28)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(Color.blue.opacity(0.08))
-            )
-            .padding(.leading, 28)
         case .toolResult:
-            if msg.toolName == "file_edit" && msg.toolError == nil {
+            // todo_write's tool_result is just a text re-render of the
+            // checklist that's already shown by the tool_call's
+            // TodoChecklistView. Skip to avoid duplication.
+            if msg.toolName == "todo_write" {
+                EmptyView()
+            } else if msg.toolName == "file_edit" && msg.toolError == nil {
                 DiffView(raw: msg.text)
                     .padding(.leading, 28)
             } else {
@@ -637,7 +654,8 @@ struct CodePane: View {
             messages.append(CodeMessage(
                 role: .toolCall,
                 text: summary,
-                toolName: event.name
+                toolName: event.name,
+                toolParams: event.params
             ))
         case .toolResult:
             messages.append(CodeMessage(
@@ -887,6 +905,19 @@ struct CodePane: View {
         messages.last(where: { $0.role == .assistant })?.id == msg.id
     }
 
+    /// Parse the `todos` JSON string out of a todo_write tool_call's
+    /// params and decode into structured TodoItem rows. Returns nil
+    /// when params is missing, todos field is missing, or the JSON
+    /// fails to decode — the caller falls back to rendering the
+    /// standard tool-call pill, so a malformed payload is graceful.
+    private func parseTodos(from params: [String: String]?) -> [TodoItem]? {
+        guard let json = params?["todos"],
+              let data = json.data(using: .utf8) else {
+            return nil
+        }
+        return try? JSONDecoder().decode([TodoItem].self, from: data)
+    }
+
     /// Re-query Ollama for installed models. Called on .task and
     /// from the "Reload from Ollama" menu item. Empty result means
     /// Ollama is unreachable — keep the existing list rather than
@@ -956,16 +987,24 @@ struct CodeMessage: Identifiable {
     /// "tool ran but failed" — those have a normal output string with
     /// the tool's own error message folded in.
     let toolError: String?
+    /// Raw tool params (kincode stringifies arrays/maps to JSON).
+    /// Surfaced for tools where the structured args matter for
+    /// rendering — todo_write needs the todos array, multi_edit
+    /// could expose the edits array, etc. Optional + only populated
+    /// for `.toolCall` rows; other rows leave it nil.
+    let toolParams: [String: String]?
 
     init(id: UUID = UUID(),
          role: Role,
          text: String,
          toolName: String? = nil,
-         toolError: String? = nil) {
+         toolError: String? = nil,
+         toolParams: [String: String]? = nil) {
         self.id = id
         self.role = role
         self.text = text
         self.toolName = toolName
         self.toolError = toolError
+        self.toolParams = toolParams
     }
 }
