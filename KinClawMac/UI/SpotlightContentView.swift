@@ -1341,13 +1341,22 @@ struct SpotlightContentView: View {
         let client = SSEClient()
         sseClient = client
 
+        // SSE callbacks fire async on the main queue. Between send
+        // and delivery, the user can clear the chat, switch agents,
+        // or trigger any other path that mutates `messages`. When
+        // that happens, `assistantIndex` is stale and a raw access
+        // would crash with "Index out of range" (we hit this in
+        // production — see KinClawMac-2026-05-05-003035.ips). Every
+        // SSE callback that touches messages[] guards bounds first.
         client.onToken = { token in
+            guard messages.indices.contains(assistantIndex) else { return }
             messages[assistantIndex].content += token
             scrollTrigger += 1
         }
         client.onComplete = {
             isStreaming = false
             sseClient = nil
+            guard messages.indices.contains(assistantIndex) else { return }
             if !messages[assistantIndex].content.isEmpty {
                 appState.recordMessage()
                 if ttsEnabled {
@@ -1358,11 +1367,12 @@ struct SpotlightContentView: View {
             }
         }
         client.onError = { _ in
+            isStreaming = false
+            sseClient = nil
+            guard messages.indices.contains(assistantIndex) else { return }
             if messages[assistantIndex].content.isEmpty {
                 messages[assistantIndex].content = "Connection error."
             }
-            isStreaming = false
-            sseClient = nil
         }
         client.startStreaming(hostname: hostname,
                               agentSlug: agent.slug,
@@ -1378,8 +1388,10 @@ struct SpotlightContentView: View {
             do {
                 try await client.sendChat(text)
             } catch {
-                messages[assistantIndex].content =
-                    "kinclaw error: \(error.localizedDescription)"
+                if messages.indices.contains(assistantIndex) {
+                    messages[assistantIndex].content =
+                        "kinclaw error: \(error.localizedDescription)"
+                }
                 isStreaming = false
                 return
             }
@@ -1390,14 +1402,19 @@ struct SpotlightContentView: View {
                     if event.kind == .turnDone || event.kind == .error { break }
                 }
             } catch {
-                if messages[assistantIndex].content.isEmpty {
+                if messages.indices.contains(assistantIndex),
+                   messages[assistantIndex].content.isEmpty
+                {
                     messages[assistantIndex].content =
                         "stream error: \(error.localizedDescription)"
                 }
             }
             isStreaming = false
             ChatHistory.save(messages: messages, for: agent.slug)
-            if ttsEnabled, !messages[assistantIndex].content.isEmpty {
+            if ttsEnabled,
+               messages.indices.contains(assistantIndex),
+               !messages[assistantIndex].content.isEmpty
+            {
                 speaker.speak(messages[assistantIndex].content,
                               hostname: hostname) {}
             }
@@ -1435,6 +1452,15 @@ struct SpotlightContentView: View {
     }
 
     private func handleLocalEvent(_ event: KinClawEvent, assistantIndex: Int) {
+        // Stale-index guard. SSE events arrive async, so by the time
+        // a chunk lands the user might have cleared / switched chats
+        // and `assistantIndex` no longer points at a real row. A raw
+        // `messages[assistantIndex]` access in that state crashes
+        // with "Index out of range" (caught by the bug report at
+        // KinClawMac-2026-05-05-003035.ips). Drop the event quietly
+        // — there's no bubble to write to anyway.
+        guard messages.indices.contains(assistantIndex) else { return }
+
         switch event.kind {
         case .textDelta:
             if let t = event.text, !t.isEmpty {
