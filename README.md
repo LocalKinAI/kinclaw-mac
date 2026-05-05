@@ -116,34 +116,36 @@ Two stacks — KinClaw (engine + native shells, **all open**) vs LocalKin platfo
 
 ## Build from source
 
-Clone this repo plus the two helper kernels side-by-side, then `make run`:
+One repo, one command:
 
 ```bash
 brew install xcodegen
-cd ~/Documents/Workspace
 git clone https://github.com/LocalKinAI/kinclaw-mac
-git clone https://github.com/LocalKinAI/kinclaw
-git clone https://github.com/LocalKinAI/kincode
 cd kinclaw-mac
-make run                # kill old → build all → sign all → launch
+make run
 ```
 
-`make run` is the recommended dev loop. It:
+That's it. `make run` will:
 
-1. Kills any running `KinClawMac` / `kinclaw` / `kincode` processes
-2. Regenerates `KinClawMac.xcodeproj` from `project.yml` (XcodeGen)
-3. Builds + ad-hoc-codesigns `kinclaw` and `kincode` into `~/.localkin/bin/` with stable bundle IDs (`dev.localkin.kinclaw` / `dev.localkin.kincode`)
-4. Builds + signs `KinClawMac.app` with stable ID `dev.localkin.kinclawmac` and hardened runtime
-5. Launches the freshly signed `.app`
+1. **Bootstrap** — clone the helper kernels [`kinclaw`](https://github.com/LocalKinAI/kinclaw) and [`kincode`](https://github.com/LocalKinAI/kincode) as siblings if they aren't already on disk
+2. **Build** — run XcodeGen, then `xcodebuild` for the .app
+3. **Sign helpers** — `go build` + ad-hoc codesign `kinclaw` and `kincode` into `~/.localkin/bin/` with stable bundle IDs (`dev.localkin.kinclaw` / `dev.localkin.kincode`)
+4. **Sign app** — codesign `KinClawMac.app` with stable ID `dev.localkin.kinclawmac` (NO hardened runtime — would block dlopen of ad-hoc dylibs like libkinrec_writer)
+5. **Start helpers** — launch `kinclaw` on `:5001` and `kincode` on `:5002` as detached daemons (PPID=1, survive shell exit), wait for both ports to bind
+6. **Launch app** — `open KinClawMac.app`. Each supervisor finds its helper already running and adopts it cleanly (no spawn race)
 
-Stable bundle IDs are the whole point: macOS TCC keys Accessibility / Screen Recording grants by bundle identifier, so re-signing with the same ID survives rebuilds. No more re-authorizing on every code change.
+Skills, souls, and built-in tools come from the sibling repos directly — kinclaw and kincode discover them at runtime via `KINCLAW_SKILL_DIRS` / `KINCODE_SKILL_DIRS` env vars (set by the Makefile) and `~/.localkin/skill-sources.txt` (registered by each install.sh). No copy step, no stale duplicates — edit a SKILL.md in the dev repo, restart the helper, the change is live.
+
+Stable bundle IDs are the whole point of the codesign step: macOS TCC keys Accessibility / Screen Recording grants by bundle identifier + path, so re-signing with the same ID across rebuilds survives the user's "Allow" — no more re-authorizing on every code change.
 
 Other targets (run `make help` for the full list):
 
 | Target          | What it does |
 |-----------------|--------------|
-| `make sign`     | Build + sign everything, but don't launch |
+| `make bootstrap`| Just clone missing sibling repos — runs automatically as part of `make sign` and `make run` |
+| `make sign`     | Bootstrap + build + sign everything, but don't launch |
 | `make build`    | Just `xcodebuild`, no signing |
+| `make start-helpers` | Start `kinclaw` + `kincode` detached, without launching the GUI |
 | `make kill`     | Stop the app + helper subprocesses |
 | `make doctor`   | Show signing state + running processes — first thing to run when something looks off |
 | `make clean`    | Drop DerivedData + kill (forces a full rebuild next time) |
