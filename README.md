@@ -127,7 +127,13 @@ make run
 
 That's it. `make run` will:
 
-1. **Bootstrap** — clone the helper kernels [`kinclaw`](https://github.com/LocalKinAI/kinclaw) and [`kincode`](https://github.com/LocalKinAI/kincode) as siblings if they aren't already on disk
+1. **Bootstrap** — find or clone the helper kernels [`kinclaw`](https://github.com/LocalKinAI/kinclaw) and [`kincode`](https://github.com/LocalKinAI/kincode). Search order:
+   - `KINCLAW_REPO` / `KINCODE_REPO` env vars (explicit override)
+   - `../kinclaw` / `../kincode` (the documented sibling layout)
+   - `~/Documents/Workspace/<name>`, `~/code/<name>`, `~/dev/<name>`, `~/src/<name>` (common conventions)
+   - Last resort: `git clone` into `../<name>`
+
+   If you already have one or both checked out anywhere on this list, **bootstrap re-uses your existing copy — no second clone**. To override on a one-off basis: `KINCLAW_REPO=/my/path make run`.
 2. **Build** — run XcodeGen, then `xcodebuild` for the .app
 3. **Sign helpers** — `go build` + ad-hoc codesign `kinclaw` and `kincode` into `~/.localkin/bin/` with stable bundle IDs (`dev.localkin.kinclaw` / `dev.localkin.kincode`)
 4. **Sign app** — codesign `KinClawMac.app` with stable ID `dev.localkin.kinclawmac` (NO hardened runtime — would block dlopen of ad-hoc dylibs like libkinrec_writer)

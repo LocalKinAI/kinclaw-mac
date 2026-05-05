@@ -26,12 +26,31 @@ APP_BUNDLE_NAME    := $(SCHEME).app
 BUILD_PRODUCTS_DIR := $(shell find $(DERIVED_DATA) -maxdepth 5 -name '$(APP_BUNDLE_NAME)' -path '*/Build/Products/$(CONFIGURATION)/*' -print 2>/dev/null | head -1 | xargs -I{} dirname {})
 APP_PATH           := $(BUILD_PRODUCTS_DIR)/$(APP_BUNDLE_NAME)
 
-# Sibling repos for the helper binaries. `make bootstrap` (and `make
-# run`) auto-clones these from GitHub if they're not already next to
-# kinclaw-mac on disk — so a user who only pulled kinclaw-mac can
-# `make run` once and have the whole LocalKin family wired up.
-KINCLAW_REPO       := $(REPO_ROOT)/../kinclaw
-KINCODE_REPO       := $(REPO_ROOT)/../kincode
+# Sibling repos. Discovery order — first hit wins:
+#   1. KINCLAW_REPO / KINCODE_REPO env var (explicit override)
+#   2. ../kinclaw / ../kincode (sibling layout, the documented one)
+#   3. ~/Documents/Workspace/<name> (Jacky's layout)
+#   4. ~/code/<name> / ~/dev/<name> / ~/src/<name> (other common
+#      conventions)
+# If none found → `make bootstrap` clones into ../<name>.
+#
+# Override on a one-off basis: KINCLAW_REPO=/my/path make run
+KINCLAW_REPO       ?= $(shell \
+	for d in $(REPO_ROOT)/../kinclaw \
+	         $(HOME)/Documents/Workspace/kinclaw \
+	         $(HOME)/code/kinclaw \
+	         $(HOME)/dev/kinclaw \
+	         $(HOME)/src/kinclaw; do \
+	  if [ -d "$$d/.git" ]; then echo "$$d"; exit 0; fi; \
+	done; echo $(REPO_ROOT)/../kinclaw)
+KINCODE_REPO       ?= $(shell \
+	for d in $(REPO_ROOT)/../kincode \
+	         $(HOME)/Documents/Workspace/kincode \
+	         $(HOME)/code/kincode \
+	         $(HOME)/dev/kincode \
+	         $(HOME)/src/kincode; do \
+	  if [ -d "$$d/.git" ]; then echo "$$d"; exit 0; fi; \
+	done; echo $(REPO_ROOT)/../kincode)
 KINCLAW_REMOTE     := https://github.com/LocalKinAI/kinclaw.git
 KINCODE_REMOTE     := https://github.com/LocalKinAI/kincode.git
 
@@ -63,24 +82,25 @@ help: ## Show this help (default)
 	@printf "\nCommon flow: \033[33mmake run\033[0m  (kill → sign → launch)\n"
 
 .PHONY: bootstrap
-bootstrap: ## Clone missing sibling repos (kinclaw, kincode) — run once after first `git clone kinclaw-mac`
+bootstrap: ## Clone missing sibling repos (kinclaw, kincode) — only clones if not found anywhere
 	@# Goal: "git clone kinclaw-mac && cd kinclaw-mac && make run" should
-	@# yield a fully working app. This target ensures the helper kernels
-	@# are checked out at $(KINCLAW_REPO) / $(KINCODE_REPO) where the
-	@# rest of the Makefile expects to find them. Idempotent — already-
-	@# cloned repos are left untouched (use `git -C ../kinclaw pull` if
-	@# you want updates).
-	@if [ ! -d "$(KINCLAW_REPO)/.git" ]; then \
+	@# yield a fully working app. The KINCLAW_REPO / KINCODE_REPO
+	@# variables already searched common locations
+	@# (../kinclaw, ~/Documents/Workspace/kinclaw, ~/code/kinclaw, etc.)
+	@# — bootstrap just clones the *fallback* path if nothing was found.
+	@# So if you already have kinclaw at ~/code/kinclaw, this target
+	@# won't clone anything; it'll just confirm the existing checkout.
+	@if [ -d "$(KINCLAW_REPO)/.git" ]; then \
+	  echo "  ✓ kinclaw at $(KINCLAW_REPO)"; \
+	else \
 	  echo "==> Cloning kinclaw → $(KINCLAW_REPO) ..."; \
 	  git clone "$(KINCLAW_REMOTE)" "$(KINCLAW_REPO)"; \
-	else \
-	  echo "  ✓ kinclaw already at $(KINCLAW_REPO)"; \
 	fi
-	@if [ ! -d "$(KINCODE_REPO)/.git" ]; then \
+	@if [ -d "$(KINCODE_REPO)/.git" ]; then \
+	  echo "  ✓ kincode at $(KINCODE_REPO)"; \
+	else \
 	  echo "==> Cloning kincode → $(KINCODE_REPO) ..."; \
 	  git clone "$(KINCODE_REMOTE)" "$(KINCODE_REPO)"; \
-	else \
-	  echo "  ✓ kincode already at $(KINCODE_REPO)"; \
 	fi
 
 .PHONY: gen
