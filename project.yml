@@ -8,8 +8,8 @@ options:
 
 settings:
   base:
-    MARKETING_VERSION: "0.1.0"
-    CURRENT_PROJECT_VERSION: "1"
+    MARKETING_VERSION: "0.2.0"
+    CURRENT_PROJECT_VERSION: "2"
     SWIFT_VERSION: "5.9"
     DEVELOPMENT_TEAM: ""
 
@@ -37,8 +37,8 @@ targets:
       properties:
         CFBundleDisplayName: KinClaw Mac
         CFBundleName: KinClawMac
-        CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "1"
+        CFBundleShortVersionString: "0.2.0"
+        CFBundleVersion: "2"
         # Run as menubar-only app (no Dock icon)
         LSUIElement: true
         # Microphone permission (voice mode)

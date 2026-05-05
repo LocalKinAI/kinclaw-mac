@@ -4,48 +4,50 @@
 [![macOS 14+](https://img.shields.io/badge/macOS-14.0%2B-black.svg)](https://www.apple.com/macos/)
 [![Swift 5.9](https://img.shields.io/badge/Swift-5.9-orange.svg)](https://swift.org)
 
-> **Your AI dock. ⌘⌥K to summon any of 98 agents — or KinClaw to operate your Mac. Free. Open. Your data stays.**
+> **Your AI dock. ⌘⌥K to summon. Three modes: Chat any of 98 agents · Cowork with KinClaw on your screen · Code in any repo. Free. Open. Local-first.**
 
-Native macOS Spotlight-style shell that connects to **two agent sources**:
+Native macOS Spotlight-style shell for the LocalKin family. One floating window, one hotkey, **three distinct surfaces**:
 
-- 🦞 **Local KinClaw** (`localhost:5001`) — the [KinClaw](https://github.com/LocalKinAI/kinclaw) Go kernel running on your Mac, with full computer-use capability via 5 claws (screen / ui / input / record / web)
-- ☁️ **Cloud LocalKin** (`api.localkin.dev`) — 98 specialized agents across spiritual / TCM / language tutoring / research / etc.
+- 💬 **Chat** — 98 cloud agents (Selah / Heal / Core / Faith) via `api.localkin.dev`
+- 👁️ **Cowork** — local [KinClaw](https://github.com/LocalKinAI/kinclaw) kernel + 5 claws (screen / ui / input / record / web). Pilot operates your Mac.
+- 💻 **Code** — local [kincode](https://github.com/LocalKinAI/kincode) kernel, repo-aware coding agent. Pick a repo, kincode reads + edits + tests it.
 
-Same floating window, same hotkey, same voice mode. Switch between local + cloud agents in one summon.
+Same window, same agent picker shape, three different brains. Switch tabs to switch modes.
 
 ---
 
 ## Status
 
-✅ **v0.1.0** — shipping. M0 → M10 + 10 polish rounds + multi-session history landed.
+✅ **v0.2.0** — three-mode integration shipped. Chat / Cowork / Code all live, mode-scoped agent pools, per-repo Code sessions, full TCC permission handling for kinclaw subprocess.
 
-40+ commits since 2026-05-03. See [CHANGELOG](CHANGELOG.md) and [`docs/spotlight-shell-plan.md`](docs/spotlight-shell-plan.md) for the full milestones.
+See [CHANGELOG](CHANGELOG.md) for the day-by-day. This is dev-build territory — codesign + DMG land at M6 (blocked on $99 Apple Developer cert).
 
-This project forks heavily from [localkin-ios](https://github.com/LocalKinAI/localkin-ios) (1,756 lines of Swift, generation-tested). Mac-specific layer added ~340 lines (NSPanel floating window, global hotkey, menubar, KinClaw subprocess supervisor) plus all the polish since.
+Forked from [localkin-ios](https://github.com/LocalKinAI/localkin-ios) for the cloud chat layer; the Mac-specific code (NSPanel, global hotkey, menubar, dual subprocess supervision, mode switcher, code surface, diff viewer, screen feed) is new.
 
 ---
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────┐
-│  KinClaw Mac (kinclaw-mac.app)           │
-│                                          │
-│   ┌─────────────────────────────────┐    │
-│   │  AgentSource selector           │    │
-│   │  ◉ Local (KinClaw)              │    │
-│   │  ○ Cloud (LocalKin)             │    │
-│   └─────────────────────────────────┘    │
-│                                          │
-│   NSPanel (frameless, glass blur)        │
-│   ⌘⌥K to toggle, always-on-top           │
-│   Voice + streaming markdown             │
-└──────────────────────────────────────────┘
-              │             │
-              ▼             ▼
-   localhost:5001      api.localkin.dev/v1
-   (kinclaw serve)     (160+ cloud agents)
+                ┌─────────────────────────────────────────────┐
+                │  KinClaw Mac (kinclaw-mac.app)              │
+                │                                             │
+                │  [💬 Chat] [👁️ Cowork] [💻 Code]   ⚙        │  ← ModeBar (titlebar)
+                │  ───────────────────────────────────────    │
+                │  agent ▾   📚 history  🗑 clear  🔊 tts     │  ← per-mode picker
+                │  ───────────────────────────────────────    │
+                │  messages, tool calls, diff viewer          │
+                │  Message …                              ⏎    │  ← input
+                └─────────────────────────────────────────────┘
+                        │            │            │
+            ┌───────────┘            │            └────────────┐
+            ▼                        ▼                          ▼
+  api.localkin.dev/v1         localhost:5001              localhost:5002
+  (cloud agents)              (kinclaw kernel,            (kincode kernel,
+                               5 claws)                    coding agent)
 ```
+
+Two subprocess supervisors (`KinClawSupervisor` + `KinCodeSupervisor`) auto-spawn the local kernels at app launch. Both spawn through `DisclaimedProcess` (posix_spawn + `responsibility_spawnattrs_setdisclaim` SPI) so the subprocesses own their TCC identity — `kinclaw` granted Accessibility from your Terminal runs is automatically valid in the Mac app spawn too.
 
 ---
 
