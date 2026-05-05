@@ -100,7 +100,7 @@ final class KinClawSupervisor: ObservableObject {
 
     private let client: KinClawAPIClient
     private let port: Int
-    private var process: Process?
+    private var process: DisclaimedProcess?
     private var hasAttemptedRestart = false
 
     init(port: Int = 5001) {
@@ -143,16 +143,16 @@ final class KinClawSupervisor: ObservableObject {
             print("[KinClawSupervisor] souls dir: \(sd)")
         }
 
-        // 3. Spawn.
+        // 3. Spawn — DisclaimedProcess instead of Foundation.Process.
+        // The disclaim is critical: without it, TCC attributes
+        // kinclaw's AX/Screen-Recording/Automation calls back to
+        // KinClawMac.app's bundle id (which has no permissions),
+        // making the 5 claws unusable. With disclaim, kinclaw is
+        // its own TCC identity — same identity as when the user
+        // runs kinclaw from Terminal, so the existing user grant
+        // applies. Same problem Slack / Tailscale / Karabiner
+        // helper apps solve via the same SPI.
         state = .starting
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: install.binary)
-
-        // Working dir matters: dev-build kinclaw uses relative
-        // `souls/pilot.soul.md` paths in its default soul lookup.
-        if let wd = install.workingDir {
-            p.currentDirectoryURL = URL(fileURLWithPath: wd)
-        }
 
         var args = [
             "serve",
@@ -168,7 +168,6 @@ final class KinClawSupervisor: ObservableObject {
             args.append(contentsOf: ["-soul", soulPath])
             print("[KinClawSupervisor] soul: \(soulPath)")
         }
-        p.arguments = args
 
         // Inherit env, then layer our defaults. SEARXNG_ENDPOINT is
         // the big one — when running .app via Launch Services,
@@ -181,22 +180,21 @@ final class KinClawSupervisor: ObservableObject {
             // not running, kinclaw's web_search falls back to DDG.
             env["SEARXNG_ENDPOINT"] = "http://localhost:8080"
         }
-        p.environment = env
-
-        // Pipe stdout / stderr through to ours so the dev sees
-        // kinclaw's logs in Console / Terminal during development.
-        p.standardOutput = FileHandle.standardOutput
-        p.standardError = FileHandle.standardError
-        p.terminationHandler = { [weak self] proc in
-            Task { @MainActor in
-                self?.handleTermination(proc)
-            }
-        }
 
         do {
-            try p.run()
+            let p = try DisclaimedProcess.spawn(
+                executablePath: install.binary,
+                arguments: args,
+                environment: env,
+                currentDirectory: install.workingDir
+            )
+            p.terminationHandler = { [weak self] proc in
+                Task { @MainActor in
+                    self?.handleTermination(proc)
+                }
+            }
             process = p
-            print("[KinClawSupervisor] spawned kinclaw pid=\(p.processIdentifier) on :\(port)")
+            print("[KinClawSupervisor] spawned kinclaw pid=\(p.processIdentifier) on :\(port) (TCC disclaimed)")
         } catch {
             state = .crashed(message: "spawn failed: \(error.localizedDescription)")
             return
@@ -238,7 +236,7 @@ final class KinClawSupervisor: ObservableObject {
     // MARK: - Internals
 
     /// Called when the spawned kinclaw exits (clean or otherwise).
-    private func handleTermination(_ proc: Process) {
+    private func handleTermination(_ proc: DisclaimedProcess) {
         let exitCode = proc.terminationStatus
         let reason = proc.terminationReason
         print("[KinClawSupervisor] kinclaw exited code=\(exitCode) reason=\(reason.rawValue)")

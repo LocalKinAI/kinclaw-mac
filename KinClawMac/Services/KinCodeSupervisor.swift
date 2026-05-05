@@ -73,7 +73,7 @@ final class KinCodeSupervisor: ObservableObject {
     @Published private(set) var state: State = .stopped
 
     private let port: Int
-    private var process: Process?
+    private var process: DisclaimedProcess?
     private var hasAttemptedRestart = false
 
     init(port: Int = 5002) {
@@ -123,46 +123,39 @@ final class KinCodeSupervisor: ObservableObject {
         }
         print("[KinCodeSupervisor] binary: \(binary)")
 
-        // 3. Spawn.
+        // 3. Spawn — DisclaimedProcess so the kincode subprocess
+        // owns its own TCC identity (same disclaim trick as
+        // KinClawSupervisor). kincode itself doesn't currently use
+        // AX/screen-recording APIs, but going through the same code
+        // path keeps both supervisors symmetric and future-proofs
+        // for any kincode tool that DOES need OS permissions later
+        // (e.g. an MCP server it spawns).
         state = .starting
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: binary)
         var args = [
             "-serve",
             "-port", "\(port)",
         ]
-        // Pass the default soul so kincode runs with its proper
-        // persona + brain config (ollama / kimi-k2.5:cloud) rather
-        // than the bare `defaultSystemPrompt()` fallback. Mirrors how
-        // KinClawSupervisor passes -soul to kinclaw.
         if let soulPath = Self.defaultSoulPath() {
             args.append(contentsOf: ["-soul", soulPath])
             print("[KinCodeSupervisor] soul: \(soulPath)")
         } else {
             print("[KinCodeSupervisor] no soul found — kincode will use built-in default prompt")
         }
-        p.arguments = args
-
-        // Inherit env. kincode reads ANTHROPIC_API_KEY / OPENAI_API_KEY
-        // from env on first use; if neither is set the agent will
-        // fall back to OAuth (kincode -login flow). The ".app via
-        // Launch Services" env-not-propagated headache that bites
-        // SEARXNG for kinclaw applies here too — but the OAuth fallback
-        // means we don't need to inject keys ourselves.
-        p.environment = ProcessInfo.processInfo.environment
-
-        p.standardOutput = FileHandle.standardOutput
-        p.standardError = FileHandle.standardError
-        p.terminationHandler = { [weak self] proc in
-            Task { @MainActor in
-                self?.handleTermination(proc)
-            }
-        }
 
         do {
-            try p.run()
+            let p = try DisclaimedProcess.spawn(
+                executablePath: binary,
+                arguments: args,
+                environment: ProcessInfo.processInfo.environment,
+                currentDirectory: nil
+            )
+            p.terminationHandler = { [weak self] proc in
+                Task { @MainActor in
+                    self?.handleTermination(proc)
+                }
+            }
             process = p
-            print("[KinCodeSupervisor] spawned kincode pid=\(p.processIdentifier) on :\(port)")
+            print("[KinCodeSupervisor] spawned kincode pid=\(p.processIdentifier) on :\(port) (TCC disclaimed)")
         } catch {
             state = .crashed(message: "spawn failed: \(error.localizedDescription)")
             return
@@ -195,7 +188,7 @@ final class KinCodeSupervisor: ObservableObject {
 
     // MARK: - Internals
 
-    private func handleTermination(_ proc: Process) {
+    private func handleTermination(_ proc: DisclaimedProcess) {
         let exitCode = proc.terminationStatus
         let reason = proc.terminationReason
         print("[KinCodeSupervisor] kincode exited code=\(exitCode) reason=\(reason.rawValue)")
