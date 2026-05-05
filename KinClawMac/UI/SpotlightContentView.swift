@@ -410,7 +410,8 @@ struct SpotlightContentView: View {
             .help(ttsEnabled ? "Speech on" : "Speech off")
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.top, 2)
+        .padding(.bottom, 4)
     }
 
     // MARK: - Agent picker (Chat / Cowork only)
@@ -1081,11 +1082,23 @@ struct SpotlightContentView: View {
     }
 
     private func handleAgentChange() {
-        guard let agent = selectedAgent else { return }
-
-        // Save the outgoing session before switching agents (otherwise
-        // the messages we just had get dropped on the floor).
+        // Always save the outgoing session first — otherwise the
+        // messages we just had get dropped on the floor when the
+        // user swaps agents (or modes, since mode-swap auto-swaps
+        // selectedAgent under the hood).
         saveCurrentSession()
+
+        guard let agent = selectedAgent else {
+            // No agent — typical when switching to Cowork before the
+            // kinclaw souls have loaded, or to Code mode (which has
+            // no agent selection). Clear the surface to a fresh
+            // state so we don't show stale Chat content under a
+            // Cowork tab while the catalog catches up.
+            currentSessionID = UUID()
+            sessionTitle = "New chat"
+            messages = []
+            return
+        }
 
         // Load the most-recent session for the new agent (or empty
         // if they've never chatted with this one).

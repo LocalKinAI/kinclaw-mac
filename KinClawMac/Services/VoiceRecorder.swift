@@ -194,16 +194,36 @@ class VoiceRecorder: NSObject, ObservableObject {
         return await localSTT(audioURL: audioURL)
     }
 
-    /// Server STT via SenseVoice
+    /// Server STT — local agents hit SenseVoice directly, cloud
+    /// agents go through the LocalKin gateway. Mirrors the TTS fix
+    /// in SpeechSynthesizer: the `localhost-kinclaw` marker means
+    /// route to the local SenseVoice server (default :8000), not
+    /// the cloud gateway.
     private func serverSTT(audioURL: URL, hostname: String) async -> String? {
         do {
-            let url = URL(string: "https://\(hostname)/v1/stt")!
+            let isLocal = hostname == "localhost-kinclaw"
+                || hostname.hasPrefix("localhost")
+            let url: URL
+            if isLocal {
+                let prefBase = UserDefaults.standard.string(
+                    forKey: "kinclaw.backend.stt") ?? ""
+                let base = prefBase.isEmpty
+                    ? "http://localhost:8000"
+                    : prefBase.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                url = URL(string: "\(base)/transcribe")!
+            } else {
+                url = URL(string: "https://\(hostname)/v1/stt")!
+            }
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.timeoutInterval = 30
 
-            let token = await TokenManager.shared.token(for: hostname)
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            // Cloud needs Bearer auth; local SenseVoice on loopback
+            // doesn't (no auth layer).
+            if !isLocal {
+                let token = await TokenManager.shared.token(for: hostname)
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
 
             let boundary = UUID().uuidString
             request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")

@@ -113,11 +113,12 @@ struct CodePane: View {
 
     // MARK: - Repo bar
 
+    /// Repo picker + utility buttons. Visually mirrors the agentBar
+    /// in Chat / Cowork modes so the three tabs read as one product:
+    /// same height, same paddings, status indicator on the right
+    /// instead of inline error text.
     private var repoBar: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "folder")
-                .font(.system(size: 11))
-                .foregroundColor(.secondary)
+        HStack(spacing: 10) {
             Menu {
                 Button("Pick repo…") { pickRepo() }
                 if !recents.isEmpty {
@@ -130,6 +131,9 @@ struct CodePane: View {
                 }
             } label: {
                 HStack(spacing: 4) {
+                    Image(systemName: "folder")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
                     Text(repoLabel)
                         .font(.system(size: 11, weight: .medium))
                         .lineLimit(1)
@@ -142,34 +146,39 @@ struct CodePane: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
+            .frame(maxWidth: .infinity, alignment: .leading)
 
-            Spacer()
+            // Status dot — green when SSE is live, orange when
+            // reconnecting. Replaces the prominent "kincode unreachable
+            // — retrying" inline text that competed with the repo name
+            // for visual weight.
+            Circle()
+                .fill(connectError == nil
+                      ? Color.green.opacity(0.7)
+                      : Color.orange.opacity(0.7))
+                .frame(width: 6, height: 6)
+                .help(connectError ?? "kincode :5002 connected")
 
-            if let err = connectError {
-                Text(err)
-                    .font(.system(size: 10))
-                    .foregroundColor(.orange)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+            // Fresh session — saves current + starts new id.
+            // Always rendered for visual symmetry with Chat / Cowork's
+            // 3-button right cluster (visible mass even with empty
+            // history); disabled when there's nothing to save.
+            Button {
+                startNewSession()
+            } label: {
+                Image(systemName: "square.and.pencil")
+                    .font(.system(size: 12))
+                    .foregroundColor(messages.isEmpty
+                                     ? .secondary.opacity(0.4)
+                                     : .secondary)
             }
-
-            // Fresh session — persists the current one and starts a
-            // new id. Visible only when there's something to discard
-            // (avoid cluttering the empty state).
-            if !messages.isEmpty {
-                Button {
-                    startNewSession()
-                } label: {
-                    Image(systemName: "square.and.pencil")
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("New session (saves current)")
-            }
+            .buttonStyle(.plain)
+            .disabled(messages.isEmpty)
+            .help("New session (saves current)")
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.top, 2)
+        .padding(.bottom, 4)
     }
 
     // MARK: - Messages
