@@ -782,6 +782,21 @@ struct SpotlightContentView: View {
         }
     }
 
+    /// Decode the `todos` JSON string from a kinclaw `todo_write`
+    /// tool_call's params into structured TodoItem rows. Returns
+    /// nil on missing/malformed payload — caller falls back to the
+    /// generic ToolCallView so a bad message doesn't break the
+    /// chat surface. Mirrors CodePane.parseTodos.
+    private func parseCoworkTodos(from params: [String: String])
+        -> [TodoItem]?
+    {
+        guard let json = params["todos"],
+              let data = json.data(using: .utf8) else {
+            return nil
+        }
+        return try? JSONDecoder().decode([TodoItem].self, from: data)
+    }
+
     /// Probe kinclaw's :5001 server. Two outputs:
     ///
     ///   1. coworkConnectError → nil/string drives the green/orange
@@ -1374,7 +1389,20 @@ struct SpotlightContentView: View {
                 streamingMarkdownText(msg, showCursor: showCursor)
             }
             ForEach(msg.toolCalls) { call in
-                ToolCallView(call: call)
+                // todo_write is its own surface — render as inline
+                // checklist (full-width, no fold) instead of the
+                // generic ToolCallView pill. Mirrors Code mode's
+                // special case in CodePane (line ~470). Cowork is
+                // where this matters MOST: Pilot's multi-step plan
+                // ("open Numbers, click A1, type 42, screenshot")
+                // is invisible without it — user has to trust or
+                // ⌘. abort blindly.
+                if call.name == "todo_write",
+                   let todos = parseCoworkTodos(from: call.params) {
+                    TodoChecklistView(items: todos)
+                } else {
+                    ToolCallView(call: call)
+                }
             }
             ForEach(msg.attachments) { attachment in
                 AttachmentView(attachment: attachment)
