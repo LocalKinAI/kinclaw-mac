@@ -78,6 +78,16 @@ struct SpotlightContentView: View {
     @AppStorage("kinclaw.chat.lastAgent") private var chatLastAgentSlug: String = ""
     @AppStorage("kinclaw.cowork.lastSoul") private var coworkLastSoulSlug: String = ""
 
+    // Cowork brain state — populated from kinclaw's hello event
+    // (params.brain = "ollama/kimi-k2.5:cloud") and refreshed on
+    // brain_switched events. Distinct from the soul: same Pilot
+    // soul, different brain. Brain dropdown next to the agent
+    // picker drives POST /api/brain to swap live without changing
+    // soul/skills.
+    @State private var coworkActiveProvider: String = ""
+    @State private var coworkActiveModel: String = ""
+    @State private var coworkBrainPresets: [BrainPreset] = BrainPreset.fallbackPresets
+
     // Transports.
     @State private var sseClient: SSEClient?
     @State private var localStreamTask: Task<Void, Never>?
@@ -361,6 +371,15 @@ struct SpotlightContentView: View {
             agentMenu
                 .frame(maxWidth: .infinity, alignment: .leading)
 
+            // Cowork-only: brain dropdown next to the soul picker.
+            // Soul (Pilot/Coder/...) and brain (kimi/claude/qwen) are
+            // independent — pick Pilot then swap brain without
+            // reloading. Mirrors Code mode's brainMenu but hits
+            // kinclaw on :5001 instead of kincode on :5002.
+            if mode == .cowork {
+                coworkBrainMenu
+            }
+
             // Session history (📚) — popover with all saved chats
             // for the active agent + "+ New chat" + delete.
             Button {
@@ -539,6 +558,111 @@ struct SpotlightContentView: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
+    }
+
+    /// Cowork brain dropdown. Compact label "🧠 <model>" with a
+    /// chevron; clicking opens a list of presets pulled from the
+    /// user's local Ollama plus a fallback static list. Selection
+    /// POSTs /api/brain to kinclaw on :5001 — same soul (Pilot etc.
+    /// stays Pilot), different brain. State updates come back via
+    /// SSE hello / brain_switched events.
+    private var coworkBrainMenu: some View {
+        Menu {
+            if coworkBrainPresets.isEmpty {
+                Text("Ollama not reachable on :11434")
+                    .foregroundColor(.secondary)
+            } else {
+                ForEach(coworkBrainPresets) { preset in
+                    Button {
+                        switchCoworkBrain(to: preset)
+                    } label: {
+                        let isCurrent = (preset.provider == coworkActiveProvider
+                                         && preset.model == coworkActiveModel)
+                        HStack {
+                            Text(preset.label)
+                            Spacer()
+                            if let tag = preset.tag {
+                                Text(tag)
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                            if isCurrent {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            }
+            Divider()
+            Button("Reload from Ollama") {
+                Task { await reloadCoworkBrainPresets() }
+            }
+            Text("Soul stays the same; only brain swaps")
+                .foregroundColor(.secondary)
+        } label: {
+            HStack(spacing: 4) {
+                Text("🧠")
+                    .font(.system(size: 12))
+                Text(coworkBrainLabel)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(coworkActiveModel.isEmpty
+                                     ? .secondary
+                                     : .primary.opacity(0.85))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(.secondary)
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Switch brain for Cowork (soul stays the same)")
+    }
+
+    private var coworkBrainLabel: String {
+        if coworkActiveModel.isEmpty { return "loading…" }
+        if let preset = BrainPreset.find(provider: coworkActiveProvider,
+                                          model: coworkActiveModel,
+                                          in: coworkBrainPresets) {
+            return preset.label
+        }
+        return coworkActiveModel
+    }
+
+    /// POST /api/brain to kinclaw (port 5001). Optimistic — the
+    /// dropdown stays on the new label; if the server refuses (turn
+    /// in flight, missing API key) we surface the error and the
+    /// next SSE hello will reset us back to truth.
+    private func switchCoworkBrain(to preset: BrainPreset) {
+        Task {
+            do {
+                try await KinClawAPIClient.default.switchBrain(
+                    provider: preset.provider,
+                    model: preset.model)
+                // Optimistic local update — SSE brain_switched will
+                // confirm authoritatively in ~10ms.
+                await MainActor.run {
+                    coworkActiveProvider = preset.provider
+                    coworkActiveModel = preset.model
+                }
+            } catch {
+                // Surface to chat as an error bubble — same path
+                // sendLocal uses for kinclaw connectivity errors.
+                await MainActor.run {
+                    let err = ChatMessage.assistant("brain switch failed — \(error.localizedDescription)")
+                    messages.append(err)
+                }
+            }
+        }
+    }
+
+    private func reloadCoworkBrainPresets() async {
+        let fresh = await OllamaCatalog.loadPresets()
+        if !fresh.isEmpty {
+            await MainActor.run { coworkBrainPresets = fresh }
+        }
     }
 
     private func agentMenuRow(_ agent: Agent) -> some View {
@@ -1542,8 +1666,20 @@ struct SpotlightContentView: View {
                     Attachment(remoteURL: parsed))
                 scrollTrigger += 1
             }
-        case .hello, .userMessage, .turnDone,
-             .soulSwitched, .planMode, .none:
+        case .hello, .brainSwitched, .soulSwitched:
+            // kinclaw publishes the active brain in params.brain as
+            // "<provider>/<model>" on every hello (sent on connect)
+            // and on brain_switched / soul_switched events. Pull
+            // it into local state so the Cowork brain dropdown
+            // shows the truth without needing to poll.
+            if let brain = event.params?["brain"] {
+                let parts = brain.split(separator: "/", maxSplits: 1).map(String.init)
+                if parts.count == 2 {
+                    coworkActiveProvider = parts[0]
+                    coworkActiveModel = parts[1]
+                }
+            }
+        case .userMessage, .turnDone, .planMode, .none:
             // plan_mode is Code-mode-only; Spotlight ignores it.
             break
         }

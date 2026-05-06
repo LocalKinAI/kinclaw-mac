@@ -60,6 +60,7 @@ extension KinClawEvent {
         case screenFrame   = "screen_frame"
         case recordDone    = "record_done"
         case soulSwitched  = "soul_switched"
+        case brainSwitched = "brain_switched"
         case turnDone      = "turn_done"
         case planMode      = "plan_mode"
         case error

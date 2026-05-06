@@ -590,15 +590,10 @@ struct ChatView: View {
             messages[assistantIndex].content += "[error: \(msg)]"
             scrollTrigger += 1
         case .hello, .userMessage, .turnDone,
-             .screenFrame, .recordDone, .soulSwitched, .planMode, .none:
-            // hello/user_message: server-side echoes we already
-            //   represent locally; ignore.
-            // turn_done: stream-loop will exit after this returns.
-            // screen_frame / record_done: no UI yet (M6.5).
-            // soul_switched: ChatView's onAppear already issued the
-            //   switch; nothing to do mid-turn.
-            // plan_mode: only Code mode honors plan mode; Chat mode
-            //   ignores the broadcast.
+             .screenFrame, .recordDone, .soulSwitched, .brainSwitched,
+             .planMode, .none:
+            // brain_switched: Cowork-mode-only; Chat ignores it.
+            // (Other branches: see above comments.)
             break
         }
     }
