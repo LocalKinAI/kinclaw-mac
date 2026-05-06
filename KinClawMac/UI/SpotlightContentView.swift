@@ -554,6 +554,14 @@ struct SpotlightContentView: View {
         .padding(.horizontal, 12)
         .padding(.top, 2)
         .padding(.bottom, 4)
+        // Disable implicit animation on mode change. Without this,
+        // the conditional items (coworkBrainMenu / coworkConnectError
+        // dot — Cowork-only; Stop button — streaming-only; clear —
+        // messages-only) animate their appearance / removal between
+        // Chat ↔ Cowork, producing the agentBar's items "搜索什么"
+        // shifting around. Identity-transition + nil-animation makes
+        // mode switch feel instant in the bar.
+        .animation(nil, value: mode)
     }
 
     // MARK: - Agent picker (Chat / Cowork only)
@@ -888,7 +896,14 @@ struct SpotlightContentView: View {
                 // Soft fade for the welcome → messages transition.
                 // Ties together the welcome-card removal + first
                 // bubble append so they animate as one event.
+                //
+                // Suppress this fade during mode switches —
+                // `messages = []` runs every time the user goes
+                // Chat ↔ Cowork, which without this guard fires
+                // the fade-out as part of the tab transition,
+                // producing the visible "page is searching" jump.
                 .animation(.easeInOut(duration: 0.18), value: messages.count)
+                .animation(nil, value: mode)
             }
             // Two scroll triggers, two distinct strategies:
             //
