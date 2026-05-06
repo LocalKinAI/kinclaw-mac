@@ -88,6 +88,12 @@ struct SpotlightContentView: View {
     @State private var coworkActiveModel: String = ""
     @State private var coworkBrainPresets: [BrainPreset] = BrainPreset.fallbackPresets
 
+    /// Connection error string for kinclaw's :5001 server. Nil = OK,
+    /// non-nil = the green dot in agentBar flips orange and the
+    /// tooltip shows the reason. Refreshed on appear, on stream
+    /// errors, and after a brain switch.
+    @State private var coworkConnectError: String?
+
     // Transports.
     @State private var sseClient: SSEClient?
     @State private var localStreamTask: Task<Void, Never>?
@@ -235,7 +241,18 @@ struct SpotlightContentView: View {
         .onDrop(of: [.fileURL], isTargeted: $isDropTarget) { providers in
             handleDrop(providers: providers)
         }
-        .onAppear { Task { await loadAgents() } }
+        .onAppear {
+            Task { await loadAgents() }
+            // Auto-populate the Cowork brain dropdown from the user's
+            // actual Ollama install — same UX Code mode has. Without
+            // this the dropdown shows only fallback presets until the
+            // user manually clicks "Reload from Ollama".
+            Task { await reloadCoworkBrainPresets() }
+            // Probe kinclaw's :5001 once on appear so the green dot
+            // reflects truth from the start (vs waiting for the next
+            // hello/error event to arrive).
+            Task { await refreshCoworkConnection() }
+        }
         .onChange(of: selectedAgent?.slug) { _, slug in
             handleAgentChange()
             persistAgentForCurrentMode(slug: slug)
@@ -417,6 +434,21 @@ struct SpotlightContentView: View {
                 }
             }
 
+            // Connection dot — Cowork-only since the :5001 server
+            // is what makes Cowork tick. Green = kinclaw responding,
+            // orange = unreachable (helper crashed, supervisor
+            // recovering, port collision). Replaces the loud
+            // "kinclaw not reachable" inline error text that used
+            // to compete with the agent name for visual weight.
+            if mode == .cowork {
+                Circle()
+                    .fill(coworkConnectError == nil
+                          ? Color.green.opacity(0.7)
+                          : Color.orange.opacity(0.7))
+                    .frame(width: 6, height: 6)
+                    .help(coworkConnectError ?? "kinclaw :5001 connected")
+            }
+
             // Stop button — interrupts the in-flight turn via
             // DELETE /api/chat (kinclaw) or task cancel (cloud SSE
             // through SSEClient). Only visible while a turn is
@@ -436,6 +468,25 @@ struct SpotlightContentView: View {
                 .help("Stop the agent (\u{2318}.)")
                 .keyboardShortcut(".", modifiers: .command)
             }
+
+            // New session — saves current to disk + starts a fresh
+            // session id. For Cowork, this also re-loads the active
+            // soul on the server side so kinclaw's history buffer
+            // resets (otherwise a stuck error message survives).
+            // Same icon Code uses; dimmed when the chat is empty
+            // to discourage the redundant click.
+            Button {
+                startNewSession()
+            } label: {
+                Image(systemName: "square.and.pencil")
+                    .font(.system(size: 12))
+                    .foregroundColor(messages.isEmpty
+                                     ? .secondary.opacity(0.4)
+                                     : .secondary)
+            }
+            .buttonStyle(.plain)
+            .disabled(messages.isEmpty)
+            .help("New session (saves current + clears agent memory)")
 
             if !messages.isEmpty {
                 Button {
@@ -682,6 +733,21 @@ struct SpotlightContentView: View {
         let fresh = await OllamaCatalog.loadPresets()
         if !fresh.isEmpty {
             await MainActor.run { coworkBrainPresets = fresh }
+        }
+    }
+
+    /// Probe kinclaw's :5001 server. Sets coworkConnectError nil on
+    /// success (green dot), descriptive string on failure (orange
+    /// dot, tooltip shows reason). Cheap — same /api/souls fetch
+    /// used by KinClawSupervisor's adoption ping.
+    fileprivate func refreshCoworkConnection() async {
+        do {
+            _ = try await KinClawAPIClient.default.fetchSouls()
+            await MainActor.run { coworkConnectError = nil }
+        } catch {
+            await MainActor.run {
+                coworkConnectError = "kinclaw :5001 unreachable — is the helper running?"
+            }
         }
     }
 
@@ -1552,11 +1618,18 @@ struct SpotlightContentView: View {
             let stream = client.eventStream()
             do {
                 try await client.sendChat(text)
+                // Successful POST = supervisor + kinclaw both alive.
+                // Clear any stale connection-error so the green dot
+                // updates without waiting for the next probe.
+                coworkConnectError = nil
             } catch {
                 if messages.indices.contains(assistantIndex) {
                     messages[assistantIndex].content =
                         "kinclaw error: \(error.localizedDescription)"
                 }
+                // Surface to the dot too — orange + descriptive
+                // tooltip beats the user re-reading the bubble.
+                coworkConnectError = error.localizedDescription
                 isStreaming = false
                 return
             }
