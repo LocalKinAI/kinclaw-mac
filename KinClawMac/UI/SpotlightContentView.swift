@@ -104,6 +104,19 @@ struct SpotlightContentView: View {
     /// the empty-state entry.
     @State private var chatBrowsing: Bool = true
 
+    /// Which gallery sections are expanded. Core is open by default
+    /// (the LocalKin flagship — most users start here); Faith / Heal
+    /// / Other start collapsed so an 80+ master gallery doesn't
+    /// dump everything at once. Tap a section header to toggle.
+    /// Persisted in-session only — defaults reset every cold open
+    /// to keep the gallery scannable.
+    ///
+    /// Side benefit: collapsing trims the LazyVGrid cell count from
+    /// ~80 cards to ~10 (Core only), which cuts mode-switch flicker
+    /// — Chat ↔ Cowork transition was reflowing all sections every
+    /// re-render.
+    @State private var expandedGallerySections: Set<String> = ["core"]
+
     // Transports.
     @State private var sseClient: SSEClient?
     @State private var localStreamTask: Task<Void, Never>?
@@ -276,18 +289,26 @@ struct SpotlightContentView: View {
             // selectedAgent change → handleAgentChange path
             // runs on the *next* layout cycle. Tab switching
             // should feel instant.
-            saveCurrentSession()
-            messages = []
-            currentSessionID = UUID()
-            sessionTitle = "New chat"
-            // Re-enter browse mode whenever we land back in Chat
-            // tab — the gallery is the entry surface, not the
-            // last welcomeCard. Tab-switch behavior matches "open
-            // app fresh" behavior.
-            if newMode == .chat {
-                chatBrowsing = true
+            //
+            // Wrap the cascade in a no-animation transaction so
+            // the chained state changes (messages, sessionID,
+            // selectedAgent, brain dropdown showing/hiding) all
+            // commit in a single frame. Without this, each state
+            // change triggers the chatBody's `.animation(value:
+            // messages.count)` independently — producing the
+            // "不停的跳动" flicker as gallery → empty welcomeCard →
+            // agent's saved messages animate in three separate
+            // frames.
+            withTransaction(Transaction(animation: nil)) {
+                saveCurrentSession()
+                messages = []
+                currentSessionID = UUID()
+                sessionTitle = "New chat"
+                if newMode == .chat {
+                    chatBrowsing = true
+                }
+                applyAgentForMode(newMode)
             }
-            applyAgentForMode(newMode)
         }
         .onDisappear {
             sseClient?.cancel()
@@ -957,24 +978,28 @@ struct SpotlightContentView: View {
             // category. Empty groups don't render.
             if !coreAgents.isEmpty {
                 gallerySection(
+                    key: "core",
                     title: "⭐  Core",
                     subtitle: "LocalKin flagship agents",
                     agents: coreAgents)
             }
             if !spiritualAgents.isEmpty {
                 gallerySection(
+                    key: "spiritual",
                     title: "📜  Faith / Selah",
                     subtitle: "44 spiritual masters · 1900 years",
                     agents: spiritualAgents)
             }
             if !tcmAgents.isEmpty {
                 gallerySection(
+                    key: "tcm",
                     title: "🌿  Heal / 岐黄",
                     subtitle: "Traditional Chinese medicine masters",
                     agents: tcmAgents)
             }
             if !otherCloudAgents.isEmpty {
                 gallerySection(
+                    key: "other",
                     title: "🌐  Other",
                     subtitle: "Cloud agents",
                     agents: otherCloudAgents)
@@ -986,45 +1011,77 @@ struct SpotlightContentView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// One category band: title row + 2-column vertical grid of
-    /// agent cards. Vertical layout (was horizontal scroll) so the
-    /// whole 44-Selah-master catalog reads naturally as one page —
-    /// user scrolls down, sees everything, no hidden cards offscreen
-    /// in a horizontal lane.
+    /// One category band: collapsible title row + 2-column vertical
+    /// grid of agent cards. Header is always visible (chevron +
+    /// title + count + subtitle); body (the grid) renders only when
+    /// `expandedGallerySections` contains the key.
+    ///
+    /// Why collapsible: an 80-master flat dump is overwhelming AND
+    /// expensive to render (each Chat ↔ Cowork mode-switch reflows
+    /// all 80 cards, producing the "页面不停跳动" flicker). Default-
+    /// open Core (~10 cards) gets the user started; they expand
+    /// Faith / Heal / Other on demand.
     @ViewBuilder
-    private func gallerySection(title: String, subtitle: String,
+    private func gallerySection(key: String, title: String,
+                                 subtitle: String,
                                  agents: [Agent]) -> some View {
+        let isExpanded = expandedGallerySections.contains(key)
         VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(title)
-                    .font(.system(size: 13, weight: .semibold))
-                Text("(\(agents.count))")
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary)
-                Spacer()
-                Text(subtitle)
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary.opacity(0.7))
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, 4)
-
-            // 2-column LazyVGrid keeps the panel wide enough for
-            // bilingual names + 1-line caption per card while
-            // halving the scroll distance vs single-column. 8pt
-            // gutter + 4pt edge inset matches the section header.
-            LazyVGrid(
-                columns: [
-                    GridItem(.flexible(), spacing: 8),
-                    GridItem(.flexible(), spacing: 8),
-                ],
-                spacing: 8
-            ) {
-                ForEach(agents) { agent in
-                    galleryCard(agent)
+            // Header is the toggle. Whole row tappable so users
+            // don't have to aim at a tiny chevron — same Disclosure
+            // ergonomics as macOS list sections.
+            Button {
+                withAnimation(.easeOut(duration: 0.15)) {
+                    if isExpanded {
+                        expandedGallerySections.remove(key)
+                    } else {
+                        expandedGallerySections.insert(key)
+                    }
                 }
+            } label: {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Image(systemName: isExpanded
+                          ? "chevron.down"
+                          : "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundColor(.secondary)
+                        .frame(width: 10)
+                    Text(title)
+                        .font(.system(size: 13, weight: .semibold))
+                    Text("(\(agents.count))")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Text(subtitle)
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary.opacity(0.7))
+                        .lineLimit(1)
+                }
+                .padding(.horizontal, 4)
+                .padding(.vertical, 4)
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 4)
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                // 2-column LazyVGrid keeps the panel wide enough
+                // for bilingual names + 1-line caption per card
+                // while halving the scroll distance vs single-
+                // column. Only renders when the section is
+                // expanded — collapsed sections cost ~0.
+                LazyVGrid(
+                    columns: [
+                        GridItem(.flexible(), spacing: 8),
+                        GridItem(.flexible(), spacing: 8),
+                    ],
+                    spacing: 8
+                ) {
+                    ForEach(agents) { agent in
+                        galleryCard(agent)
+                    }
+                }
+                .padding(.horizontal, 4)
+            }
         }
     }
 
