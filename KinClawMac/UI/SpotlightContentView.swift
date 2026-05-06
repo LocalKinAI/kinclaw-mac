@@ -417,6 +417,26 @@ struct SpotlightContentView: View {
                 }
             }
 
+            // Stop button — interrupts the in-flight turn via
+            // DELETE /api/chat (kinclaw) or task cancel (cloud SSE
+            // through SSEClient). Only visible while a turn is
+            // streaming. Mirrors Code mode's Stop in CodePane —
+            // same icon, same Cmd+. shortcut. Critical for Cowork:
+            // a misbehaving Pilot trying 5-7 GUI clicks needs an
+            // emergency stop, not "wait for the next AX timeout".
+            if isStreaming {
+                Button {
+                    interruptTurn()
+                } label: {
+                    Image(systemName: "stop.circle")
+                        .font(.system(size: 13))
+                        .foregroundColor(.red.opacity(0.8))
+                }
+                .buttonStyle(.plain)
+                .help("Stop the agent (\u{2318}.)")
+                .keyboardShortcut(".", modifiers: .command)
+            }
+
             if !messages.isEmpty {
                 Button {
                     clearChat()
@@ -1150,6 +1170,27 @@ struct SpotlightContentView: View {
     private func openSettings() {
         NSApp.activate(ignoringOtherApps: true)
         NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+    }
+
+    /// Cancel the in-flight turn. Both transports get the kill
+    /// signal — sseClient for cloud chat, localStreamTask + DELETE
+    /// /api/chat for kinclaw. Optimistic: we flip isStreaming
+    /// false locally before the server confirms (cancellation can
+    /// take a beat to propagate through the brain HTTP timeout)
+    /// so the input bar unlocks immediately.
+    private func interruptTurn() {
+        // Cloud: SSEClient cancels the URLSession data task.
+        sseClient?.cancel()
+        sseClient = nil
+        // Local kinclaw: cancel the Swift Task driving the SSE
+        // stream + DELETE the server's in-flight turn so kinclaw
+        // stops feeding tokens.
+        localStreamTask?.cancel()
+        localStreamTask = nil
+        Task {
+            try? await KinClawAPIClient.default.cancelTurn()
+        }
+        isStreaming = false
     }
 
     private func clearChat() {
