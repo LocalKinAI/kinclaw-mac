@@ -791,11 +791,19 @@ struct SpotlightContentView: View {
                 // at .bottom rather than a 1pt invisible spacer at
                 // .bottom.)
                 LazyVStack(alignment: .leading, spacing: 14) {
-                    if messages.isEmpty && selectedAgent != nil {
+                    if messages.isEmpty && loadError != nil {
+                        errorState
+                    } else if messages.isEmpty && mode == .chat
+                              && selectedAgent == nil {
+                        // No agent picked + Chat mode: show the
+                        // gallery so users browse who's available
+                        // (44 spiritual masters / TCM doctors / Core
+                        // agents) instead of staring at a blank
+                        // panel + needing to know about the dropdown.
+                        chatGallery
+                    } else if messages.isEmpty && selectedAgent != nil {
                         welcomeCard
                             .padding(.top, 40)
-                    } else if messages.isEmpty && loadError != nil {
-                        errorState
                     } else {
                         ForEach(messages) { msg in
                             messageBubble(msg)
@@ -865,8 +873,187 @@ struct SpotlightContentView: View {
         }
     }
 
+    /// Gallery / "agent shop" — Chat tab's discovery surface. When
+    /// no agent is selected and the panel is empty, show the user
+    /// what they can talk with instead of leaving them staring at
+    /// blank space + dropdown they may not notice.
+    ///
+    /// Order matches user request: Core first (the LocalKin family
+    /// flagship), then spiritual (44 Selah masters), then TCM
+    /// (岐黄), then any other cloud agents. Local KinClaw souls are
+    /// Cowork's territory and don't appear here.
+    ///
+    /// Tapping an agent card sets selectedAgent → triggers the
+    /// existing welcomeCard for that agent (suggestion chips +
+    /// quick-start) → user can dive into chat.
+    private var chatGallery: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            // Hero — keep tight; the panel is 380pt wide and we
+            // need most of the vertical for the actual grid.
+            VStack(alignment: .leading, spacing: 4) {
+                Text("👋 选个对象聊")
+                    .font(.system(size: 20, weight: .semibold))
+                Text("Pick someone to talk with")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+                if isLoadingAgents {
+                    Text("loading agents…")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary.opacity(0.7))
+                        .padding(.top, 2)
+                } else if let reason = cloudErrorReason {
+                    Text(reason)
+                        .font(.system(size: 11))
+                        .foregroundColor(.orange)
+                        .padding(.top, 2)
+                }
+            }
+            .padding(.horizontal, 4)
+
+            // Sections — Core first per user request, then Faith
+            // (most agents in this group, 44+), then TCM, then
+            // anything else cloud-side that doesn't fit a known
+            // category. Empty groups don't render.
+            if !coreAgents.isEmpty {
+                gallerySection(
+                    title: "⭐  Core",
+                    subtitle: "LocalKin flagship agents",
+                    agents: coreAgents)
+            }
+            if !spiritualAgents.isEmpty {
+                gallerySection(
+                    title: "📜  Faith / Selah",
+                    subtitle: "44 spiritual masters · 1900 years",
+                    agents: spiritualAgents)
+            }
+            if !tcmAgents.isEmpty {
+                gallerySection(
+                    title: "🌿  Heal / 岐黄",
+                    subtitle: "Traditional Chinese medicine masters",
+                    agents: tcmAgents)
+            }
+            if !otherCloudAgents.isEmpty {
+                gallerySection(
+                    title: "🌐  Other",
+                    subtitle: "Cloud agents",
+                    agents: otherCloudAgents)
+            }
+
+            Spacer(minLength: 12)
+        }
+        .padding(.top, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// One category band: title row + scrollable horizontal list of
+    /// agent cards. Horizontal scroll keeps the section vertically
+    /// short so all 4 categories fit on one screen — vertical lists
+    /// of 44 items would push later sections off the bottom.
+    @ViewBuilder
+    private func gallerySection(title: String, subtitle: String,
+                                 agents: [Agent]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                Text("(\(agents.count))")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                Spacer()
+                Text(subtitle)
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary.opacity(0.7))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 4)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(agents) { agent in
+                        galleryCard(agent)
+                    }
+                }
+                .padding(.horizontal, 4)
+            }
+        }
+    }
+
+    /// One agent card. Tap → set selectedAgent → empty-state flips
+    /// from gallery to welcomeCard (single-agent quick-start chips).
+    @ViewBuilder
+    private func galleryCard(_ agent: Agent) -> some View {
+        Button {
+            selectedAgent = agent
+            inputFocused = true
+        } label: {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(AgentDecor.emoji(for: agent))
+                        .font(.system(size: 22))
+                    if let master = CloudAgentCatalog.master(for: agent.slug) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text(master.nameZh)
+                                .font(.system(size: 12, weight: .semibold))
+                                .lineLimit(1)
+                            Text(master.nameEn)
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                        }
+                    } else {
+                        Text(agent.displayName)
+                            .font(.system(size: 12, weight: .semibold))
+                            .lineLimit(1)
+                    }
+                }
+                if let caption = AgentDecor.caption(for: agent) {
+                    Text(caption)
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                }
+            }
+            .frame(width: 160, alignment: .leading)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color.platformSecondaryBackground.opacity(0.5))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(Color.secondary.opacity(0.15), lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
     private var welcomeCard: some View {
         VStack(spacing: 8) {
+            // ← Back to gallery — top-left of welcomeCard. Lets
+            // users return to the discovery view after picking an
+            // agent. Cmd+B as a power-user shortcut.
+            HStack {
+                Button {
+                    selectedAgent = nil
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 9, weight: .semibold))
+                        Text("agents")
+                            .font(.system(size: 11))
+                    }
+                    .foregroundColor(.secondary.opacity(0.8))
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut("b", modifiers: .command)
+                .help("Back to agent gallery (\u{2318}B)")
+                Spacer()
+            }
+            .padding(.horizontal, 4)
+            .padding(.bottom, 8)
+
             if let agent = selectedAgent {
                 Text(AgentDecor.emoji(for: agent))
                     .font(.system(size: 44))
