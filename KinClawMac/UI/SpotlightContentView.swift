@@ -986,10 +986,11 @@ struct SpotlightContentView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// One category band: title row + scrollable horizontal list of
-    /// agent cards. Horizontal scroll keeps the section vertically
-    /// short so all 4 categories fit on one screen — vertical lists
-    /// of 44 items would push later sections off the bottom.
+    /// One category band: title row + 2-column vertical grid of
+    /// agent cards. Vertical layout (was horizontal scroll) so the
+    /// whole 44-Selah-master catalog reads naturally as one page —
+    /// user scrolls down, sees everything, no hidden cards offscreen
+    /// in a horizontal lane.
     @ViewBuilder
     private func gallerySection(title: String, subtitle: String,
                                  agents: [Agent]) -> some View {
@@ -1008,14 +1009,22 @@ struct SpotlightContentView: View {
             }
             .padding(.horizontal, 4)
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(agents) { agent in
-                        galleryCard(agent)
-                    }
+            // 2-column LazyVGrid keeps the panel wide enough for
+            // bilingual names + 1-line caption per card while
+            // halving the scroll distance vs single-column. 8pt
+            // gutter + 4pt edge inset matches the section header.
+            LazyVGrid(
+                columns: [
+                    GridItem(.flexible(), spacing: 8),
+                    GridItem(.flexible(), spacing: 8),
+                ],
+                spacing: 8
+            ) {
+                ForEach(agents) { agent in
+                    galleryCard(agent)
                 }
-                .padding(.horizontal, 4)
             }
+            .padding(.horizontal, 4)
         }
     }
 
@@ -1052,15 +1061,29 @@ struct SpotlightContentView: View {
                             .lineLimit(1)
                     }
                 }
-                if let caption = AgentDecor.caption(for: agent) {
+                // Prefer master.tagline (hardcoded notable line OR
+                // auto-derived "Period · era") so spiritual + TCM
+                // cards show context-rich captions like
+                // "Patristic · 354-430" or "Doctor of grace · City
+                // of God" instead of bare year ranges. Fall back to
+                // AgentDecor.caption for non-catalog agents (e.g.
+                // local kinclaw souls).
+                let cloudTagline = CloudAgentCatalog.master(for: agent.slug)?.tagline
+                let caption = cloudTagline ?? AgentDecor.caption(for: agent)
+                if let caption = caption {
                     Text(caption)
                         .font(.system(size: 10))
                         .foregroundColor(.secondary)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
+                        .padding(.top, 2)
                 }
             }
-            .frame(width: 160, alignment: .leading)
+            // .frame(maxWidth: .infinity) lets the LazyVGrid
+            // size the card to the available column width (~172pt
+            // in the 380pt panel). Was a fixed 160pt width when
+            // the layout was horizontal scroll.
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
             .background(

@@ -44,6 +44,112 @@ extension CloudMaster {
             localSoulPath: nil
         )
     }
+
+    /// Brief one-line description for gallery cards. Layered:
+    ///
+    ///   1. Hardcoded `notableTagline` for the most famous masters
+    ///      ("Doctor of grace, City of God") — gives the gallery
+    ///      faith.localkin.ai-style content density.
+    ///   2. Otherwise: derived period from start year + era
+    ///      ("Patristic · 354-430") — works for any master we
+    ///      haven't hand-written a tagline for.
+    ///   3. Core / non-spiritual / non-TCM domains: era is already
+    ///      a tagline (e.g. "Soul anchor & inner way"), pass through.
+    var tagline: String {
+        if let notable = Self.notableTagline[slug] {
+            return notable
+        }
+        switch domain {
+        case "spiritual":
+            if let period = spiritualPeriod {
+                return "\(period) · \(era)"
+            }
+        case "tcm":
+            if let dynasty = tcmDynasty {
+                return "\(dynasty) · \(era)"
+            }
+        default:
+            break
+        }
+        return era
+    }
+
+    /// Map start year → spiritual era. Crude (Patristic / Medieval
+    /// / Reformation / Modern / Contemporary) but useful — a single
+    /// year-range like "354-430" reads better as "Patristic · 354-430".
+    private var spiritualPeriod: String? {
+        guard let year = startYear else { return nil }
+        switch year {
+        case ..<500:    return "Patristic"
+        case 500..<1300: return "Medieval"
+        case 1300..<1517: return "Late Medieval"
+        case 1517..<1700: return "Reformation"
+        case 1700..<1900: return "Modern"
+        default:        return "Contemporary"
+        }
+    }
+
+    /// Map start year → Chinese dynasty for TCM masters.
+    private var tcmDynasty: String? {
+        guard let year = startYear else { return nil }
+        switch year {
+        case ..<221:    return "汉 · Han"
+        case 221..<618: return "魏晋南北朝 · Pre-Tang"
+        case 618..<907: return "唐 · Tang"
+        case 907..<1279: return "宋 · Song"
+        case 1279..<1368: return "元 · Yuan"
+        case 1368..<1644: return "明 · Ming"
+        case 1644..<1912: return "清 · Qing"
+        default:        return "近现代 · Modern"
+        }
+    }
+
+    /// Parse the leading 4-digit year out of an era string. Handles
+    /// "354-430", "145-208 AD", "14世纪", "1954-" etc. Returns nil
+    /// for non-numeric eras (e.g. "Daily trending scan" used by
+    /// Core agents — they fall through to .era directly).
+    private var startYear: Int? {
+        let scanner = Scanner(string: era)
+        scanner.charactersToBeSkipped = .whitespaces
+        var n: Int = 0
+        if scanner.scanInt(&n) { return n }
+        return nil
+    }
+
+    /// Hand-written taglines for the most famous masters. Kept as a
+    /// flat dict so anyone can drop in a new line without code
+    /// changes. Conservative — only added when the description is
+    /// well-known and accurate; obscure masters fall through to
+    /// auto-derived "Period · era".
+    private static let notableTagline: [String: String] = [
+        // Spiritual
+        "augustine":           "Doctor of grace · City of God",
+        "john_calvin":         "Reformed theology · Institutes",
+        "martin_luther":       "Reformation founder · sola fide",
+        "john_wesley":         "Methodist movement · holiness",
+        "dietrich_bonhoeffer": "Cost of discipleship",
+        "watchman_nee":        "Spiritual man · inner life",
+        "aw_tozer":            "Pursuit of God",
+        "austin_sparks":       "Eternal purpose · church",
+        "guyon":               "Quietism · sweet release",
+        "lawrence":            "Practice of God's presence",
+        "charles_spurgeon":    "Prince of preachers",
+        "kempis":              "Imitation of Christ",
+        "therese":             "Little way · 小德兰",
+        "newman":              "Apologia · Tractarian",
+        "song_shangjie":       "China revival · 1930s",
+        "wang_mingdao":        "Chinese house church",
+        "hudson_taylor":       "China Inland Mission",
+        "george_muller":       "Faith orphan houses",
+        // TCM
+        "zhang_zhongjing":     "伤寒杂病论 · classical 辨证",
+        "sun_simiao":          "药王 · 千金方 · 备急药方",
+        "li_shizhen":          "本草纲目 · herbal compendium",
+        "hua_tuo":             "外科 · 麻沸散 anesthetic",
+        "ni_haixia":           "近代经方 · 视频教学",
+        "huang_huang":         "经方 · 体质医学",
+        "huangdi_neijing":     "黄帝内经 · 中医起源",
+    ]
 }
 
 enum CloudAgentCatalog {
