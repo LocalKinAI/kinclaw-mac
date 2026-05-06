@@ -825,22 +825,24 @@ struct SpotlightContentView: View {
                 // at .bottom rather than a 1pt invisible spacer at
                 // .bottom.)
                 LazyVStack(alignment: .leading, spacing: 14) {
-                    if messages.isEmpty && loadError != nil {
-                        errorState
-                    } else if messages.isEmpty && mode == .chat && chatBrowsing {
-                        // Empty Chat tab + browse mode = gallery.
-                        // chatBrowsing starts true on every cold
-                        // app open AND on ⌘B / "← agents", so the
-                        // discovery surface is the entry point even
-                        // when chatLastAgentSlug auto-restored a
-                        // selectedAgent. Tapping a card flips
-                        // chatBrowsing to false → welcomeCard fires
-                        // for that agent.
+                    if mode == .chat && chatBrowsing {
+                        // Gallery wins regardless of messages state.
+                        // Why not gate on messages.isEmpty: cold app
+                        // open auto-restores the last saved session
+                        // (handleAgentChange line ~1591), so by the
+                        // time the view renders, `messages` is non-
+                        // empty and any "isEmpty" gate would never
+                        // fire. The user's saved conversation isn't
+                        // lost — it's preserved in `messages` state;
+                        // tapping the green-ringed "your usual" card
+                        // flips chatBrowsing → false and the same
+                        // messages render in `ForEach` below.
                         chatGallery
+                    } else if messages.isEmpty && loadError != nil {
+                        errorState
                     } else if messages.isEmpty && selectedAgent != nil {
-                        // Cowork (and future modes that aren't
-                        // gallery-driven) keep the per-agent
-                        // welcomeCard.
+                        // Cowork (and future non-gallery modes)
+                        // keep the per-agent welcomeCard.
                         welcomeCard
                             .padding(.top, 40)
                     } else {
