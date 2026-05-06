@@ -51,6 +51,20 @@ KINCODE_REPO       ?= $(shell \
 	         $(HOME)/src/kincode; do \
 	  if [ -d "$$d/.git" ]; then echo "$$d"; exit 0; fi; \
 	done; echo $(REPO_ROOT)/../kincode)
+# localkin (private/optional) — if the user has the LocalKin family
+# core repo checked out, its skills/ dir holds 130+ cloud-side
+# SKILL.md files (knowledge_search wraps grep-is-all-you-need,
+# pubmed_search, rag_recall, master-specific teaching skills, ...).
+# 95% of them are kinclaw-format compatible — auto-discoverable when
+# the repo is on disk. Optional: kinclaw runs fine without it.
+LOCALKIN_REPO      ?= $(shell \
+	for d in $(REPO_ROOT)/../localkin \
+	         $(HOME)/Documents/Workspace/localkin \
+	         $(HOME)/code/localkin \
+	         $(HOME)/dev/localkin \
+	         $(HOME)/src/localkin; do \
+	  if [ -d "$$d/.git" ]; then echo "$$d"; exit 0; fi; \
+	done)
 KINCLAW_REMOTE     := https://github.com/LocalKinAI/kinclaw.git
 KINCODE_REMOTE     := https://github.com/LocalKinAI/kincode.git
 
@@ -196,7 +210,19 @@ start-helpers: ## Start kinclaw + kincode as detached daemons (PPID=1, survive s
 	@# postalCode, etc. Pipe through python3 (always present on
 	@# macOS) to extract the lat,lon,city,country tuple kinclaw
 	@# expects in $$KINCLAW_LOCATION.
-	@KINCLAW_LOCATION_VAL=""; \
+	@# Build kinclaw skill discovery path + GPS env in ONE shell block.
+	@# Make recipes run each `@line` as a fresh shell, so cross-line
+	@# variables (KINCLAW_SKILL_PATH, KINCLAW_LOCATION_VAL) need to
+	@# share a single \-continued block.
+	@#
+	@# Skill path: dev kinclaw/skills/ (always) + localkin/skills/
+	@# (when present, 130+ extra SKILL.md). Optional.
+	@KINCLAW_SKILL_PATH="$(KINCLAW_REPO)/skills"; \
+	if [ -d "$(LOCALKIN_REPO)/skills" ]; then \
+	  KINCLAW_SKILL_PATH="$$KINCLAW_SKILL_PATH:$(LOCALKIN_REPO)/skills"; \
+	  echo "  → discovering localkin skills via $(LOCALKIN_REPO)/skills"; \
+	fi; \
+	KINCLAW_LOCATION_VAL=""; \
 	if command -v corelocationcli >/dev/null 2>&1; then \
 	  printf "  → fetching GPS for system prompt context..."; \
 	  KINCLAW_LOCATION_VAL=$$(corelocationcli -once --json 2>/dev/null | \
@@ -212,19 +238,18 @@ print(",".join(parts).rstrip(","))' 2>/dev/null); \
 	else \
 	  echo "  → corelocationcli not installed (skip GPS context; \`brew install corelocationcli\` to enable)"; \
 	fi; \
-	KINCLAW_DEV_SKILLS="$(KINCLAW_REPO)/skills"; \
 	KINCODE_DEV_SKILLS="$(KINCODE_REPO)/skills"; \
 	if pgrep -x kinclaw >/dev/null 2>&1; then \
 	  echo "  → kinclaw already running on :5001 (skipping)"; \
 	else \
 	  echo "  → starting kinclaw on :5001 (log: $(LOG_DIR)/kinclaw.log)"; \
 	  if [[ -f "$(PILOT_SOUL)" ]]; then \
-	    ( KINCLAW_SKILL_DIRS="$$KINCLAW_DEV_SKILLS" \
+	    ( KINCLAW_SKILL_DIRS="$$KINCLAW_SKILL_PATH" \
 	      KINCLAW_LOCATION="$$KINCLAW_LOCATION_VAL" \
 	      "$(LOCALKIN_BIN)/kinclaw" serve -port 5001 -no-record \
 	      -soul "$(PILOT_SOUL)" >$(LOG_DIR)/kinclaw.log 2>&1 & ); \
 	  else \
-	    ( KINCLAW_SKILL_DIRS="$$KINCLAW_DEV_SKILLS" \
+	    ( KINCLAW_SKILL_DIRS="$$KINCLAW_SKILL_PATH" \
 	      KINCLAW_LOCATION="$$KINCLAW_LOCATION_VAL" \
 	      "$(LOCALKIN_BIN)/kinclaw" serve -port 5001 -no-record \
 	      >$(LOG_DIR)/kinclaw.log 2>&1 & ); \
