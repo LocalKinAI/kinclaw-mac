@@ -94,6 +94,16 @@ struct SpotlightContentView: View {
     /// errors, and after a brain switch.
     @State private var coworkConnectError: String?
 
+    /// Chat-tab "browse vs chat" state. True = show the agent
+    /// gallery (discovery surface). False = show welcomeCard /
+    /// messages for the selected agent. Default true so first-time
+    /// users land on discovery; flips false when they tap a card,
+    /// flips back true on "← agents" / ⌘B / explicit nil out.
+    /// Independent of selectedAgent so a returning user with
+    /// chatLastAgentSlug auto-restored STILL sees the gallery as
+    /// the empty-state entry.
+    @State private var chatBrowsing: Bool = true
+
     // Transports.
     @State private var sseClient: SSEClient?
     @State private var localStreamTask: Task<Void, Never>?
@@ -270,6 +280,13 @@ struct SpotlightContentView: View {
             messages = []
             currentSessionID = UUID()
             sessionTitle = "New chat"
+            // Re-enter browse mode whenever we land back in Chat
+            // tab — the gallery is the entry surface, not the
+            // last welcomeCard. Tab-switch behavior matches "open
+            // app fresh" behavior.
+            if newMode == .chat {
+                chatBrowsing = true
+            }
             applyAgentForMode(newMode)
         }
         .onDisappear {
@@ -736,14 +753,31 @@ struct SpotlightContentView: View {
         }
     }
 
-    /// Probe kinclaw's :5001 server. Sets coworkConnectError nil on
-    /// success (green dot), descriptive string on failure (orange
-    /// dot, tooltip shows reason). Cheap — same /api/souls fetch
-    /// used by KinClawSupervisor's adoption ping.
+    /// Probe kinclaw's :5001 server. Two outputs:
+    ///
+    ///   1. coworkConnectError → nil/string drives the green/orange
+    ///      dot in agentBar.
+    ///   2. coworkActiveProvider/coworkActiveModel → populated from
+    ///      the souls list's `active` row. SSE hello/brain_switched
+    ///      events ALSO populate these, but those only fire mid-
+    ///      turn; on a fresh app open we need this poll to seed
+    ///      the brain dropdown's "current" mark before the user
+    ///      sends anything.
     fileprivate func refreshCoworkConnection() async {
         do {
-            _ = try await KinClawAPIClient.default.fetchSouls()
-            await MainActor.run { coworkConnectError = nil }
+            let souls = try await KinClawAPIClient.default.fetchSouls()
+            await MainActor.run {
+                coworkConnectError = nil
+                if let active = souls.first(where: { $0.active == true }) {
+                    let parts = active.brain
+                        .split(separator: "/", maxSplits: 1)
+                        .map(String.init)
+                    if parts.count == 2 {
+                        coworkActiveProvider = parts[0]
+                        coworkActiveModel = parts[1]
+                    }
+                }
+            }
         } catch {
             await MainActor.run {
                 coworkConnectError = "kinclaw :5001 unreachable — is the helper running?"
@@ -793,15 +827,20 @@ struct SpotlightContentView: View {
                 LazyVStack(alignment: .leading, spacing: 14) {
                     if messages.isEmpty && loadError != nil {
                         errorState
-                    } else if messages.isEmpty && mode == .chat
-                              && selectedAgent == nil {
-                        // No agent picked + Chat mode: show the
-                        // gallery so users browse who's available
-                        // (44 spiritual masters / TCM doctors / Core
-                        // agents) instead of staring at a blank
-                        // panel + needing to know about the dropdown.
+                    } else if messages.isEmpty && mode == .chat && chatBrowsing {
+                        // Empty Chat tab + browse mode = gallery.
+                        // chatBrowsing starts true on every cold
+                        // app open AND on ⌘B / "← agents", so the
+                        // discovery surface is the entry point even
+                        // when chatLastAgentSlug auto-restored a
+                        // selectedAgent. Tapping a card flips
+                        // chatBrowsing to false → welcomeCard fires
+                        // for that agent.
                         chatGallery
                     } else if messages.isEmpty && selectedAgent != nil {
+                        // Cowork (and future modes that aren't
+                        // gallery-driven) keep the per-agent
+                        // welcomeCard.
                         welcomeCard
                             .padding(.top, 40)
                     } else {
@@ -978,12 +1017,17 @@ struct SpotlightContentView: View {
         }
     }
 
-    /// One agent card. Tap → set selectedAgent → empty-state flips
-    /// from gallery to welcomeCard (single-agent quick-start chips).
+    /// One agent card. Tap → set selectedAgent + flip chatBrowsing
+    /// false → empty-state transitions from gallery to welcomeCard
+    /// (single-agent quick-start chips). Auto-restored "your usual"
+    /// agent gets a green ring so the user can see at a glance which
+    /// one would have been picked by default.
     @ViewBuilder
     private func galleryCard(_ agent: Agent) -> some View {
+        let isCurrent = (agent.slug == selectedAgent?.slug)
         Button {
             selectedAgent = agent
+            chatBrowsing = false
             inputFocused = true
         } label: {
             VStack(alignment: .leading, spacing: 4) {
@@ -1019,11 +1063,16 @@ struct SpotlightContentView: View {
             .padding(.vertical, 8)
             .background(
                 RoundedRectangle(cornerRadius: 10)
-                    .fill(Color.platformSecondaryBackground.opacity(0.5))
+                    .fill(isCurrent
+                          ? Color.green.opacity(0.10)
+                          : Color.platformSecondaryBackground.opacity(0.5))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 10)
-                    .stroke(Color.secondary.opacity(0.15), lineWidth: 0.5)
+                    .stroke(isCurrent
+                            ? Color.green.opacity(0.55)
+                            : Color.secondary.opacity(0.15),
+                            lineWidth: isCurrent ? 1 : 0.5)
             )
         }
         .buttonStyle(.plain)
@@ -1031,28 +1080,33 @@ struct SpotlightContentView: View {
 
     private var welcomeCard: some View {
         VStack(spacing: 8) {
-            // ← Back to gallery — top-left of welcomeCard. Lets
-            // users return to the discovery view after picking an
-            // agent. Cmd+B as a power-user shortcut.
-            HStack {
-                Button {
-                    selectedAgent = nil
-                } label: {
-                    HStack(spacing: 3) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 9, weight: .semibold))
-                        Text("agents")
-                            .font(.system(size: 11))
+            // ← Back to gallery — only shown in Chat mode (Cowork
+            // doesn't have a gallery yet so the button would dead-
+            // end there). Sets chatBrowsing = true → empty-state
+            // flips back to chatGallery on next render. Keeps
+            // selectedAgent intact so the previously-tapped card
+            // still gets the green "your usual" ring.
+            if mode == .chat {
+                HStack {
+                    Button {
+                        chatBrowsing = true
+                    } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 9, weight: .semibold))
+                            Text("agents")
+                                .font(.system(size: 11))
+                        }
+                        .foregroundColor(.secondary.opacity(0.8))
                     }
-                    .foregroundColor(.secondary.opacity(0.8))
+                    .buttonStyle(.plain)
+                    .keyboardShortcut("b", modifiers: .command)
+                    .help("Back to agent gallery (\u{2318}B)")
+                    Spacer()
                 }
-                .buttonStyle(.plain)
-                .keyboardShortcut("b", modifiers: .command)
-                .help("Back to agent gallery (\u{2318}B)")
-                Spacer()
+                .padding(.horizontal, 4)
+                .padding(.bottom, 8)
             }
-            .padding(.horizontal, 4)
-            .padding(.bottom, 8)
 
             if let agent = selectedAgent {
                 Text(AgentDecor.emoji(for: agent))
