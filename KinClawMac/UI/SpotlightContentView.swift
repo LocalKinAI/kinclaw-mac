@@ -117,6 +117,16 @@ struct SpotlightContentView: View {
     /// re-render.
     @State private var expandedGallerySections: Set<String> = ["core"]
 
+    /// Live search filter for the gallery. Matches against zh name,
+    /// en name, slug, era, and notable tagline so the user can find
+    /// Augustine by typing "augustine" / "奥古斯丁" / "354" /
+    /// "patristic" — every visible signal is a query target.
+    /// Case-insensitive substring match. Empty = show everything.
+    /// Auto-expands all sections when search is active so matching
+    /// cards in collapsed groups become visible without manual
+    /// expansion.
+    @State private var gallerySearch: String = ""
+
     // Transports.
     @State private var sseClient: SSEClient?
     @State private var localStreamTask: Task<Void, Never>?
@@ -999,46 +1009,130 @@ struct SpotlightContentView: View {
                         .foregroundColor(.orange)
                         .padding(.top, 2)
                 }
+
+                // Search box — single-line filter across name (zh +
+                // en), slug, era, and notable tagline. Empty = show
+                // all. Active query auto-expands every section so
+                // matches in collapsed groups (Faith, Heal) surface
+                // without manual expansion. Magnifier glyph + clear
+                // button when text present.
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                    TextField("Search 80+ agents — name, era, tagline",
+                              text: $gallerySearch)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 12))
+                    if !gallerySearch.isEmpty {
+                        Button {
+                            gallerySearch = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary.opacity(0.7))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 7)
+                        .fill(Color.platformSecondaryBackground.opacity(0.5))
+                )
+                .padding(.top, 6)
             }
             .padding(.horizontal, 4)
 
             // Sections — Core first per user request, then Faith
             // (most agents in this group, 44+), then TCM, then
             // anything else cloud-side that doesn't fit a known
-            // category. Empty groups don't render.
-            if !coreAgents.isEmpty {
+            // category. Empty groups don't render. Each section
+            // pre-filters its agent list against the search query
+            // — empty post-filter sections also don't render.
+            let coreFiltered = filteredAgents(coreAgents)
+            let spiritualFiltered = filteredAgents(spiritualAgents)
+            let tcmFiltered = filteredAgents(tcmAgents)
+            let otherFiltered = filteredAgents(otherCloudAgents)
+
+            if !coreFiltered.isEmpty {
                 gallerySection(
                     key: "core",
                     title: "⭐  Core",
                     subtitle: "LocalKin flagship agents",
-                    agents: coreAgents)
+                    agents: coreFiltered)
             }
-            if !spiritualAgents.isEmpty {
+            if !spiritualFiltered.isEmpty {
                 gallerySection(
                     key: "spiritual",
                     title: "📜  Faith / Selah",
                     subtitle: "44 spiritual masters · 1900 years",
-                    agents: spiritualAgents)
+                    agents: spiritualFiltered)
             }
-            if !tcmAgents.isEmpty {
+            if !tcmFiltered.isEmpty {
                 gallerySection(
                     key: "tcm",
                     title: "🌿  Heal / 岐黄",
                     subtitle: "Traditional Chinese medicine masters",
-                    agents: tcmAgents)
+                    agents: tcmFiltered)
             }
-            if !otherCloudAgents.isEmpty {
+            if !otherFiltered.isEmpty {
                 gallerySection(
                     key: "other",
                     title: "🌐  Other",
                     subtitle: "Cloud agents",
-                    agents: otherCloudAgents)
+                    agents: otherFiltered)
+            }
+
+            // Empty-result feedback when the user's query matches
+            // nothing across all sections.
+            if !gallerySearch.isEmpty
+                && coreFiltered.isEmpty && spiritualFiltered.isEmpty
+                && tcmFiltered.isEmpty && otherFiltered.isEmpty
+            {
+                Text("No agents match \"\(gallerySearch)\"")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal, 4)
+                    .padding(.top, 4)
             }
 
             Spacer(minLength: 12)
         }
         .padding(.top, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Filter helper. Empty query = pass-through; non-empty does a
+    /// case-insensitive substring match against every visible
+    /// signal (zh name, en name, slug, era, tagline). All matched
+    /// in one pass so a query like "patristic" surfaces every
+    /// auto-derived "Patristic · ..." caption.
+    private func filteredAgents(_ agents: [Agent]) -> [Agent] {
+        let q = gallerySearch
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        if q.isEmpty { return agents }
+        return agents.filter { agent in
+            let master = CloudAgentCatalog.master(for: agent.slug)
+            let haystacks: [String?] = [
+                agent.slug,
+                agent.displayName,
+                agent.name,
+                master?.nameZh,
+                master?.nameEn,
+                master?.era,
+                master?.tagline,
+                AgentDecor.caption(for: agent),
+            ]
+            for s in haystacks {
+                if let s = s?.lowercased(), s.contains(q) {
+                    return true
+                }
+            }
+            return false
+        }
     }
 
     /// One category band: collapsible title row + 2-column vertical
@@ -1055,7 +1149,14 @@ struct SpotlightContentView: View {
     private func gallerySection(key: String, title: String,
                                  subtitle: String,
                                  agents: [Agent]) -> some View {
-        let isExpanded = expandedGallerySections.contains(key)
+        // When search is active, auto-expand every section that has
+        // surviving matches — otherwise users typing "calvin" would
+        // see "Faith / Selah (1)" still collapsed and wonder where
+        // the result went. Manual toggle still works post-clear.
+        let searchActive = !gallerySearch
+            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let isExpanded = searchActive
+            || expandedGallerySections.contains(key)
         VStack(alignment: .leading, spacing: 8) {
             // Header is the toggle. Whole row tappable so users
             // don't have to aim at a tiny chevron — same Disclosure
