@@ -2,6 +2,133 @@
 
 All notable changes to KinClaw Mac.
 
+## [0.4.0] - 2026-05-06
+
+**Cowork delivers deep research end-to-end.** Pairs with kinclaw v1.12.0
+to make pilot's spawn-driven research workflow actually usable from
+Cowork tab — non-blocking dispatch, live checklist rendering, sticky
+brain dropdown, source-of-truth soul handling.
+
+### Added — Detached spawn UI handling
+
+`KinClawAPIClient.swift` adds `spawnDone = "spawn_done"` SSE event
+case. `SpotlightContentView.swift` renders the event as an inline
+assistant bubble:
+
+```
+🔬 researcher (job ab12cd) finished in 287s
+
+[child agent's full markdown report — typically a TL;DR + path]
+```
+
+Pairs with kinclaw 1.12's detached-spawn mode: pilot dispatches a
+researcher with `spawn(soul=researcher, prompt=…, timeout_s=300)`,
+its turn ends within 200µs, the user keeps full chat interactivity
+(can ask other things, dispatch parallel researchers, etc.). When
+each child finishes minutes later, this code path appears the
+result without re-prompting pilot.
+
+`Views/Chat/ChatView.swift` also adds the case to its exhaustive
+switch (Chat-mode no-op since spawn is Cowork-only).
+
+### Added — `~/.localkin/souls/` cleanup, repo-as-source-of-truth
+
+`Services/KinClawSupervisor.swift`: soul lookup priority flipped.
+Was preferring `~/.localkin/souls/` (legacy install.sh copy) over
+the dev repo; now the dev repo at `~/Documents/Workspace/kinclaw/
+souls/` wins when present. Multi-day debugging session traced to
+exactly this — edits to repo souls weren't reaching the running
+helper because install.sh copied with `cp -n` (no-clobber) and
+the supervisor's old priority gave the stale family-dir copy
+preference.
+
+Pairs with kinclaw 1.12's `install.sh` change which now actively
+`rm -rf`s `~/.localkin/souls/` instead of copying into it.
+
+### Added — `KINCLAW_SOUL_DIRS` + `SEARXNG_ENDPOINT` env injection
+
+`Services/KinClawSupervisor.swift` now sets two env vars when
+spawning the kinclaw helper subprocess:
+
+- `KINCLAW_SOUL_DIRS=<install.soulsDir>` — kinclaw's spawn skill
+  resolves "researcher" / "eye" / "critic" against this. Without
+  it (e.g. when launched from `.app` Launch Services rather than
+  shell), pilot's `spawn(soul=researcher)` would fail with "soul
+  not found in [./souls, ~/.localkin/souls]".
+- `SEARXNG_ENDPOINT` — read from `@AppStorage("kinclaw.backend.
+  searxng")` (Settings UI value), with `http://localhost:8080`
+  Docker default. Without this, `web_search` falls through to the
+  now-broken DDG html-scrape path.
+
+### Added — Makefile reads souls + skills directly from repos
+
+`Makefile` `start-helpers` now passes:
+
+- `-soul $(KINCLAW_REPO)/souls/pilot.soul.md` to kinclaw helper
+- `-soul $(KINCODE_REPO)/souls/coder.soul.md` to kincode helper
+- `KINCLAW_SOUL_DIRS=$(KINCLAW_REPO)/souls` env to kinclaw
+- `KINCLAW_SKILL_DIRS=<repo>/skills:<localkin-sibling>/skills` env
+- `SEARXNG_ENDPOINT=http://localhost:8080` (auto-detected via
+  `curl :8080/`)
+
+`PILOT_SOUL` / `CODER_SOUL` Make vars now point at repo paths
+(was `$(HOME)/.localkin/souls/...`).
+
+### Fixed — Cowork "New session" actually clears server history
+
+`SpotlightContentView.swift`'s `startNewSession()` previously
+only cleared `messages = []` client-side — kinclaw's per-session
+sqlite history kept the prior turn's tape, so a "New session"
+click followed by `你好` produced the prior task continuing
+(researcher trying to keep finding apartments after we'd asked
+something completely different).
+
+Now `startNewSession()` POSTs `/api/session/reset` to kinclaw
+(in Cowork mode only — Chat mode is stateless cloud SSE,
+already clean). Best-effort: failures don't block the local
+clear (user clicked "new" and expects the UI to be empty
+regardless), and the endpoint returns 501 on older kernel
+builds without exploding.
+
+`Services/KinClawAPIClient.swift` adds `resetSession()`. The
+exhaustive SSE event switches in `SpotlightContentView` and
+`ChatView` get `case .sessionReset` handlers (no-op for the
+local UI — the local clear already happened — but needed so
+multi-window setups stay in sync).
+
+### Fixed — TodoChecklistView decode
+
+`UI/TodoChecklistView.swift`: `TodoItem.activeForm` was a non-
+optional `String`. After kinclaw 1.12 made activeForm optional
+in the kernel-side todo_write skill (auto-falls-back to content
+when omitted, which is common for Chinese todos), the SSE
+`tool_call` event's params no longer always include
+`activeForm` — Swift Codable decode failed silently and the
+checklist degraded to the generic "blue pill" tool-call render.
+
+Now `TodoItem` uses an Optional storage with a computed
+property that falls back to `content` when missing. The
+checklist now renders properly even when the model emits
+todos without activeForm.
+
+### Fixed — Cowork brain dropdown reads from Settings
+
+`Services/KinClawSupervisor.swift` SearXNG endpoint resolution
+priority changed from "env > hardcoded default" to "env >
+Settings UI value > hardcoded default" so the user's customized
+endpoint actually gets used. Same pattern will likely apply to
+other Backend tab settings as we add more.
+
+### Fixed — KinCodeSupervisor doc
+
+`Services/KinCodeSupervisor.swift` line 18-22 comment used to
+say "kincode has no souls / no `-soul` flag — system prompt is
+built-in". Outdated: kincode added soul support (cmd/kincode/
+main.go takes `-soul`) and ships `coder.soul.md` in its own
+repo. Comment updated to match reality + Makefile now passes
+`-soul $(KINCODE_REPO)/souls/coder.soul.md` so dev edits to
+that file are immediately live.
+
 ## [0.3.0] - 2026-05-05
 
 **Code mode polish + stable build loop.** Five additions, four of

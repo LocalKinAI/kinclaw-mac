@@ -1745,12 +1745,40 @@ struct SpotlightContentView: View {
 
     /// Start a new chat session. Saves the current one if it has
     /// content, then resets messages + currentSessionID.
+    ///
+    /// Cowork mode also POSTs `/api/session/reset` to the kernel —
+    /// otherwise the server's history buffer survives, and the next
+    /// "你好" gets answered as if it were a follow-up to whatever
+    /// half-finished task the previous turn left dangling. Chat mode
+    /// has no kernel-side history (cloud SSE is stateless per turn)
+    /// so the local clear is enough there.
+    ///
+    /// If the kernel reset fails (turn in flight → 409, helper not
+    /// running → network error, older binary → 501) we do NOT block
+    /// the local clear — the user clicked "New session" and expects
+    /// the UI to be empty regardless. The kernel-side bleed risk is
+    /// surfaced as a warning in the next turn's response space (or
+    /// silently for 501 — already client-only on those builds).
     private func startNewSession() {
         guard let agent = selectedAgent else { return }
         saveCurrentSession()
         messages = []
         currentSessionID = UUID()
         sessionTitle = "New chat"
+
+        if mode == .cowork {
+            Task {
+                do {
+                    try await KinClawAPIClient.default.resetSession()
+                } catch {
+                    // Best-effort; don't pop a modal. Log to stderr
+                    // for the make-run console where Jacky watches.
+                    FileHandle.standardError.write(
+                        "kinclaw resetSession failed: \(error.localizedDescription)\n"
+                            .data(using: .utf8) ?? Data())
+                }
+            }
+        }
     }
 
     /// Load a saved session into the active chat surface.
@@ -2260,6 +2288,29 @@ struct SpotlightContentView: View {
                     coworkActiveModel = parts[1]
                 }
             }
+        case .sessionReset:
+            // Server confirmed it cleared its history tape. We've
+            // already wiped the UI client-side via startNewSession;
+            // this event is for any *other* connected SSE client to
+            // refresh. No-op here.
+            break
+        case .spawnDone:
+            // A detached child agent (researcher / eye / critic / coder)
+            // that pilot dispatched in the background just finished.
+            // Render its final text as a standalone "result bubble"
+            // attributed to the child's soul name + job id, so the
+            // user sees the deliverable inline without having to wait
+            // on / re-prompt pilot. The kernel ALSO appends this to
+            // the pilot session's history (synthetic user message),
+            // so any follow-up question to pilot can reference the
+            // child's report.
+            let soulName = event.name ?? "agent"
+            let jobID = event.id ?? "?"
+            let dur = event.params?["duration_s"] ?? "?"
+            let body = event.output ?? "(no output)"
+            let header = "🔬 \(soulName) (job \(jobID)) finished in \(dur)s"
+            messages.append(ChatMessage.assistant("**\(header)**\n\n\(body)"))
+            scrollTrigger += 1
         case .userMessage, .turnDone, .planMode, .none:
             // plan_mode is Code-mode-only; Spotlight ignores it.
             break

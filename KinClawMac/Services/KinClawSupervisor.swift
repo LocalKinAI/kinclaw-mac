@@ -59,19 +59,31 @@ final class KinClawSupervisor: ObservableObject {
         // to the dev repo's souls/ if the family dir is empty.
         let installedBin = "\(home)/.localkin/bin/kinclaw"
         if FileManager.default.isExecutableFile(atPath: installedBin) {
-            // Soul lookup is opinionated: we want pilot.soul.md
-            // specifically (KinClaw Mac's marquee soul). install.sh
-            // copies the kinclaw-repo souls into ~/.localkin/souls/
-            // so post-install the family dir wins. Pre-install (or
-            // if user nuked the family dir), fall back to the dev
-            // repo's souls/ directly.
-            let familySouls = "\(home)/.localkin/souls"
+            // Soul lookup priority — DEV REPO WINS when present.
+            //
+            // Earlier behavior was the opposite: ~/.localkin/souls/
+            // (populated by install.sh's no-clobber copy) won over
+            // the repo. That meant edits to kinclaw/souls/*.soul.md
+            // never reached the running helper — the dev would
+            // change a soul, run `make run`, and see the OLD soul's
+            // behavior because install.sh refuses to overwrite once
+            // a copy exists in the family dir. Multi-day debugging
+            // sessions were spent chasing what looked like prompt
+            // bugs but were actually stale soul files.
+            //
+            // New rule: if the kinclaw repo's souls/ exists with
+            // pilot.soul.md, use it directly. No copy, no drift,
+            // edits to the file are live on next helper restart.
+            // Family dir (~/.localkin/souls/) is the fallback for
+            // users who installed via .app bundle without ever
+            // cloning the repo.
             let devSouls = "\(home)/Documents/Workspace/kinclaw/souls"
+            let familySouls = "\(home)/.localkin/souls"
             var souls: String? = nil
-            if FileManager.default.fileExists(atPath: "\(familySouls)/pilot.soul.md") {
-                souls = familySouls
-            } else if FileManager.default.fileExists(atPath: "\(devSouls)/pilot.soul.md") {
+            if FileManager.default.fileExists(atPath: "\(devSouls)/pilot.soul.md") {
                 souls = devSouls
+            } else if FileManager.default.fileExists(atPath: "\(familySouls)/pilot.soul.md") {
+                souls = familySouls
             } else if FileManager.default.fileExists(atPath: familySouls) {
                 souls = familySouls  // last-resort: any souls dir is better than none
             }
@@ -232,11 +244,41 @@ final class KinClawSupervisor: ObservableObject {
         // shell-set env vars don't propagate, so users were having
         // to start kinclaw serve manually with the env to get
         // web_search working through SearXNG.
+        //
+        // Resolution priority (high → low):
+        //   1. Existing process env (caller forced it via shell)
+        //   2. Settings UI value (@AppStorage "kinclaw.backend.searxng")
+        //      — this is what the user sees + edits in Backend tab
+        //   3. Hardcoded http://localhost:8080 default
+        // (3) is the conventional Docker default; if neither is
+        // running, kinclaw's web_search falls back / errors out
+        // through to web_scrape per the researcher protocol.
         var env = ProcessInfo.processInfo.environment
         if env["SEARXNG_ENDPOINT"] == nil {
-            // Container at :8080 is the conventional default; if it's
-            // not running, kinclaw's web_search falls back to DDG.
-            env["SEARXNG_ENDPOINT"] = "http://localhost:8080"
+            let userPref = UserDefaults.standard
+                .string(forKey: "kinclaw.backend.searxng")?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if let pref = userPref, !pref.isEmpty {
+                env["SEARXNG_ENDPOINT"] = pref
+                print("[KinClawSupervisor] SEARXNG_ENDPOINT from Settings: \(pref)")
+            } else {
+                env["SEARXNG_ENDPOINT"] = "http://localhost:8080"
+                print("[KinClawSupervisor] SEARXNG_ENDPOINT default: http://localhost:8080")
+            }
+        }
+
+        // KINCLAW_SOUL_DIRS — tells the kinclaw spawn skill where to
+        // find sibling souls (researcher / eye / critic). When pilot
+        // calls `spawn(soul="researcher")`, kinclaw resolves the name
+        // by scanning these dirs. Without this env set, kinclaw falls
+        // back to ./souls (cwd-relative, usually empty for a daemon)
+        // and ~/.localkin/souls (we deleted that on purpose so souls
+        // live exclusively in the repo). Setting this to the same
+        // souls dir we already pass via -soul keeps the source-of-
+        // truth single.
+        if env["KINCLAW_SOUL_DIRS"] == nil, let soulsDir = install.soulsDir {
+            env["KINCLAW_SOUL_DIRS"] = soulsDir
+            print("[KinClawSupervisor] KINCLAW_SOUL_DIRS: \(soulsDir)")
         }
 
         do {

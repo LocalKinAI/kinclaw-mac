@@ -3,10 +3,33 @@ import SwiftUI
 /// One row from the agent's `todo_write` tool. JSON shape matches
 /// kincode's `TodoItem` struct in pkg/tools/todo_write.go — same
 /// field names, same enum values for status.
+///
+/// `activeForm` is decoded as Optional because the kernel's
+/// `todo_write` skill makes it optional (auto-falls-back to content
+/// when missing — common for Chinese todos where there's no
+/// continuous-tense distinction). The SSE `tool_call` event carries
+/// the model's ORIGINAL args, so a model that omits activeForm
+/// would otherwise fail Codable decoding here and the entire
+/// checklist would degrade to the generic blue pill — the bug
+/// users hit when they saw "todo_write • done" rows instead of
+/// the rendered checklist.
 struct TodoItem: Codable, Hashable {
     let content: String
-    let activeForm: String
+    private let _activeForm: String?
     let status: String  // "pending" | "in_progress" | "completed"
+
+    /// Resolved label for the in-progress state. Falls back to
+    /// `content` when the model didn't supply an activeForm.
+    var activeForm: String {
+        if let f = _activeForm, !f.isEmpty { return f }
+        return content
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case content
+        case _activeForm = "activeForm"
+        case status
+    }
 }
 
 /// Renders a kincode `todo_write` tool call as a checklist UI inline

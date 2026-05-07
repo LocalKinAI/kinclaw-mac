@@ -76,10 +76,14 @@ LOCALKIN_BIN       := $(HOME)/.localkin/bin
 # something looks off (`tail -f $(LOG_DIR)/kinclaw.log`).
 LOG_DIR            := /tmp
 
-# Default soul for kinclaw. supervisor would auto-pick the same one
-# but starting helpers from the Makefile means we need to do it
-# explicitly.
-PILOT_SOUL         := $(HOME)/.localkin/souls/pilot.soul.md
+# Default souls for the helpers. Read directly from each repo so
+# edits are immediately live — no install/copy step needed.
+# (Earlier these pointed at ~/.localkin/{souls,bin}/ family location
+# but install.sh's cp -n meant the copies went stale and never updated;
+# repo edits never reached the running helper. Reading repo paths
+# straight is the simpler architecture.)
+PILOT_SOUL         := $(KINCLAW_REPO)/souls/pilot.soul.md
+CODER_SOUL         := $(KINCODE_REPO)/souls/coder.soul.md
 
 # Process names we kill on `make kill` / before re-signing.
 PROC_PATTERNS      := KinClawMac kinclaw kincode
@@ -239,18 +243,29 @@ print(",".join(parts).rstrip(","))' 2>/dev/null); \
 	  echo "  → corelocationcli not installed (skip GPS context; \`brew install corelocationcli\` to enable)"; \
 	fi; \
 	KINCODE_DEV_SKILLS="$(KINCODE_REPO)/skills"; \
+	SEARXNG_VAL=""; \
+	if curl -s -o /dev/null -m 1 -w "%{http_code}" "http://localhost:8080/" 2>/dev/null | grep -q "^[23]"; then \
+	  SEARXNG_VAL="http://localhost:8080"; \
+	  printf "  → SearXNG ✓ ($$SEARXNG_VAL)\n"; \
+	else \
+	  printf "  → SearXNG :8080 not reachable — web_search will degrade to web_scrape\n"; \
+	fi; \
 	if pgrep -x kinclaw >/dev/null 2>&1; then \
 	  echo "  → kinclaw already running on :5001 (skipping)"; \
 	else \
 	  echo "  → starting kinclaw on :5001 (log: $(LOG_DIR)/kinclaw.log)"; \
 	  if [[ -f "$(PILOT_SOUL)" ]]; then \
 	    ( KINCLAW_SKILL_DIRS="$$KINCLAW_SKILL_PATH" \
+	      KINCLAW_SOUL_DIRS="$(KINCLAW_REPO)/souls" \
 	      KINCLAW_LOCATION="$$KINCLAW_LOCATION_VAL" \
+	      SEARXNG_ENDPOINT="$$SEARXNG_VAL" \
 	      "$(LOCALKIN_BIN)/kinclaw" serve -port 5001 -no-record \
 	      -soul "$(PILOT_SOUL)" >$(LOG_DIR)/kinclaw.log 2>&1 & ); \
 	  else \
 	    ( KINCLAW_SKILL_DIRS="$$KINCLAW_SKILL_PATH" \
+	      KINCLAW_SOUL_DIRS="$(KINCLAW_REPO)/souls" \
 	      KINCLAW_LOCATION="$$KINCLAW_LOCATION_VAL" \
+	      SEARXNG_ENDPOINT="$$SEARXNG_VAL" \
 	      "$(LOCALKIN_BIN)/kinclaw" serve -port 5001 -no-record \
 	      >$(LOG_DIR)/kinclaw.log 2>&1 & ); \
 	  fi; \
@@ -259,9 +274,17 @@ print(",".join(parts).rstrip(","))' 2>/dev/null); \
 	  echo "  → kincode already running on :5002 (skipping)"; \
 	else \
 	  echo "  → starting kincode on :5002 (log: $(LOG_DIR)/kincode.log)"; \
-	  ( KINCODE_SKILL_DIRS="$$KINCODE_DEV_SKILLS" \
-	    "$(LOCALKIN_BIN)/kincode" -serve -port 5002 -yolo \
-	    >$(LOG_DIR)/kincode.log 2>&1 & ); \
+	  if [[ -f "$(CODER_SOUL)" ]]; then \
+	    ( KINCODE_SKILL_DIRS="$$KINCODE_DEV_SKILLS" \
+	      SEARXNG_ENDPOINT="$$SEARXNG_VAL" \
+	      "$(LOCALKIN_BIN)/kincode" -serve -port 5002 -yolo \
+	      -soul "$(CODER_SOUL)" >$(LOG_DIR)/kincode.log 2>&1 & ); \
+	  else \
+	    ( KINCODE_SKILL_DIRS="$$KINCODE_DEV_SKILLS" \
+	      SEARXNG_ENDPOINT="$$SEARXNG_VAL" \
+	      "$(LOCALKIN_BIN)/kincode" -serve -port 5002 -yolo \
+	      >$(LOG_DIR)/kincode.log 2>&1 & ); \
+	  fi; \
 	fi
 	@# Wait for both ports to bind before returning. Without this,
 	@# the immediately-following `open KinClawMac.app` could race

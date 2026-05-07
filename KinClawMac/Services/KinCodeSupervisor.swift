@@ -15,10 +15,12 @@ import AppKit
 ///
 /// - Ready probe is `GET /api/health` (kincode shipped this in the
 ///   Stage 1 server). KinClawSupervisor pings `/api/souls` because
-///   kinclaw is soul-driven; kincode has no souls so health is the
-///   right liveness check.
-/// - No `-soul` flag / no `souls/` directory — kincode is a plain
-///   coding agent; the system prompt is built-in.
+///   kinclaw can hot-swap souls; kincode loads ONE soul at boot and
+///   doesn't expose a switcher, so health is the right liveness check.
+/// - kincode DOES support `-soul` flag (cmd/kincode/main.go) and ships
+///   `coder.soul.md` in its souls/ dir. We pass the dev-repo path so
+///   edits are immediately live without re-install. (Comment used to
+///   say "no souls" — outdated; kincode added soul support since.)
 /// - No working-dir gymnastics needed — kincode reads no relative
 ///   paths at boot. The agent's repo cwd is set later via
 ///   `POST /api/repo` once the user picks one in Code mode.

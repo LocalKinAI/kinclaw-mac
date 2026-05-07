@@ -61,6 +61,8 @@ extension KinClawEvent {
         case recordDone    = "record_done"
         case soulSwitched  = "soul_switched"
         case brainSwitched = "brain_switched"
+        case sessionReset  = "session_reset"
+        case spawnDone     = "spawn_done"
         case turnDone      = "turn_done"
         case planMode      = "plan_mode"
         case error
@@ -476,6 +478,29 @@ extension KinClawAPIClient {
         ))
         let (data, response) = try await sessionDataFor(request: request)
         try checkOK(response as? HTTPURLResponse, body: data)
+    }
+
+    /// `POST /api/session/reset` — wipe the kernel's conversation tape
+    /// without changing the soul/brain/skills. The "New session" button
+    /// in Cowork hits this so a stuck mid-task tool-call loop from a
+    /// prior conversation can't bleed into the next user message. The
+    /// kernel responds 409 Conflict if a turn is in flight — caller
+    /// should DELETE /api/chat first (the same Stop button machinery)
+    /// then retry. Older kinclaw builds without the endpoint return
+    /// 501; we silently swallow that so the Mac UI degrades gracefully
+    /// to client-only reset on outdated kernels.
+    func resetSession() async throws {
+        let url = baseURL.appendingPathComponent("api/session/reset")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        let (data, response) = try await sessionDataFor(request: request)
+        let http = response as? HTTPURLResponse
+        if http?.statusCode == 501 {
+            // Endpoint not wired on this kernel build — the client
+            // already cleared local state; nothing more to do.
+            return
+        }
+        try checkOK(http, body: data)
     }
 }
 

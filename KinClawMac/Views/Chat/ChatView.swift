@@ -591,9 +591,9 @@ struct ChatView: View {
             scrollTrigger += 1
         case .hello, .userMessage, .turnDone,
              .screenFrame, .recordDone, .soulSwitched, .brainSwitched,
-             .planMode, .none:
-            // brain_switched: Cowork-mode-only; Chat ignores it.
-            // (Other branches: see above comments.)
+             .sessionReset, .spawnDone, .planMode, .none:
+            // brain_switched / session_reset / spawn_done: Cowork-
+            // mode-only; Chat ignores. (Other branches: see above.)
             break
         }
     }
