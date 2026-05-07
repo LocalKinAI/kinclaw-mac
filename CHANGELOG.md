@@ -2,6 +2,46 @@
 
 All notable changes to KinClaw Mac.
 
+## [0.4.1] - 2026-05-06
+
+**Patch — spawn_done bubble was being dropped silently.**
+
+`UI/SpotlightContentView.swift::handleLocalEvent` had a stale-index
+guard at the top that early-returned whenever `assistantIndex` no
+longer pointed at a valid `messages` row. The guard was correct for
+mid-turn events (`text_delta`, `tool_call`) — those need an active
+assistant bubble to write deltas into.
+
+But `spawn_done` arrives 3-5 minutes AFTER the turn that dispatched
+the spawn has ended (the whole point of detached spawn — pilot's
+turn ends in 200µs, the user keeps chatting, and the child returns
+later). At delivery time, `assistantIndex` is stale, the guard
+fires, the event is dropped, and the user's research deliverable
+disappears into the void.
+
+Real bug observed 2026-05-06 19:55:
+
+```
+user: "分析一下因信称义"
+pilot: "我派 researcher 去了 (job 149370)" (turn ends, OK)
+... 1m52s of researcher running ...
+user: "?"  (waiting)
+pilot: "researcher 已完成 (用时 1分 52秒). 报告应该以独立消息显示在
+        你的对话界面上了 ..."
+        ↑ pilot's history HAS the synthetic injection
+        ↑ but no report bubble ever showed in the UI
+```
+
+### Fix
+
+`spawnDone` now handled at the TOP of `handleLocalEvent`, before
+the stale-index guard. It appends a fresh standalone bubble (does
+not need any active `assistantIndex`) and returns.
+
+Pairs with kinclaw v1.12.0+ — kernel-side queueing into pendingSpawn
++ SSE push were already correct; this was purely a Mac-side UI
+plumbing miss.
+
 ## [0.4.0] - 2026-05-06
 
 **Cowork delivers deep research end-to-end.** Pairs with kinclaw v1.12.0

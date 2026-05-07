@@ -2185,6 +2185,27 @@ struct SpotlightContentView: View {
     }
 
     private func handleLocalEvent(_ event: KinClawEvent, assistantIndex: Int) {
+        // spawn_done is a STANDALONE bubble that arrives long after the
+        // turn that dispatched the spawn has ended (researcher running
+        // 3-5 minutes detached). It does NOT need an active
+        // `assistantIndex` to write to — it appends a fresh bubble. So
+        // handle it BEFORE the stale-index guard, otherwise the
+        // guard's early-return silently drops the user's whole
+        // research deliverable. Real bug observed: 2026-05-06 19:55,
+        // researcher finished after 1m52s but no bubble ever appeared
+        // because pilot's turn was long over and `assistantIndex` no
+        // longer pointed at any row.
+        if event.kind == .spawnDone {
+            let soulName = event.name ?? "agent"
+            let jobID = event.id ?? "?"
+            let dur = event.params?["duration_s"] ?? "?"
+            let body = event.output ?? "(no output)"
+            let header = "🔬 \(soulName) (job \(jobID)) finished in \(dur)s"
+            messages.append(ChatMessage.assistant("**\(header)**\n\n\(body)"))
+            scrollTrigger += 1
+            return
+        }
+
         // Stale-index guard. SSE events arrive async, so by the time
         // a chunk lands the user might have cleared / switched chats
         // and `assistantIndex` no longer points at a real row. A raw
@@ -2295,22 +2316,9 @@ struct SpotlightContentView: View {
             // refresh. No-op here.
             break
         case .spawnDone:
-            // A detached child agent (researcher / eye / critic / coder)
-            // that pilot dispatched in the background just finished.
-            // Render its final text as a standalone "result bubble"
-            // attributed to the child's soul name + job id, so the
-            // user sees the deliverable inline without having to wait
-            // on / re-prompt pilot. The kernel ALSO appends this to
-            // the pilot session's history (synthetic user message),
-            // so any follow-up question to pilot can reference the
-            // child's report.
-            let soulName = event.name ?? "agent"
-            let jobID = event.id ?? "?"
-            let dur = event.params?["duration_s"] ?? "?"
-            let body = event.output ?? "(no output)"
-            let header = "🔬 \(soulName) (job \(jobID)) finished in \(dur)s"
-            messages.append(ChatMessage.assistant("**\(header)**\n\n\(body)"))
-            scrollTrigger += 1
+            // Already handled above the stale-index guard — this case
+            // is unreachable but kept exhaustive for the compiler.
+            break
         case .userMessage, .turnDone, .planMode, .none:
             // plan_mode is Code-mode-only; Spotlight ignores it.
             break
