@@ -208,3 +208,32 @@ struct PrivateSoul: Identifiable, Hashable {
         return v.isEmpty ? nil : v
     }
 }
+
+// MARK: - Agent bridge
+
+extension PrivateSoul {
+    /// Bridge to the `Agent` shape so the Cowork agent picker can
+    /// render private souls in the same dropdown as public KinClaw
+    /// souls. Mirrors `Soul.asAgent` (Models/Soul.swift) but tags
+    /// `domain: "kinclaw-private"` so downstream code can filter
+    /// public vs private without parsing the path.
+    ///
+    /// Why the same Agent shape rather than a separate type: ChatView
+    /// + the entire send/render pipeline already branches on
+    /// `agent.isLocal` (which is `localSoulPath != nil`). Reusing it
+    /// means private souls run through the EXACT same spawn flow as
+    /// public local souls — kinclaw kernel doesn't need to know
+    /// these are "private", it just gets a -soul flag.
+    var asAgent: Agent {
+        Agent(
+            name: name,
+            slug: name,
+            port: nil,
+            model: nil,
+            online: true,
+            hostname: "localhost-kinclaw",
+            domain: "kinclaw-private",
+            localSoulPath: path
+        )
+    }
+}

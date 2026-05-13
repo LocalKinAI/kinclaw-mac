@@ -183,6 +183,21 @@ struct SpotlightContentView: View {
         }
     }
 
+    /// Private souls scanned from a sibling localkin checkout at
+    /// `souls/private/`. Surfaced as a second group in the Cowork
+    /// agent menu (🛡️ Private). Empty unless the user has the
+    /// sibling repo on disk — public clones see only the 🦞 KinClaw
+    /// group as before, no hidden behaviour. Each PrivateSoul is
+    /// bridged into Agent shape via `PrivateSoul.asAgent` (carries
+    /// `domain == "kinclaw-private"` + `localSoulPath = <abs path>`,
+    /// which routes through the same chatBody / KinClawSupervisor
+    /// spawn flow as public KinClaw souls.
+    @StateObject private var privateLoader = PrivateSoulLoader()
+
+    private var kinClawPrivateSouls: [Agent] {
+        privateLoader.souls.map { $0.asAgent }
+    }
+
     private var hostname: String {
         selectedAgent?.hostname ?? "api.localkin.dev"
     }
@@ -243,10 +258,7 @@ struct SpotlightContentView: View {
             // Secondary row — agent picker and utility buttons. Code
             // mode has CodePane's own repoBar acting as its secondary
             // row, so we skip ours there to avoid double bars.
-            // Studio also skips — it owns its own header (sibling-
-            // repo path + scan timestamp) so an extra agent picker
-            // on top would just confuse the surface.
-            if mode != .code && mode != .studio {
+            if mode != .code {
                 agentBar
                 Divider().opacity(0.15)
             }
@@ -256,21 +268,14 @@ struct SpotlightContentView: View {
                 case .chat, .cowork:
                     // Chat and Cowork share the same chat surface —
                     // the only difference is the agent pool (cloud vs
-                    // KinClaw souls), enforced by the mode-scoped
-                    // agentMenu in agentBar above. The screen / input
-                    // claws are tools the AGENT uses when invoked;
-                    // the user's actual desktop is right there, no
-                    // need to embed a preview.
+                    // KinClaw souls + private souls), enforced by
+                    // the mode-scoped agentMenu in agentBar above.
+                    // The screen / input claws are tools the AGENT
+                    // uses when invoked; the user's actual desktop is
+                    // right there, no need to embed a preview.
                     chatBody
                 case .code:
                     CodePane()
-                case .studio:
-                    // Self-hosted private-soul card list. UI shell is
-                    // Apache 2.0; the souls live in a sibling private
-                    // repo (~/Documents/Workspace/localkin/souls/private/
-                    // or any of the LOCALKIN_REPO candidate paths) and
-                    // never enter this codebase.
-                    StudioView()
                 }
             }
         }
@@ -286,6 +291,13 @@ struct SpotlightContentView: View {
         }
         .onAppear {
             Task { await loadAgents() }
+            // Scan the sibling localkin checkout for private souls.
+            // Cheap (one .git + one souls/private/ existence check
+            // per candidate path), runs main-thread synchronously.
+            // Re-scans on every panel appearance so dropping a new
+            // *.soul.md into the dir shows up next time the user
+            // opens the panel.
+            privateLoader.rescan()
             // Auto-populate the Cowork brain dropdown from the user's
             // actual Ollama install — same UX Code mode has. Without
             // this the dropdown shows only fallback presets until the
@@ -612,6 +624,19 @@ struct SpotlightContentView: View {
                         .foregroundColor(.secondary)
                 }
 
+                // ── 🛡️ Private souls from sibling localkin checkout ──
+                // Source: PrivateSoulLoader scans souls/private/*.soul.md
+                // in any of the LOCALKIN_REPO candidate paths. Only
+                // surfaces when the sibling repo is on disk — public
+                // clones don't see this section at all (zero hint that
+                // it exists, which is the point: feature is by
+                // self-host opt-in, not flag-gated).
+                if !kinClawPrivateSouls.isEmpty {
+                    Menu("🛡️  Private  (\(kinClawPrivateSouls.count))") {
+                        ForEach(kinClawPrivateSouls) { agentMenuRow($0) }
+                    }
+                }
+
             case .chat:
                 // ── Core — `localkin/scripts/serve.sh` AGENTS array,
                 //     17 publicly tunneled agents at *.localkin.dev. ──
@@ -648,10 +673,10 @@ struct SpotlightContentView: View {
                     }
                 }
 
-            case .code, .studio:
+            case .code:
                 // Unreachable — header swaps the picker for a static
-                // label (`🦞 kincode` for code; Studio renders its own
-                // header). Defensive empty case for exhaustiveness.
+                // "🦞 kincode" label when mode == .code. Defensive
+                // empty case.
                 EmptyView()
             }
 
@@ -1950,10 +1975,7 @@ struct SpotlightContentView: View {
     ///   .code   → no agent (kincode is fixed)
     private func pickDefaultAgent(for mode: ChatMode) -> Agent? {
         switch mode {
-        case .code, .studio:
-            // Studio doesn't use selectedAgent — StudioView manages its
-            // own private-soul list. Returning nil here keeps the
-            // top-level state consistent with .code mode.
+        case .code:
             return nil
         case .chat:
             if !chatLastAgentSlug.isEmpty,
@@ -1978,9 +2000,7 @@ struct SpotlightContentView: View {
     /// given mode. Called from onChange(mode). Code mode is a no-op
     /// — its UI doesn't consume selectedAgent.
     private func applyAgentForMode(_ newMode: ChatMode) {
-        if newMode == .code || newMode == .studio {
-            // Studio + Code both bypass the agent pool — they own
-            // their own UI surfaces and don't consume selectedAgent.
+        if newMode == .code {
             return
         }
         // If the currently-selected agent is already valid for the
@@ -2000,9 +2020,13 @@ struct SpotlightContentView: View {
     private func agentBelongsToMode(_ agent: Agent, mode: ChatMode) -> Bool {
         switch mode {
         case .chat:   return !agent.isLocal     // cloud only
-        case .cowork: return agent.name.hasPrefix("KinClaw")
+        case .cowork:
+            // Public KinClaw souls (registered via :5001 /api/souls)
+            // are name-prefixed; private souls come from the sibling
+            // localkin repo and carry `domain == "kinclaw-private"`.
+            // Both flavours route through the same chatBody surface.
+            return agent.name.hasPrefix("KinClaw") || agent.domain == "kinclaw-private"
         case .code:   return false              // never matches
-        case .studio: return false              // no shared agent pool
         }
     }
 
@@ -2014,7 +2038,6 @@ struct SpotlightContentView: View {
         case .chat:   chatLastAgentSlug = s
         case .cowork: coworkLastSoulSlug = s
         case .code:   break
-        case .studio: break    // no per-mode agent slug to persist
         }
     }
 
