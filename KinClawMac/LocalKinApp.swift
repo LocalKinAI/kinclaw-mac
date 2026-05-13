@@ -284,18 +284,6 @@ struct ContentView: View {
                     Label("KinBook", systemImage: "newspaper.fill")
                 }
 
-            // Studio — self-hosted private workflows. Renders a tab
-            // shell + soul-card list driven by a sibling private repo
-            // at $WORKSPACE/localkin/souls/private/. Empty state if
-            // no sibling repo is on disk; public users see a populated
-            // explanation rather than a hidden feature. The shell is
-            // Apache 2.0; the souls it lists live in a user-owned
-            // private repo and never enter this codebase.
-            StudioView()
-                .tabItem {
-                    Label("Studio", systemImage: "lock.shield")
-                }
-
             SettingsView()
                 .tabItem {
                     Label("Settings", systemImage: "gearshape.fill")

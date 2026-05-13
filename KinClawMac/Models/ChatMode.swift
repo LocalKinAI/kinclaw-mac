@@ -9,6 +9,9 @@ import Foundation
 ///             driven by the kinclaw kernel's screen claw)
 ///   .code   → repo picker + file tree + diff viewer + chat,
 ///             driven by kincode kernel running on :5002
+///   .studio → self-hosted private-soul card list (open-core slot for
+///             user-owned workflows; sibling private repo provides the
+///             souls, this surface only renders them)
 ///
 /// This mirrors Claude Code Desktop's three-mode top bar, but plugged
 /// into the LocalKin kernel family (kinclaw + kincode) instead of
@@ -18,6 +21,7 @@ enum ChatMode: String, CaseIterable, Identifiable {
     case chat
     case cowork
     case code
+    case studio
 
     var id: String { rawValue }
 
@@ -27,17 +31,20 @@ enum ChatMode: String, CaseIterable, Identifiable {
         case .chat:   return "Chat"
         case .cowork: return "Cowork"
         case .code:   return "Code"
+        case .studio: return "Studio"
         }
     }
 
     /// SF Symbol name for the pill icon. Picked to read at 11pt: a
     /// plain bubble for chat, an eye for cowork (we're showing the
-    /// agent the screen), a chevron for code.
+    /// agent the screen), a chevron for code, a shield-lock for
+    /// studio (signals "your stuff, locally hosted").
     var symbol: String {
         switch self {
         case .chat:   return "bubble.left.and.bubble.right"
         case .cowork: return "eye"
         case .code:   return "chevron.left.forwardslash.chevron.right"
+        case .studio: return "lock.shield"
         }
     }
 
@@ -50,6 +57,8 @@ enum ChatMode: String, CaseIterable, Identifiable {
             return "Cowork — agent watches your screen, you stay in flow"
         case .code:
             return "Code — repo-aware coding agent (kincode on :5002)"
+        case .studio:
+            return "Studio — your private workflows (sibling repo, never uploaded)"
         }
     }
 }

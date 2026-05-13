@@ -243,7 +243,10 @@ struct SpotlightContentView: View {
             // Secondary row — agent picker and utility buttons. Code
             // mode has CodePane's own repoBar acting as its secondary
             // row, so we skip ours there to avoid double bars.
-            if mode != .code {
+            // Studio also skips — it owns its own header (sibling-
+            // repo path + scan timestamp) so an extra agent picker
+            // on top would just confuse the surface.
+            if mode != .code && mode != .studio {
                 agentBar
                 Divider().opacity(0.15)
             }
@@ -261,6 +264,13 @@ struct SpotlightContentView: View {
                     chatBody
                 case .code:
                     CodePane()
+                case .studio:
+                    // Self-hosted private-soul card list. UI shell is
+                    // Apache 2.0; the souls live in a sibling private
+                    // repo (~/Documents/Workspace/localkin/souls/private/
+                    // or any of the LOCALKIN_REPO candidate paths) and
+                    // never enter this codebase.
+                    StudioView()
                 }
             }
         }
@@ -638,10 +648,10 @@ struct SpotlightContentView: View {
                     }
                 }
 
-            case .code:
+            case .code, .studio:
                 // Unreachable — header swaps the picker for a static
-                // "🦞 kincode" label when mode == .code. Defensive
-                // empty case.
+                // label (`🦞 kincode` for code; Studio renders its own
+                // header). Defensive empty case for exhaustiveness.
                 EmptyView()
             }
 
@@ -1940,7 +1950,10 @@ struct SpotlightContentView: View {
     ///   .code   → no agent (kincode is fixed)
     private func pickDefaultAgent(for mode: ChatMode) -> Agent? {
         switch mode {
-        case .code:
+        case .code, .studio:
+            // Studio doesn't use selectedAgent — StudioView manages its
+            // own private-soul list. Returning nil here keeps the
+            // top-level state consistent with .code mode.
             return nil
         case .chat:
             if !chatLastAgentSlug.isEmpty,
@@ -1965,7 +1978,9 @@ struct SpotlightContentView: View {
     /// given mode. Called from onChange(mode). Code mode is a no-op
     /// — its UI doesn't consume selectedAgent.
     private func applyAgentForMode(_ newMode: ChatMode) {
-        if newMode == .code {
+        if newMode == .code || newMode == .studio {
+            // Studio + Code both bypass the agent pool — they own
+            // their own UI surfaces and don't consume selectedAgent.
             return
         }
         // If the currently-selected agent is already valid for the
@@ -1987,6 +2002,7 @@ struct SpotlightContentView: View {
         case .chat:   return !agent.isLocal     // cloud only
         case .cowork: return agent.name.hasPrefix("KinClaw")
         case .code:   return false              // never matches
+        case .studio: return false              // no shared agent pool
         }
     }
 
@@ -1998,6 +2014,7 @@ struct SpotlightContentView: View {
         case .chat:   chatLastAgentSlug = s
         case .cowork: coworkLastSoulSlug = s
         case .code:   break
+        case .studio: break    // no per-mode agent slug to persist
         }
     }
 
