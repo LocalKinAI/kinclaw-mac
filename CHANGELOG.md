@@ -2,6 +2,62 @@
 
 All notable changes to KinClaw Mac.
 
+## [Unreleased] - 2026-05-12 — Studio tab (open-core private-soul hosting)
+
+Adds a 4th main tab (`Studio`) for self-hosted private workflows.
+KinClaw Mac is Apache 2.0 — the tab framework + UI shell ship in this
+public repo. The *souls* the tab lists live in a sibling private repo
+(family-private `localkin` checkout, optional) and never enter this
+codebase. This is the open-core pattern at solo-founder scale: VS Code
+ships the editor, extensions are user-owned; KinClaw Mac ships the
+4-tab shell, Studio's contents are user-owned.
+
+### Added
+
+- **`Services/PrivateSoulLoader.swift`** — runtime sibling-repo
+  discovery. Mirrors the Makefile's `LOCALKIN_REPO` search order
+  (`../localkin`, `$HOME/Documents/Workspace/localkin`, `$HOME/code/localkin`,
+  `$HOME/dev/localkin`, `$HOME/src/localkin`). First hit with both
+  `.git/` and `souls/private/` wins. Enumerates `*.soul.md` and parses
+  just enough YAML frontmatter (`name`, `version`, `description`) for
+  the card view — no Yams dependency added.
+- **`Views/Studio/StudioView.swift`** — the tab body. Two states:
+  - Empty (no sibling repo or no private souls): explains the
+    self-hosted contract + lists the 4 candidate paths the loader
+    checks. Public clones land here.
+  - Populated (sibling found, souls listed): scroll view of
+    `PrivateSoulCard`s with name + version + description + mtime +
+    Reveal-in-Finder. Run button is wired but disabled in Phase 1
+    (spawn integration lands in Phase 2).
+- **`LocalKinApp.swift`** — 4th `.tabItem("Studio", "lock.shield")`
+  between KinBook and Settings, tinted `AccentGreen` like the others.
+
+### Design notes
+
+- **Why a tab, not a toggle**: Studio's contents are first-class
+  workflows (cron-driven, multi-phase pipelines), not a setting.
+  Putting it inside Settings or behind a hidden feature flag would
+  pretend it's experimental — it's not, it's the *production-tool*
+  surface for power users who maintain their own soul library.
+- **Why empty state has documentation, not a marketing pitch**: the
+  tab is for users with their own private workflows. The empty state
+  IS the docs for how to populate it — not a "buy a license to unlock"
+  paywall. Anyone can populate it locally; there's nothing to unlock.
+- **Why Phase 1 disables the Run button**: shipping a half-wired Run
+  that crashes when clicked is worse than shipping it dimmed with a
+  clear "Phase 2" tooltip. The full spawn-into-supervised-kinclaw
+  wiring (with tail-log + retry + state machine) is its own commit.
+
+### Phase 2 (next)
+
+- Wire the Run button → spawn `kinclaw -soul <path>` via
+  `KinClawSupervisor`, surface stdout in a per-soul tail-log panel.
+- Per-soul state badge (last run time, success/fail, phase state for
+  multi-phase pipelines that write a `.state` file).
+- Optional: per-soul custom UI panel (declared via a `ui.json` next
+  to the soul file — soul declares "I need a queue.md editor" or "I
+  need a progress chart" and the Studio renders it).
+
 ## [0.4.1] - 2026-05-06
 
 **Patch — spawn_done bubble was being dropped silently.**
