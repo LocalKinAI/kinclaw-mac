@@ -585,24 +585,34 @@ private struct AgentsSettingsTab: View {
 private struct VoiceSettingsTab: View {
     @AppStorage("kinclaw.voice.tts.speaker") private var speaker = "auto"
     @AppStorage("kinclaw.voice.tts.speed") private var speed: Double = 1.0
-    @AppStorage("kinclaw.voice.silenceThresholdDB") private var silenceDB: Double = -35
+    @AppStorage("kinclaw.voice.silenceMarginDB") private var silenceMargin: Double = 12
     @AppStorage("kinclaw.voice.autoContinue") private var autoContinue = false
+    @AppStorage("kinclaw.voice.wakeWord") private var wakeWord = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             SettingsCard("Speech-to-Text (microphone)") {
-                SettingsRow(label: "Silence threshold") {
+                SettingsRow(label: "Speech margin") {
                     HStack {
-                        Slider(value: $silenceDB, in: -60 ... -20, step: 1)
+                        Slider(value: $silenceMargin, in: 6 ... 24, step: 1)
                             .frame(maxWidth: 200)
-                        Text("\(Int(silenceDB)) dB")
+                        Text("+\(Int(silenceMargin)) dB")
                             .font(.system(.caption, design: .monospaced))
                             .foregroundColor(.secondary)
                     }
                 }
                 Toggle("Voice-mode auto-continue (continuous conversation)",
                        isOn: $autoContinue)
-                SettingsCaption("Lower threshold = stops sooner on silence. -35 dB suits a typical office; raise toward -20 dB for noisier rooms.")
+                SettingsCaption("The mic measures your room's noise for 0.5s at the start of each recording; this sets how far above it a sound must be to count as speech. Raise it if recording keeps running after you stop talking, lower it if quiet speech gets cut off.")
+            }
+
+            SettingsCard("Wake word (hands-free mode only)") {
+                SettingsRow(label: "Wake word") {
+                    TextField("off", text: $wakeWord)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 200)
+                }
+                SettingsCaption("Leave empty to send everything you say. When set, hands-free mode only acts on speech that starts with this word — everything else is discarded, so nearby conversation doesn't reach the agent. Matching ignores case, spacing and punctuation. Not used for push-to-talk, where pressing the button is already deliberate.")
             }
 
             SettingsCard("Text-to-Speech (replies spoken)") {

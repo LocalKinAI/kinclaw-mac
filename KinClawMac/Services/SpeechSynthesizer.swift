@@ -6,6 +6,8 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
     private let synthesizer = AVSpeechSynthesizer()
     private var audioPlayer: AVAudioPlayer?
     private var completion: (() -> Void)?
+    /// Remaining clips for a multi-language reply, played back to back.
+    private var playQueue: [Data] = []
     @Published var isSpeaking = false
 
     override init() {
@@ -45,14 +47,62 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
     /// forwards to TTS_ENDPOINT/synthesize anyway). Direct = one
     /// fewer hop, simpler config.
     private func serverTTS(text: String, hostname: String) async -> Bool {
+        let isLocal = hostname == "localhost-kinclaw"
+            || hostname.hasPrefix("localhost")
+
+        // Split mixed-language replies so each run is spoken by a voice that
+        // can actually pronounce it. Local Kokoro needs this done client-side
+        // — one request carries one speaker. The cloud gateway does its own
+        // handling, so it still gets the whole text in a single call (just
+        // cleaned of markdown and emoji, which it does not strip).
+        let pref = UserDefaults.standard.string(forKey: "kinclaw.voice.tts.speaker") ?? "auto"
+        let preferred = (pref == "auto" || pref.isEmpty) ? "" : pref
+        let segments: [TextSegmenter.Segment]
+        if isLocal {
+            segments = TextSegmenter.splitByLang(text, preferredVoice: preferred)
+        } else {
+            let cleaned = TextSegmenter.stripNonSpeakable(text)
+            segments = cleaned.isEmpty
+                ? []
+                : [TextSegmenter.Segment(text: cleaned, voice: pickServerVoice(forText: text))]
+        }
+        guard !segments.isEmpty else { return false }
+
+        // Synthesize concurrently but keep order — Kokoro handles parallel
+        // requests fine, and a reply that alternates languages several times
+        // would otherwise pay the full round-trip once per run.
+        var clips = [Data?](repeating: nil, count: segments.count)
+        await withTaskGroup(of: (Int, Data?).self) { group in
+            for (i, seg) in segments.enumerated() {
+                group.addTask {
+                    (i, await self.synthesizeSegment(seg, isLocal: isLocal, hostname: hostname))
+                }
+            }
+            for await (i, data) in group { clips[i] = data }
+        }
+
+        // All-or-nothing: a half-spoken reply is worse than falling back to
+        // the system voice, which at least reads the whole thing.
+        let ordered = clips.compactMap { $0 }
+        guard ordered.count == segments.count else { return false }
+
+        playQueue = ordered
+        return playNextClip()
+    }
+
+    /// One segment → one WAV. Returns nil on any failure so the caller can
+    /// fall back wholesale.
+    private func synthesizeSegment(
+        _ segment: TextSegmenter.Segment,
+        isLocal: Bool,
+        hostname: String
+    ) async -> Data? {
         do {
             // Route to Kokoro directly when the agent is a local
             // soul (hostname marker is "localhost-kinclaw" — see
             // Soul.asAgent). User can override the Kokoro endpoint
             // via Settings → Backend → TTS (defaults to
             // http://localhost:8001).
-            let isLocal = hostname == "localhost-kinclaw"
-                || hostname.hasPrefix("localhost")
             let url: URL
             if isLocal {
                 let prefBase = UserDefaults.standard.string(
@@ -78,49 +128,89 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
                                  forHTTPHeaderField: "Authorization")
             }
 
-            struct TTSRequest: Codable {
+            // Field names are not interchangeable between the two backends,
+            // and getting them wrong fails silently — the server answers 200
+            // and returns audio, just in the wrong voice.
+            //
+            // Local Kokoro (`/synthesize`) reads `speaker` and `language`.
+            // Sending `voice` meant it never saw a speaker at all and fell
+            // back to an English default, which pronounces Chinese by naming
+            // the characters: 「施舍是信仰的试金石」came back as "Chinese
+            // letter, Chinese letter, Chinese letter…" (verified by feeding
+            // the audio back through SenseVoice). The same request with
+            // `speaker`+`language` transcribes cleanly — and is a third of the
+            // size, because it stops narrating every glyph.
+            //
+            // The cloud gateway (`/v1/tts`) keeps the `voice`/`speed` shape.
+            struct KokoroRequest: Codable {
+                let text: String
+                let speaker: String
+                let language: String
+            }
+            struct GatewayTTSRequest: Codable {
                 let text: String
                 let voice: String?
                 let speed: Double?
             }
-            // Pick voice based on user's TTS speaker pref (Settings →
-            // Voice) + detected language. nil voice was making the
-            // server pick its own default (zf_xiaoxiao zh-CN female),
-            // which read English text in mangled Chinese phonetics.
-            let voice = pickServerVoice(forText: text)
+            // The voice comes from the segmenter, which already accounted for
+            // the user's speaker preference and the language of this
+            // particular run — so a Chinese reply quoting an English term
+            // gets two requests with two speakers, not one compromise voice.
+            let voice = segment.voice
             let speed = UserDefaults.standard.double(forKey: "kinclaw.voice.tts.speed")
-            request.httpBody = try JSONEncoder().encode(TTSRequest(
-                text: text,
-                voice: voice,
-                speed: speed > 0 ? speed : nil
-            ))
+
+            if isLocal {
+                // Kokoro wants a bare language tag, not a locale: "zh", not
+                // "zh-CN". Derive it from the voice prefix so it can never
+                // disagree with the speaker being sent alongside it.
+                request.httpBody = try JSONEncoder().encode(KokoroRequest(
+                    text: segment.text,
+                    speaker: voice,
+                    language: TextSegmenter.language(forVoice: voice)
+                ))
+            } else {
+                request.httpBody = try JSONEncoder().encode(GatewayTTSRequest(
+                    text: segment.text,
+                    voice: voice,
+                    speed: speed > 0 ? speed : nil
+                ))
+            }
 
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse,
                   httpResponse.statusCode == 200,
                   data.count > 44 else {  // WAV header is 44 bytes minimum
-                return false
+                return nil
             }
+            return data
+        } catch {
+            return nil
+        }
+    }
 
-            // Play WAV audio
+    /// Pop the next clip off the queue and play it. Returns false if the clip
+    /// can't be decoded, so the caller can fall back to the system voice.
+    @discardableResult
+    private func playNextClip() -> Bool {
+        guard !playQueue.isEmpty else { return false }
+        let data = playQueue.removeFirst()
+        do {
             audioPlayer = try AVAudioPlayer(data: data)
             audioPlayer?.delegate = self
             audioPlayer?.play()
             return true
         } catch {
+            playQueue.removeAll()
             return false
         }
     }
 
     /// Local iOS TTS fallback
     private func localTTS(text: String) {
-        let cleaned = text
-            .replacingOccurrences(of: "**", with: "")
-            .replacingOccurrences(of: "##", with: "")
-            .replacingOccurrences(of: "#", with: "")
-            .replacingOccurrences(of: "```", with: "")
-            .replacingOccurrences(of: "`", with: "")
-            .replacingOccurrences(of: "- ", with: "")
+        // Same cleaning as the server path. The old inline version handled
+        // four markdown markers and nothing else, so emoji reached the system
+        // voice and got announced by name ("sparkles", "check mark").
+        let cleaned = TextSegmenter.stripNonSpeakable(text)
 
         let utterance = AVSpeechUtterance(string: cleaned)
 
@@ -141,6 +231,7 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         }
         audioPlayer?.stop()
         audioPlayer = nil
+        playQueue.removeAll()   // else a barged-in reply resumes mid-sentence
         isSpeaking = false
         completion = nil
     }
@@ -222,9 +313,14 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
 extension SpeechSynthesizer: AVAudioPlayerDelegate {
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         DispatchQueue.main.async { [weak self] in
-            self?.isSpeaking = false
-            self?.completion?()
-            self?.completion = nil
+            guard let self = self else { return }
+            // A mixed-language reply is several clips; only report "done"
+            // after the last one, or voice mode would start listening again
+            // while the English half is still queued.
+            if !self.playQueue.isEmpty, self.playNextClip() { return }
+            self.isSpeaking = false
+            self.completion?()
+            self.completion = nil
         }
     }
 }

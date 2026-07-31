@@ -141,6 +141,38 @@ class VoiceRecorder: NSObject, ObservableObject {
     private func startSilenceDetection() {
         var silenceCount = 0
 
+        // Recording used to overrun to the 15s safety timer instead of
+        // stopping 0.5s after the user finished talking. Measured on this
+        // machine rather than guessed: room tone averages -40.5 dBFS but
+        // *peaks* at -32.0. The old test was `avgPower > -35` against a
+        // hardcoded constant, and a hit reset `silenceCount` to zero. So the
+        // average sat safely below the line while stray peaks crossed it every
+        // few ticks — each one wiping the counter before it could reach 5.
+        // Silence was detected constantly and never accumulated.
+        //
+        // Two fixes, because either alone is fragile:
+        //
+        //   1. Put the line where the room is, not where a constant guessed.
+        //      Sample the first 0.4s (user hasn't started talking yet) and set
+        //      the threshold 12 dB above it — here that's ≈-28, clear of the
+        //      -32 peaks. Clamped both ways: a silent room shouldn't make a
+        //      keyboard tap read as speech, a loud one shouldn't need
+        //      shouting.
+        //   2. Decay the counter instead of resetting it (below), so one
+        //      stray peak can't undo half a second of accumulated silence.
+        var calibration: [Float] = []
+        var speechThreshold: Float = -35
+        let calibrationTicks = 5
+
+        // Settings → Voice exposes this as a slider. It used to write to
+        // `kinclaw.voice.silenceThresholdDB`, which nothing ever read — the
+        // detector had -35 hardcoded, so dragging it did nothing at all. Now
+        // it sets how far above the measured room noise a sound has to be
+        // before it counts as speech, which is the knob that actually helps in
+        // a room the default doesn't suit.
+        let marginPref = UserDefaults.standard.double(forKey: "kinclaw.voice.silenceMarginDB")
+        let margin = Float(marginPref > 0 ? marginPref : 12)
+
         // Safety: max 15 seconds recording
         maxTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: false) { [weak self] _ in
             DispatchQueue.main.async {
@@ -165,10 +197,33 @@ class VoiceRecorder: NSObject, ObservableObject {
                 self.audioLevel = self.audioLevel * 0.5 + normalized * 0.5
             }
 
+            // Calibrate against this room before judging anything. The level
+            // meter above keeps updating throughout, so the waveform still
+            // moves during these 0.4s — only the stop decision waits.
+            if calibration.count < calibrationTicks {
+                calibration.append(avgPower)
+                if calibration.count == calibrationTicks {
+                    // Median, not mean. Calibration runs while the mic is
+                    // already hot, so a door closing or an early "呃" lands in
+                    // the sample — and with a mean, one such tick drags the
+                    // whole threshold up and makes the rest of the recording
+                    // deaf. A median of 5 shrugs off up to two bad ticks.
+                    let floor = calibration.sorted()[calibration.count / 2]
+                    speechThreshold = min(-25, max(-45, floor + margin))
+                }
+                return
+            }
+
             // Detect if user has started speaking
-            if avgPower > -35 {
+            if avgPower > speechThreshold {
                 self.hasSpeechStarted = true
-                silenceCount = 0
+                // Decay, don't reset. A single loud tick is as likely to be a
+                // keystroke or a chair creak as it is speech; letting one
+                // erase 0.5s of accumulated silence is what kept recording
+                // alive until the safety timer. Sustained speech still drives
+                // this to 0 within a few ticks, since it subtracts twice as
+                // fast as silence adds.
+                silenceCount = max(0, silenceCount - 2)
             } else {
                 silenceCount += 1
             }

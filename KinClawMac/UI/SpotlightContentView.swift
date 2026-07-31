@@ -134,7 +134,12 @@ struct SpotlightContentView: View {
     // Voice.
     @StateObject private var speaker = SpeechSynthesizer()
     @StateObject private var recorder = VoiceRecorder()
-    @State private var ttsEnabled = false
+    // AppStorage, not State: a spoken-reply preference that forgets itself
+    // every time the panel reopens is indistinguishable from a broken toggle.
+    @AppStorage("kinclaw.voice.ttsEnabled") private var ttsEnabled = false
+    /// Empty = off, and that stays the default: a wake word the user hasn't
+    /// been told about looks identical to voice mode being broken.
+    @AppStorage("kinclaw.voice.wakeWord") private var wakeWord = ""
     @State private var voiceMode = false
 
     @FocusState private var inputFocused: Bool
@@ -155,11 +160,30 @@ struct SpotlightContentView: View {
     private var localAgents: [Agent] { allAgents.filter { $0.isLocal } }
     private var cloudAgents: [Agent] { allAgents.filter { !$0.isLocal } }
 
+    /// Souls that exist in the kinclaw repo but have no business being offered
+    /// in a macOS picker.
+    ///
+    /// The prefix test alone is too loose: kinclaw ships every soul it owns,
+    /// including a benchmark harness and the pilots for other operating
+    /// systems. Picking `KinClaw Linux Pilot` on a Mac produces an agent that
+    /// reaches for tools this machine does not have, and `KinClaw macbench` is
+    /// a 369-slot test rig — neither is something a person means to summon with
+    /// ⌘⌥K.
+    ///
+    /// Matched on the soul slug rather than the display name, because display
+    /// names get reworded and slugs do not.
+    private static let hiddenSoulSlugs: Set<String> = [
+        "macbench",        // benchmark harness (`make bench`), not an assistant
+        "pilot_linux",     // wrong OS — its tools do not exist here
+        "pilot_windows",   // wrong OS
+    ]
+
     private var kinClawSouls: [Agent] {
-        // Names emitted by kinclaw's soul list start with "KinClaw "
-        // (Pilot / Coder / Critic / Curator / Eye / Marketer /
-        // Researcher = 7 today).
-        localAgents.filter { $0.name.hasPrefix("KinClaw") }
+        // Names emitted by kinclaw's soul list start with "KinClaw ".
+        localAgents.filter {
+            $0.name.hasPrefix("KinClaw")
+                && !Self.hiddenSoulSlugs.contains($0.slug)
+        }
     }
     private var localKinSouls: [Agent] {
         // The rest — souls under ~/.localkin/souls/ that aren't
@@ -311,6 +335,63 @@ struct SpotlightContentView: View {
         .onChange(of: selectedAgent?.slug) { _, slug in
             handleAgentChange()
             persistAgentForCurrentMode(slug: slug)
+        }
+        // Transcribed speech had nowhere to go: VoiceRecorder published the
+        // text and nothing observed it, so recording, VAD and transcription all
+        // worked while the words silently evaporated. This is the wire.
+        .onChange(of: recorder.transcript) { _, text in
+            var spoken = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !spoken.isEmpty else { return }
+
+            // Wake-word gating applies only to hands-free mode. Push-to-talk
+            // is already an explicit act — demanding a wake word there would
+            // mean saying the name every single time for no benefit.
+            if voiceMode {
+                switch WakeWord.test(spoken, wake: wakeWord) {
+                case .disabled:
+                    break
+                case .woken(let rest):
+                    // Wake word alone with nothing after it: the user has the
+                    // floor but hasn't said the request yet. Keep listening
+                    // rather than sending an empty turn.
+                    guard !rest.isEmpty else {
+                        resumeListeningIfConversing()
+                        return
+                    }
+                    spoken = rest
+                case .ignored:
+                    // Not addressed to us — drop it and keep listening. No UI
+                    // change on purpose: showing every discarded utterance
+                    // would defeat the point of filtering them.
+                    resumeListeningIfConversing()
+                    return
+                }
+            }
+
+            // Append rather than replace: the user may have typed something
+            // first and then dictated the rest.
+            inputText = inputText.isEmpty
+                ? spoken
+                : inputText.trimmingCharacters(in: .whitespaces) + " " + spoken
+
+            // In a hands-free conversation the whole point is not touching the
+            // keyboard, so speaking is the send.
+            if voiceMode { send() }
+        }
+        // Leaving voice mode must stop the loop immediately — otherwise an
+        // in-flight recording would fire one more round after the user opted
+        // out, which feels like the app ignoring them.
+        .onChange(of: voiceMode) { _, on in
+            if on {
+                // Hearing the reply is half of a conversation.
+                ttsEnabled = true
+                if !isStreaming && !recorder.isRecording {
+                    recorder.startRecording(hostname: hostname)
+                }
+            } else {
+                if recorder.isRecording { recorder.cancelRecording() }
+                speaker.stop()
+            }
         }
         .onChange(of: mode) { _, newMode in
             // Save the outgoing session and clear the surface
@@ -1646,30 +1727,33 @@ struct SpotlightContentView: View {
             .buttonStyle(.plain)
             .help("Attach files (or drag & drop anywhere on this panel)")
 
-            // Mic + (when recording) live audio level meter. Click
-            // toggles record/cancel.
+            // One voice control, not two.
+            //
+            // There used to be a separate dictation button beside this one, but
+            // two near-identical mic glyphs sitting together only raised the
+            // question of which one to press. Talking to the assistant is the
+            // job; turning speech into text you then have to send by hand is a
+            // strictly smaller version of it. So: one button, one meaning.
+            //
+            // The icon doubles as a status readout, because in a hands-free
+            // loop the user cannot see whether the machine is listening,
+            // thinking, or talking — and guessing wrong means speaking over it.
             Button {
-                if recorder.isRecording {
-                    recorder.cancelRecording()
-                } else {
-                    recorder.startRecording(hostname: hostname)
-                }
+                voiceMode.toggle()
             } label: {
-                if recorder.isRecording {
-                    HStack(spacing: 4) {
-                        Image(systemName: "stop.circle.fill")
-                            .font(.system(size: 14))
-                            .foregroundColor(.red)
+                HStack(spacing: 4) {
+                    Image(systemName: voiceIconName)
+                        .font(.system(size: 14))
+                        .foregroundColor(voiceIconColor)
+                    // Only while actually capturing: a meter that lingers
+                    // through the reply would suggest it is still hearing you.
+                    if voiceMode && recorder.isRecording {
                         AudioLevelMeter(level: recorder.audioLevel)
                     }
-                } else {
-                    Image(systemName: "mic")
-                        .font(.system(size: 14))
-                        .foregroundColor(.secondary)
                 }
             }
             .buttonStyle(.plain)
-            .help(recorder.isRecording ? "Stop recording" : "Voice input")
+            .help(voiceHelpText)
 
             TextField(
                 selectedAgent.map { "Message \($0.displayName)…" }
@@ -2043,6 +2127,58 @@ struct SpotlightContentView: View {
 
     // MARK: - Send (router → cloud / local)
 
+    // MARK: - Voice button state
+    //
+    // In a hands-free loop the microphone is open some of the time and closed
+    // the rest, with no keyboard interaction to mark the boundary. Without a
+    // visible cue the user talks over the reply, or waits in silence while the
+    // machine is already listening. These three properties are that cue.
+
+    private var voiceIconName: String {
+        guard voiceMode else { return "mic" }
+        if recorder.isTranscribing { return "waveform.badge.magnifyingglass" }
+        if recorder.isRecording { return "mic.fill" }
+        if speaker.isSpeaking { return "speaker.wave.2.fill" }
+        if isStreaming { return "ellipsis.circle" }
+        return "waveform.circle.fill"
+    }
+
+    private var voiceIconColor: Color {
+        guard voiceMode else { return .secondary }
+        // Red only while capturing — the one state where what you say is
+        // being recorded.
+        return recorder.isRecording ? .red : .accentColor
+    }
+
+    private var voiceHelpText: String {
+        guard voiceMode else {
+            return "Hands-free conversation: speak, it replies aloud, repeat"
+        }
+        if recorder.isTranscribing { return "Transcribing…" }
+        if recorder.isRecording { return "Listening — just talk, it sends when you stop" }
+        if speaker.isSpeaking { return "Speaking — it will listen again when done" }
+        if isStreaming { return "Thinking…" }
+        return "Conversation mode on — click to stop"
+    }
+
+    /// Hands the conversational turn back to the microphone.
+    ///
+    /// Called after the assistant finishes speaking. Guarded rather than
+    /// unconditional because three things can race here: the user may have
+    /// switched voice mode off while the reply was playing, another response may
+    /// already be streaming, and the recorder may still be running from a
+    /// previous turn. Starting a second recording in any of those cases produces
+    /// overlapping audio and a garbled transcript.
+    private func resumeListeningIfConversing() {
+        guard voiceMode, !isStreaming, !recorder.isRecording else { return }
+        // A beat of silence between the reply ending and the mic opening, so the
+        // tail of the spoken audio never bleeds into the next recording.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            guard voiceMode, !isStreaming, !recorder.isRecording else { return }
+            recorder.startRecording(hostname: hostname)
+        }
+    }
+
     private func send() {
         guard let agent = selectedAgent else { return }
         let typed = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2127,7 +2263,13 @@ struct SpotlightContentView: View {
                 appState.recordMessage()
                 if ttsEnabled {
                     speaker.speak(messages[assistantIndex].content,
-                                  hostname: hostname) {}
+                                  hostname: hostname) {
+                        // Closing the loop: the reply has finished playing, so
+                        // start listening again. Without this the user would
+                        // have to reach for the mic every single turn, which is
+                        // exactly what hands-free mode exists to avoid.
+                        resumeListeningIfConversing()
+                    }
                 }
                 saveCurrentSession()
             }
@@ -2189,7 +2331,13 @@ struct SpotlightContentView: View {
                !messages[assistantIndex].content.isEmpty
             {
                 speaker.speak(messages[assistantIndex].content,
-                              hostname: hostname) {}
+                              hostname: hostname) {
+                    resumeListeningIfConversing()
+                }
+            } else {
+                // TTS off (or an empty reply): there is nothing to wait for, so
+                // hand the turn straight back to the microphone.
+                resumeListeningIfConversing()
             }
         }
         localStreamTask = task
