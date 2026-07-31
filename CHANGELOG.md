@@ -2,6 +2,96 @@
 
 All notable changes to KinClaw Mac.
 
+## [Unreleased] - 2026-07-30 — Hands-free voice conversation
+
+Voice mode was already wired into the UI — a mic button, a waveform, a TTS
+toggle — and it produced audio every time you used it. It just never worked,
+in three separate ways that each looked like success from the outside.
+
+### Fixed — Chinese replies were spoken as "Chinese letter, Chinese letter…"
+
+Local Kokoro (`/synthesize`) reads `speaker` + `language`. The cloud gateway
+(`/v1/tts`) reads `voice` + `speed`. We sent the gateway's shape to both. Kokoro
+never saw a speaker, fell back to an English default, and that voice pronounces
+Chinese by *naming each glyph*.
+
+Nothing surfaced the mistake: HTTP 200, a valid WAV, audio plays. Confirmed by
+sending the output back through SenseVoice — the old payload transcribed as the
+recital, the new one as 「施舍是信仰的试金石」, at a third of the bytes because
+it stopped narrating every character.
+
+### Fixed — recording kept running long after you stopped talking
+
+The symptom looked like slow transcription. It wasn't; the VAD simply never
+fired, so every utterance ran to the 15-second safety timer.
+
+Measured instead of guessed, which mattered — the first hypothesis (room noise
+sitting permanently above the threshold) was wrong. Room tone here averages
+**-40.5 dBFS**, comfortably under the hardcoded -35 line. But it *peaks* at
+**-32.0**, and any tick above the line reset the silence counter to zero. The
+average stayed quiet while stray peaks crossed every few ticks, wiping the
+count before it could reach the 0.5s stop. That also explains why it felt
+intermittent rather than consistently stuck.
+
+Two changes, since either alone is fragile:
+
+- The noise floor is now measured per-recording — median of the first 0.5s, so
+  one early cough can't skew the whole session.
+- The counter decays (`-2`) instead of resetting, so a single keystroke can't
+  undo half a second of accumulated silence.
+
+Replaying recorded audio through both versions: the old logic **never stopped**
+in three of four noise profiles; the new one stops at 0.5s in all four,
+including a dead-silent room (no regression where the old code did work).
+
+### Fixed — the "Silence threshold" slider did nothing
+
+Settings → Voice wrote to `kinclaw.voice.silenceThresholdDB`. No code read it.
+The detector had -35 compiled in, so the slider had never had any effect since
+it shipped. It now sets the margin above the *measured* room noise — the knob
+that actually helps when the default doesn't suit your room.
+
+### Added — mixed-language replies get the right voice per language
+
+Kokoro voices are single-language: `zf_xiaoxiao` reading English produces
+mangled phonetics, `af_bella` reading Chinese produces the glyph recital above.
+Most real replies mix both, since technical terms stay in English.
+
+Replies are now split into language runs, each synthesized by a matching voice
+and played back to back. This is a **port of localkin's `pkg/tts/split.go`**,
+not a reimplementation — that version is already in production behind
+`kin_speak` and carries fixes worth inheriting (neutral punctuation attaching
+to the following run; one- and two-letter English labels like multiple-choice
+"A"/"B" folded into the surrounding voice instead of voiced alone).
+
+Two refinements on top, both cost-only and verified not to change pronunciation:
+punctuation-only runs fold into the preceding segment (CJK punctuation carries a
+`zh` tag, so a lone `。` between two English runs would otherwise cost a whole
+HTTP round-trip), and the resulting same-voice neighbours merge.
+
+Markdown and emoji are now stripped on **both** output paths. The system-voice
+fallback previously handled four markers and let emoji through to be announced
+by name ("sparkles", "check mark").
+
+### Added — optional wake word for hands-free mode
+
+Hands-free mode sent everything it heard, including a phone call in the same
+room or the recogniser's best guess at an air conditioner. A wake word turns
+"always listening" into "always listening, rarely acting".
+
+Empty and **off by default** — a wake word the user hasn't been told about is
+indistinguishable from voice mode being broken.
+
+Matching folds away case, spacing, and punctuation. STT output for a short name
+is unstable (「小金」comes back as 小巾, 小kin, with or without a trailing
+comma), and exact comparison would have the user repeating themselves while a
+correct match sits one punctuation mark away — a worse failure than the rare
+false accept it prevents. The word must lead the utterance, so discussing the
+agent mid-sentence doesn't trigger it. Push-to-talk is exempt: pressing the
+button is already the deliberate act a wake word exists to require.
+
+---
+
 ## [Unreleased] - 2026-05-12 — Studio tab (open-core private-soul hosting)
 
 Adds a 4th main tab (`Studio`) for self-hosted private workflows.
