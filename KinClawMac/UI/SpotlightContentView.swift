@@ -140,6 +140,13 @@ struct SpotlightContentView: View {
     /// Empty = off, and that stays the default: a wake word the user hasn't
     /// been told about looks identical to voice mode being broken.
     @AppStorage("kinclaw.voice.wakeWord") private var wakeWord = ""
+    /// How long a conversation stays open after the last exchange. The wake
+    /// word gets you in; it should not be required for every following
+    /// sentence, or a five-turn conversation means saying the name five times.
+    @AppStorage("kinclaw.voice.wakeSessionSeconds") private var wakeSessionSeconds: Double = 45
+    /// When the current conversation lapses back to needing the wake word.
+    /// nil = not in a conversation, so the next utterance must start with it.
+    @State private var wakeSessionExpiry: Date?
     @State private var voiceMode = false
 
     @FocusState private var inputFocused: Bool
@@ -346,25 +353,39 @@ struct SpotlightContentView: View {
             // Wake-word gating applies only to hands-free mode. Push-to-talk
             // is already an explicit act — demanding a wake word there would
             // mean saying the name every single time for no benefit.
-            if voiceMode {
-                switch WakeWord.test(spoken, wake: wakeWord) {
-                case .disabled:
-                    break
-                case .woken(let rest):
-                    // Wake word alone with nothing after it: the user has the
-                    // floor but hasn't said the request yet. Keep listening
-                    // rather than sending an empty turn.
-                    guard !rest.isEmpty else {
-                        resumeListeningIfConversing()
+            //
+            // The wake word opens a conversation, it doesn't guard every
+            // sentence. Once you're in, speech goes straight through until
+            // the room has been quiet long enough for the session to lapse;
+            // then the name is required again. Requiring it per-utterance
+            // would make a five-turn exchange mean saying "小美" five times.
+            if voiceMode, !wakeWord.isEmpty {
+                if isWakeSessionOpen {
+                    // Already conversing — take it as-is and push the lapse
+                    // further out.
+                    extendWakeSession()
+                } else {
+                    switch WakeWord.test(spoken, wake: wakeWord) {
+                    case .disabled:
+                        break
+                    case .woken(let rest):
+                        extendWakeSession()
+                        // Wake word alone with nothing after it: the user has
+                        // the floor but hasn't said the request yet. Keep
+                        // listening rather than sending an empty turn — the
+                        // session is open now, so what follows needs no name.
+                        guard !rest.isEmpty else {
+                            resumeListeningIfConversing()
+                            return
+                        }
+                        spoken = rest
+                    case .ignored:
+                        // Not addressed to us — drop it and keep listening. No
+                        // UI change on purpose: showing every discarded
+                        // utterance would defeat the point of filtering them.
+                        resumeListeningIfConversing(extendSession: false)
                         return
                     }
-                    spoken = rest
-                case .ignored:
-                    // Not addressed to us — drop it and keep listening. No UI
-                    // change on purpose: showing every discarded utterance
-                    // would defeat the point of filtering them.
-                    resumeListeningIfConversing()
-                    return
                 }
             }
 
@@ -385,13 +406,27 @@ struct SpotlightContentView: View {
             if on {
                 // Hearing the reply is half of a conversation.
                 ttsEnabled = true
+                // Entering voice mode starts *armed*, not conversing: the
+                // wake word is what opens the session. Clearing here matters
+                // because the expiry survives leaving voice mode otherwise,
+                // and re-entering within the window would skip the gate.
+                closeWakeSession()
                 if !isStreaming && !recorder.isRecording {
                     recorder.startRecording(hostname: hostname)
                 }
             } else {
                 if recorder.isRecording { recorder.cancelRecording() }
                 speaker.stop()
+                closeWakeSession()
             }
+        }
+        // `isWakeSessionOpen` is a time comparison, and SwiftUI has no reason
+        // to re-render when a Date silently passes. Without this tick the
+        // button would keep claiming the conversation is open until the next
+        // unrelated state change happened to redraw it.
+        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
+            guard let expiry = wakeSessionExpiry, expiry <= Date() else { return }
+            wakeSessionExpiry = nil
         }
         .onChange(of: mode) { _, newMode in
             // Save the outgoing session and clear the surface
@@ -2145,6 +2180,11 @@ struct SpotlightContentView: View {
 
     private var voiceIconColor: Color {
         guard voiceMode else { return .secondary }
+        // Waiting for the wake word is a distinct state from conversing, and
+        // it must look distinct: both have the mic open, but only one of them
+        // will do anything with what it hears. Without this the user says a
+        // whole sentence into what looks like an active mic and gets silence.
+        if recorder.isRecording && !isWakeSessionOpen { return .orange }
         // Red only while capturing — the one state where what you say is
         // being recorded.
         return recorder.isRecording ? .red : .accentColor
@@ -2155,9 +2195,16 @@ struct SpotlightContentView: View {
             return "Hands-free conversation: speak, it replies aloud, repeat"
         }
         if recorder.isTranscribing { return "Transcribing…" }
-        if recorder.isRecording { return "Listening — just talk, it sends when you stop" }
+        if recorder.isRecording {
+            return isWakeSessionOpen
+                ? "Listening — just talk, it sends when you stop"
+                : "Waiting for “\(wakeWord)” — say it to start talking"
+        }
         if speaker.isSpeaking { return "Speaking — it will listen again when done" }
         if isStreaming { return "Thinking…" }
+        if !isWakeSessionOpen {
+            return "Conversation mode on — say “\(wakeWord)” to begin"
+        }
         return "Conversation mode on — click to stop"
     }
 
@@ -2169,7 +2216,34 @@ struct SpotlightContentView: View {
     /// already be streaming, and the recorder may still be running from a
     /// previous turn. Starting a second recording in any of those cases produces
     /// overlapping audio and a garbled transcript.
-    private func resumeListeningIfConversing() {
+    /// True while the wake word has already been said and the conversation is
+    /// still open. Always true when no wake word is configured — there is no
+    /// gate to be on the far side of.
+    private var isWakeSessionOpen: Bool {
+        guard !wakeWord.isEmpty else { return true }
+        guard let expiry = wakeSessionExpiry else { return false }
+        return expiry > Date()
+    }
+
+    /// Push the lapse further out. Called when the user speaks and again when
+    /// a reply finishes — the second one matters: a two-minute answer would
+    /// otherwise expire the session while the user is still listening to it,
+    /// and they'd have to say the wake word to respond to what they just
+    /// heard.
+    private func extendWakeSession() {
+        guard !wakeWord.isEmpty else { return }
+        wakeSessionExpiry = Date().addingTimeInterval(max(5, wakeSessionSeconds))
+    }
+
+    private func closeWakeSession() {
+        wakeSessionExpiry = nil
+    }
+
+    private func resumeListeningIfConversing(extendSession: Bool = true) {
+        // A finished reply keeps the conversation alive; a discarded utterance
+        // must not, or background chatter would hold the session open forever
+        // and the wake word would stop meaning anything.
+        if extendSession { extendWakeSession() }
         guard voiceMode, !isStreaming, !recorder.isRecording else { return }
         // A beat of silence between the reply ending and the mic opening, so the
         // tail of the spoken audio never bleeds into the next recording.

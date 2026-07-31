@@ -82,13 +82,30 @@ room or the recogniser's best guess at an air conditioner. A wake word turns
 Empty and **off by default** — a wake word the user hasn't been told about is
 indistinguishable from voice mode being broken.
 
+**The wake word opens a conversation; it doesn't guard every sentence.** Say it
+once and the session is open: what follows goes straight through, no name
+needed, for as long as the exchange keeps going. After a configurable quiet
+period (default 45s) the session lapses and the word is required again. Gating
+every single utterance would mean a five-turn conversation needs the name five
+times, which is not what "hands-free" should feel like.
+
+The lapse timer counts from when the **reply finishes**, not from when the user
+stopped speaking. A two-minute answer would otherwise expire the session while
+the user was still listening to it, and they would have to say the wake word to
+respond to what they had just heard.
+
 Matching folds away case, spacing, and punctuation. STT output for a short name
-is unstable (「小金」comes back as 小巾, 小kin, with or without a trailing
+is unstable (「小美」comes back as 小眉, 小mei, with or without a trailing
 comma), and exact comparison would have the user repeating themselves while a
 correct match sits one punctuation mark away — a worse failure than the rare
 false accept it prevents. The word must lead the utterance, so discussing the
 agent mid-sentence doesn't trigger it. Push-to-talk is exempt: pressing the
 button is already the deliberate act a wake word exists to require.
+
+Waiting-for-wake and conversing are drawn differently (amber vs red mic, with
+the help text naming the word). Both states have the microphone open and only
+one of them acts on what it hears; without the distinction the user speaks a
+full sentence into what looks like a live mic and gets nothing back.
 
 ---
 

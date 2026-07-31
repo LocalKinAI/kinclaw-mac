@@ -95,7 +95,21 @@ Recording stops on its own ~0.5s after you stop talking. The mic measures your r
 
 **Mixed zh/en replies are split and voiced per language.** Kokoro voices are single-language: `zf_xiaoxiao` reading English produces mangled phonetics, `af_bella` reading Chinese names each glyph out loud ("Chinese letter, Chinese letter…"). A reply like `用 GitHub Actions 部署，成本是 zero` becomes four runs, each synthesized by the matching voice and played back to back. The splitter is a port of localkin's `pkg/tts/split.go`, so both stay in agreement.
 
-**Wake word** (optional, off by default) — set one in Settings → Voice and hands-free mode only acts on speech that starts with it; everything else is discarded, so a conversation nearby doesn't reach the agent. Matching ignores case, spacing and punctuation, because STT output for a short name is unstable. Push-to-talk ignores the setting — pressing the button is already deliberate.
+**Wake word** (optional, off by default) — set one in Settings → Voice, and hands-free mode ignores everything until you say it, so a conversation happening nearby doesn't reach the agent.
+
+It opens a conversation rather than guarding each sentence:
+
+```
+（同事在旁边说话）              → discarded
+你：小美，帮我看看日程            → sends「帮我看看日程」, conversation opens
+   （回复播了 90 秒）
+你：那明天呢                     → sends — no wake word needed
+   （你走开，静默 50 秒）          → conversation lapses
+（同事说话）                     → discarded again
+你：小美，继续                    → sends「继续」
+```
+
+The lapse timer (default 45s, adjustable) counts from when the **reply finishes**, not from when you stopped speaking — otherwise a long answer would expire the session while you were still listening to it. Matching ignores case, spacing and punctuation, since STT output for a short name is unstable. The mic turns amber while waiting for the word and red once you're conversing. Push-to-talk ignores the setting entirely — pressing the button is already deliberate.
 
 ### Backends
 
@@ -116,6 +130,7 @@ Both local services come from [localkin-service-audio](https://github.com/LocalK
 |---|---|---|
 | Hotkey | ⌘⌥K | ✅ Settings → Hotkey |
 | Wake word | Off (empty) | ✅ Settings → Voice |
+| Conversation stays open | 45s after each reply | ✅ Settings → Voice |
 | Speech margin | +12 dB above measured room noise | ✅ Settings → Voice |
 | TTS voice | Auto (zh → `zf_xiaoxiao`, en → `af_bella`) | ✅ Settings → Voice |
 | Login Item | On | ✅ |

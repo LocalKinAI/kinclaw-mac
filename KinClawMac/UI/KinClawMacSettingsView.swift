@@ -588,6 +588,7 @@ private struct VoiceSettingsTab: View {
     @AppStorage("kinclaw.voice.silenceMarginDB") private var silenceMargin: Double = 12
     @AppStorage("kinclaw.voice.autoContinue") private var autoContinue = false
     @AppStorage("kinclaw.voice.wakeWord") private var wakeWord = ""
+    @AppStorage("kinclaw.voice.wakeSessionSeconds") private var wakeSessionSeconds: Double = 45
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -612,7 +613,16 @@ private struct VoiceSettingsTab: View {
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: 200)
                 }
-                SettingsCaption("Leave empty to send everything you say. When set, hands-free mode only acts on speech that starts with this word — everything else is discarded, so nearby conversation doesn't reach the agent. Matching ignores case, spacing and punctuation. Not used for push-to-talk, where pressing the button is already deliberate.")
+                SettingsRow(label: "Stay open for") {
+                    HStack {
+                        Slider(value: $wakeSessionSeconds, in: 10 ... 180, step: 5)
+                            .frame(maxWidth: 200)
+                        Text("\(Int(wakeSessionSeconds))s")
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundColor(.secondary)
+                    }
+                }
+                SettingsCaption("Leave the word empty to send everything you say. When set, say it once to start a conversation — after that you can keep talking normally. The conversation stays open for this long after each exchange (counted from when the reply finishes, not when you stop speaking), then the word is needed again. Anything said while it's closed is discarded, so nearby conversation doesn't reach the agent. Matching ignores case, spacing and punctuation. Push-to-talk ignores this entirely.")
             }
 
             SettingsCard("Text-to-Speech (replies spoken)") {
