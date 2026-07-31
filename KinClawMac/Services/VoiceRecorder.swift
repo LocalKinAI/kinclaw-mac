@@ -72,12 +72,31 @@ class VoiceRecorder: NSObject, ObservableObject {
             return
         }
 
+        // Don't transcribe silence.
+        //
+        // The detector already knows whether anything crossed the speech
+        // threshold, and that answer was being thrown away — every recording
+        // went to STT, including the ones that stopped precisely *because*
+        // nobody spoke. Speech models don't return empty for empty input; they
+        // return their most likely utterance, so two seconds of room tone came
+        // back as "I." and got sent to the agent as if the user had said it.
+        //
+        // In hands-free mode this is not a cosmetic problem: the mic reopens
+        // after every reply, so an empty room can hold a conversation with
+        // itself indefinitely.
+        guard hasSpeechStarted else {
+            onNoSpeech?()
+            return
+        }
+
         isTranscribing = true
 
         Task { @MainActor in
             let text = await self.transcribe(audioURL: url, hostname: self.storedHostname)
             self.isTranscribing = false
-            if let text = text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if let text = text,
+               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               !Self.isLikelyHallucination(text) {
                 self.transcript = text
                 self.onTranscript?(text)
             } else {
@@ -85,6 +104,35 @@ class VoiceRecorder: NSObject, ObservableObject {
                 self.onNoSpeech?()
             }
         }
+    }
+
+    /// Phrases speech models emit when handed something that isn't speech.
+    ///
+    /// Backstop behind the `hasSpeechStarted` gate, for audio that does cross
+    /// the threshold without being speech — a door, a cough, a chair. Trained
+    /// on subtitle corpora, these models fall back to what those corpora are
+    /// full of: sign-offs and channel outros.
+    ///
+    /// Kept deliberately small and exact-match-only. Anything broader starts
+    /// eating real utterances, and dropping something the user actually said
+    /// is worse than letting one stray "I." through — they can see the
+    /// mistake and repeat themselves, but silently discarded speech just looks
+    /// like the mic is broken. "ok" / "okay" / "嗯" are excluded for that
+    /// reason despite being common hallucinations: they're also common replies.
+    private static let hallucinationPhrases: Set<String> = [
+        "i", "you", "the", "bye",
+        "thank you", "thanks", "thank you very much",
+        "thanks for watching", "thank you for watching",
+        "谢谢观看", "谢谢大家", "请不吝点赞订阅",
+        "字幕由amara.org社区提供", "字幕志愿者",
+    ]
+
+    static func isLikelyHallucination(_ text: String) -> Bool {
+        let stripped = text.lowercased().filter { $0.isLetter || $0.isNumber }
+        guard !stripped.isEmpty else { return true }
+        return hallucinationPhrases.contains(where: {
+            $0.filter { $0.isLetter || $0.isNumber } == stripped
+        })
     }
 
     func cancelRecording() {
@@ -173,6 +221,12 @@ class VoiceRecorder: NSObject, ObservableObject {
         let marginPref = UserDefaults.standard.double(forKey: "kinclaw.voice.silenceMarginDB")
         let margin = Float(marginPref > 0 ? marginPref : 12)
 
+        // 3 ticks = 300ms above the threshold before this counts as speech.
+        // Short enough not to clip a real word, long enough that a keystroke
+        // or a chair doesn't mark the recording as worth transcribing.
+        var speechFrames = 0
+        let framesForSpeech = 3
+
         // Safety: max 15 seconds recording
         maxTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: false) { [weak self] _ in
             DispatchQueue.main.async {
@@ -214,9 +268,21 @@ class VoiceRecorder: NSObject, ObservableObject {
                 return
             }
 
-            // Detect if user has started speaking
+            // Detect if user has started speaking.
+            //
+            // Requires a sustained run, not a single tick. `hasSpeechStarted`
+            // decides whether the recording is worth transcribing at all, and
+            // a lone spike — a cough, a door, a key — used to be enough to
+            // mark the whole recording as speech. What then reached STT was
+            // effectively silence, and speech models do not answer "nothing"
+            // for that; they answer with their most likely utterance. Feeding
+            // this build 2s of digital silence returns 「그.」— an invented
+            // Korean syllable, from a model being used for Chinese and
+            // English. That unpredictability is why the phrase list below is
+            // only a backstop: the fix has to be not sending silence at all.
             if avgPower > speechThreshold {
-                self.hasSpeechStarted = true
+                speechFrames += 1
+                if speechFrames >= framesForSpeech { self.hasSpeechStarted = true }
                 // Decay, don't reset. A single loud tick is as likely to be a
                 // keystroke or a chair creak as it is speech; letting one
                 // erase 0.5s of accumulated silence is what kept recording
@@ -225,6 +291,7 @@ class VoiceRecorder: NSObject, ObservableObject {
                 // fast as silence adds.
                 silenceCount = max(0, silenceCount - 2)
             } else {
+                speechFrames = 0
                 silenceCount += 1
             }
 

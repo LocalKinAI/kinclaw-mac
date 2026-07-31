@@ -51,6 +51,41 @@ The detector had -35 compiled in, so the slider had never had any effect since
 it shipped. It now sets the margin above the *measured* room noise — the knob
 that actually helps when the default doesn't suit your room.
 
+### Fixed — silence was being transcribed, and came back as words
+
+Saying nothing produced messages. The recorder sent **every** recording to STT,
+including the ones that stopped precisely *because* nobody had spoken —
+`hasSpeechStarted` already knew the answer and it was being discarded.
+
+Speech models don't return empty for empty input; they return their most likely
+utterance. Feeding this build two seconds of digital silence:
+
+    silence.wav  → SenseVoice returned  「그.」
+    roomtone.wav → SenseVoice returned  「그.」
+
+An invented Korean syllable, from a model being used for Chinese and English.
+Which is the point: hallucinated output is unpredictable across languages, so a
+list of known bad phrases cannot be the fix. Empty rooms were holding
+conversations with the agent, and in hands-free mode that loops — the mic
+reopens after every reply.
+
+Two changes:
+
+- Recordings where no speech was detected are dropped instead of transcribed.
+- `hasSpeechStarted` now needs **3 consecutive ticks** (300ms) above the
+  threshold rather than a single one. One spike — a cough, a door, a key — used
+  to mark an otherwise-silent recording as worth transcribing.
+
+Simulated against measured room tone: quiet room, a one-frame cough, and a
+two-frame door all stay out of STT; a real utterance still goes through.
+
+A short list of known hallucination phrases ("thanks for watching", "谢谢观看",
+bare "I") is kept as a backstop for audio that crosses the threshold without
+being speech. It is exact-match and deliberately small — "ok" and "嗯" are
+excluded despite being common hallucinations, because they're also common
+replies, and silently dropping something the user said looks like a broken mic,
+which is worse than letting one stray "I." through.
+
 ### Added — mixed-language replies get the right voice per language
 
 Kokoro voices are single-language: `zf_xiaoxiao` reading English produces
