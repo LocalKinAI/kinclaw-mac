@@ -147,9 +147,6 @@ struct SpotlightContentView: View {
     /// When the current conversation lapses back to needing the wake word.
     /// nil = not in a conversation, so the next utterance must start with it.
     @State private var wakeSessionExpiry: Date?
-    /// Lets the user cut a long reply short by simply starting to talk.
-    @AppStorage("kinclaw.voice.bargeIn") private var bargeInEnabled = true
-    @State private var bargeIn = BargeInMonitor()
     @State private var voiceMode = false
 
     @FocusState private var inputFocused: Bool
@@ -420,10 +417,6 @@ struct SpotlightContentView: View {
             } else {
                 if recorder.isRecording { recorder.cancelRecording() }
                 speaker.stop()
-                // Must not outlive voice mode — the barge-in monitor holds the
-                // microphone open, and a mic that stays live after the user
-                // switched voice off is a bug worth being strict about.
-                bargeIn.stop()
                 closeWakeSession()
             }
         }
@@ -469,7 +462,6 @@ struct SpotlightContentView: View {
             sseClient?.cancel()
             localStreamTask?.cancel()
             speaker.stop()
-            bargeIn.stop()
         }
     }
 
@@ -2247,29 +2239,6 @@ struct SpotlightContentView: View {
         wakeSessionExpiry = nil
     }
 
-    /// Speak a reply, allowing the user to cut it short by talking over it.
-    ///
-    /// Only in hands-free mode: interrupting a reply you triggered with
-    /// push-to-talk means clicking, and the click is already right there.
-    private func speakReply(_ text: String) {
-        if bargeInEnabled && voiceMode {
-            bargeIn.onSpeechDetected = {
-                // stop() clears the completion handler rather than calling it,
-                // so nothing else will hand the turn back — do it here.
-                speaker.stop()
-                bargeIn.stop()
-                extendWakeSession()
-                guard voiceMode, !recorder.isRecording else { return }
-                recorder.startRecording(hostname: hostname)
-            }
-            bargeIn.start()
-        }
-        speaker.speak(text, hostname: hostname) {
-            bargeIn.stop()
-            resumeListeningIfConversing()
-        }
-    }
-
     private func resumeListeningIfConversing(extendSession: Bool = true) {
         // A finished reply keeps the conversation alive; a discarded utterance
         // must not, or background chatter would hold the session open forever
@@ -2367,11 +2336,14 @@ struct SpotlightContentView: View {
             if !messages[assistantIndex].content.isEmpty {
                 appState.recordMessage()
                 if ttsEnabled {
-                    // Closing the loop: when the reply finishes playing, start
-                    // listening again — otherwise the user would reach for the
-                    // mic every turn, which is what hands-free exists to avoid.
-                    // speakReply also lets them talk over it to cut it short.
-                    speakReply(messages[assistantIndex].content)
+                    speaker.speak(messages[assistantIndex].content,
+                                  hostname: hostname) {
+                        // Closing the loop: the reply has finished playing, so
+                        // start listening again. Without this the user would
+                        // have to reach for the mic every single turn, which is
+                        // exactly what hands-free mode exists to avoid.
+                        resumeListeningIfConversing()
+                    }
                 }
                 saveCurrentSession()
             }
@@ -2432,7 +2404,10 @@ struct SpotlightContentView: View {
                messages.indices.contains(assistantIndex),
                !messages[assistantIndex].content.isEmpty
             {
-                speakReply(messages[assistantIndex].content)
+                speaker.speak(messages[assistantIndex].content,
+                              hostname: hostname) {
+                    resumeListeningIfConversing()
+                }
             } else {
                 // TTS off (or an empty reply): there is nothing to wait for, so
                 // hand the turn straight back to the microphone.

@@ -91,8 +91,6 @@ Two ways to talk to an agent, sharing one button in the input bar:
 - **Push-to-talk** — click, speak, click again. Transcription lands in the input field for you to edit or send.
 - **Hands-free** — the reply is spoken aloud and the mic reopens when it finishes, so a back-and-forth needs no keyboard at all.
 
-**You can talk over a reply to cut it short.** The mic stays open during playback, so a long answer doesn't have to be waited out. macOS echo cancellation keeps the agent from interrupting itself — though not by level alone: residual echo peaks reach -15.5 dBFS, overlapping ordinary speech. What separates them is persistence (echo spikes for ~130ms, a person talking holds for a second or more), so interruption needs 6 consecutive frames above -22 dBFS. Toggle in Settings → Voice.
-
 Recording stops on its own ~0.5s after you stop talking. The mic measures your room's noise for the first 0.5s of each recording and puts the speech line above *that*, rather than at a fixed dB — a fan or a warm laptop used to hold the detector open until its 15-second safety timer.
 
 **Mixed zh/en replies are split and voiced per language.** Kokoro voices are single-language: `zf_xiaoxiao` reading English produces mangled phonetics, `af_bella` reading Chinese names each glyph out loud ("Chinese letter, Chinese letter…"). A reply like `用 GitHub Actions 部署，成本是 zero` becomes four runs, each synthesized by the matching voice and played back to back. The splitter is a port of localkin's `pkg/tts/split.go`, so both stay in agreement.
@@ -133,7 +131,6 @@ Both local services come from [localkin-service-audio](https://github.com/LocalK
 | Hotkey | ⌘⌥K | ✅ Settings → Hotkey |
 | Wake word | Off (empty) | ✅ Settings → Voice |
 | Conversation stays open | 45s after each reply | ✅ Settings → Voice |
-| Interrupt by talking | On | ✅ Settings → Voice |
 | Speech margin | +12 dB above measured room noise | ✅ Settings → Voice |
 | TTS voice | Auto (zh → `zf_xiaoxiao`, en → `af_bella`) | ✅ Settings → Voice |
 | Login Item | On | ✅ |
