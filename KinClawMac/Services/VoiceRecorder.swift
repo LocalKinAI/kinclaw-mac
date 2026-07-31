@@ -23,6 +23,20 @@ class VoiceRecorder: NSObject, ObservableObject {
     var onTranscript: ((String) -> Void)?
     var onNoSpeech: (() -> Void)?  // Called when no speech detected, for voice mode loop
 
+    /// Fired only when a recording was discarded for containing no speech —
+    /// not when one failed.
+    ///
+    /// Hands-free mode in `SpotlightContentView` is driven by `transcript`
+    /// changing, and a discarded recording produces no change. Before silence
+    /// was filtered this never came up: every recording, silence included,
+    /// yielded *some* text and kept the loop turning. Filtering silence
+    /// correctly is what stalled it — the mic closed and nothing reopened it.
+    ///
+    /// Kept separate from `onNoSpeech`, which also fires for permission and
+    /// hardware failures. Reopening the mic on those would spin: the retry
+    /// fails the same way and calls back immediately.
+    var onSilentRecording: (() -> Void)?
+
     /// Start recording audio
     func startRecording(hostname: String = "") {
         error = nil
@@ -86,6 +100,7 @@ class VoiceRecorder: NSObject, ObservableObject {
         // itself indefinitely.
         guard hasSpeechStarted else {
             onNoSpeech?()
+            onSilentRecording?()
             return
         }
 
@@ -100,8 +115,11 @@ class VoiceRecorder: NSObject, ObservableObject {
                 self.transcript = text
                 self.onTranscript?(text)
             } else {
-                // No speech detected — notify so voice mode can restart
+                // Empty or rejected as a hallucination — same situation as a
+                // silent recording: no transcript change, so the hands-free
+                // loop needs telling explicitly or it stops here.
                 self.onNoSpeech?()
+                self.onSilentRecording?()
             }
         }
     }
@@ -218,8 +236,21 @@ class VoiceRecorder: NSObject, ObservableObject {
         // it sets how far above the measured room noise a sound has to be
         // before it counts as speech, which is the knob that actually helps in
         // a room the default doesn't suit.
+        // Default 5 dB, not 12.
+        //
+        // The first value came from measuring room tone with a Python script
+        // (-40.5 dBFS) — but that is a different scale from what this code
+        // reads. `AVAudioRecorder.averagePower` reports the same silent room
+        // at -35.5 dBFS, and speech through the same API lands between -17 and
+        // -30, not the -20 the other scale suggested. A 12 dB margin therefore
+        // put the threshold at -23.5, above most of an ordinary sentence, and
+        // the wake word stopped being heard at all.
+        //
+        // Calibrate against the API you are actually reading: with a measured
+        // floor of -35.5 and noise peaks near -33, +5 dB puts the line at
+        // -30.5 — under the quiet end of speech, still clear of the peaks.
         let marginPref = UserDefaults.standard.double(forKey: "kinclaw.voice.silenceMarginDB")
-        let margin = Float(marginPref > 0 ? marginPref : 12)
+        let margin = Float(marginPref > 0 ? marginPref : 5)
 
         // 3 ticks = 300ms above the threshold before this counts as speech.
         // Short enough not to clip a real word, long enough that a keystroke
@@ -263,14 +294,14 @@ class VoiceRecorder: NSObject, ObservableObject {
                     // whole threshold up and makes the rest of the recording
                     // deaf. A median of 5 shrugs off up to two bad ticks.
                     let floor = calibration.sorted()[calibration.count / 2]
-                    // Upper clamp is -30, not -25. Calibration runs on the
-                    // first 0.5s of the recording, so a user who starts
-                    // talking immediately has their own voice measured as the
-                    // room floor. At a -25 ceiling, someone speaking softly
-                    // (around -28) would set a threshold above their own
-                    // speech and never be heard again for the rest of the
-                    // recording. -30 keeps that case working while still
-                    // sitting clear of the -32 noise peaks measured here.
+                    // The ceiling is what saves a poisoned calibration.
+                    // Calibration runs on the first 0.5s of the recording, so
+                    // a user who starts talking immediately has their own
+                    // voice measured as the room floor. Capping at -30 means
+                    // that case degrades to "slightly less sensitive" instead
+                    // of "deaf for the rest of the recording" — measured
+                    // speech runs down to -30, so the line must never sit
+                    // above it.
                     speechThreshold = min(-30, max(-45, floor + margin))
                 }
                 return

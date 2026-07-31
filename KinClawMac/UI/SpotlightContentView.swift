@@ -321,6 +321,17 @@ struct SpotlightContentView: View {
             handleDrop(providers: providers)
         }
         .onAppear {
+            // Hands-free is driven by `transcript` changing, so a recording
+            // that yields nothing — silence, or a rejected hallucination —
+            // leaves the loop with nothing to react to and the mic stays
+            // closed. This is the only path that reopens it in that case.
+            //
+            // Deliberately not extending the wake session: hearing nothing is
+            // not an exchange, and letting it count would keep a conversation
+            // open indefinitely in an empty room.
+            recorder.onSilentRecording = {
+                resumeListeningIfConversing(extendSession: false)
+            }
             Task { await loadAgents() }
             // Scan the sibling localkin checkout for private souls.
             // Cheap (one .git + one souls/private/ existence check

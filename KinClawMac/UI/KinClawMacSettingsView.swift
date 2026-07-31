@@ -585,7 +585,7 @@ private struct AgentsSettingsTab: View {
 private struct VoiceSettingsTab: View {
     @AppStorage("kinclaw.voice.tts.speaker") private var speaker = "auto"
     @AppStorage("kinclaw.voice.tts.speed") private var speed: Double = 1.0
-    @AppStorage("kinclaw.voice.silenceMarginDB") private var silenceMargin: Double = 12
+    @AppStorage("kinclaw.voice.silenceMarginDB") private var silenceMargin: Double = 5
     @AppStorage("kinclaw.voice.autoContinue") private var autoContinue = false
     @AppStorage("kinclaw.voice.wakeWord") private var wakeWord = ""
     @AppStorage("kinclaw.voice.wakeSessionSeconds") private var wakeSessionSeconds: Double = 45
@@ -595,7 +595,7 @@ private struct VoiceSettingsTab: View {
             SettingsCard("Speech-to-Text (microphone)") {
                 SettingsRow(label: "Speech margin") {
                     HStack {
-                        Slider(value: $silenceMargin, in: 6 ... 24, step: 1)
+                        Slider(value: $silenceMargin, in: 2 ... 15, step: 1)
                             .frame(maxWidth: 200)
                         Text("+\(Int(silenceMargin)) dB")
                             .font(.system(.caption, design: .monospaced))
