@@ -263,7 +263,15 @@ class VoiceRecorder: NSObject, ObservableObject {
                     // whole threshold up and makes the rest of the recording
                     // deaf. A median of 5 shrugs off up to two bad ticks.
                     let floor = calibration.sorted()[calibration.count / 2]
-                    speechThreshold = min(-25, max(-45, floor + margin))
+                    // Upper clamp is -30, not -25. Calibration runs on the
+                    // first 0.5s of the recording, so a user who starts
+                    // talking immediately has their own voice measured as the
+                    // room floor. At a -25 ceiling, someone speaking softly
+                    // (around -28) would set a threshold above their own
+                    // speech and never be heard again for the rest of the
+                    // recording. -30 keeps that case working while still
+                    // sitting clear of the -32 noise peaks measured here.
+                    speechThreshold = min(-30, max(-45, floor + margin))
                 }
                 return
             }
@@ -291,7 +299,15 @@ class VoiceRecorder: NSObject, ObservableObject {
                 // fast as silence adds.
                 silenceCount = max(0, silenceCount - 2)
             } else {
-                speechFrames = 0
+                // Decay rather than reset. Requiring three *strictly
+                // consecutive* ticks made short words unrecognisable: speech
+                // level fluctuates, and a single dip below the line — normal
+                // between two syllables — sent the count back to zero, so a
+                // two-syllable wake word could never accumulate enough. With
+                // decay, a lone transient still falls back to zero on the next
+                // quiet tick, but real speech keeps climbing through its
+                // natural gaps.
+                speechFrames = max(0, speechFrames - 1)
                 silenceCount += 1
             }
 
