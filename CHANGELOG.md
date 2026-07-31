@@ -73,6 +73,51 @@ Markdown and emoji are now stripped on **both** output paths. The system-voice
 fallback previously handled four markers and let emoji through to be announced
 by name ("sparkles", "check mark").
 
+### Added — talk over a reply to cut it short (barge-in)
+
+A long answer had to be waited out; the mic only opened once playback finished.
+Now it stays open during playback, and speaking interrupts.
+
+The obvious hazard is the mic hearing the speaker and the agent interrupting
+itself. macOS handles the acoustics — `setVoiceProcessingEnabled(true)` turns on
+echo cancellation — but not enough on its own. Measured in the app's real
+arrangement (AVAudioPlayer playing, AVAudioEngine capturing, same process, full
+volume):
+
+|              | average    | peak       |
+|--------------|------------|------------|
+| AEC off      | -8.2 dBFS  | -3.3 dBFS  |
+| AEC on       | -29.1 dBFS | -15.5 dBFS |
+
+A 21 dB improvement on average, but residual **peaks reach -15.5 dBFS**, right
+inside the range of ordinary speech. No level threshold separates the two, and
+an intermediate attempt to calibrate one per reply was solving the wrong
+problem.
+
+Persistence does separate them. Over a 16-second reply with nobody talking, the
+longest unbroken run above each line:
+
+    -30 dBFS → 5 frames (213 ms)
+    -25 dBFS → 4 frames (171 ms)
+    -22 dBFS → 3 frames (128 ms)
+    -20 dBFS → 2 frames  (85 ms)
+
+Echo spikes and passes; a person talking holds the level for a second or more
+(20+ frames). Shipping values are -22 dBFS and 6 consecutive frames — double
+the longest echo run measured, at ~260ms of interrupt latency. Re-verified
+end to end: 3-frame longest run against a 6-frame requirement, no self-interrupt.
+
+Capture for barge-in is a **separate lightweight monitor**, not a change to
+`VoiceRecorder`, which keeps using AVAudioRecorder. It works, and swapping a
+working capture path for an unproven one to add a secondary feature isn't a
+trade worth making. The monitor measures level and nothing else — it never
+records — and hands off to the normal recording flow the moment it's sure.
+
+Off switch in Settings → Voice, since these numbers came from one machine and a
+sufficiently reflective room could defeat them. The monitor holds the
+microphone open while it runs, so every exit path (leaving voice mode, view
+teardown, reply finished, interruption fired) shuts it down explicitly.
+
 ### Added — optional wake word for hands-free mode
 
 Hands-free mode sent everything it heard, including a phone call in the same

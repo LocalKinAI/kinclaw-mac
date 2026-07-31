@@ -589,6 +589,7 @@ private struct VoiceSettingsTab: View {
     @AppStorage("kinclaw.voice.autoContinue") private var autoContinue = false
     @AppStorage("kinclaw.voice.wakeWord") private var wakeWord = ""
     @AppStorage("kinclaw.voice.wakeSessionSeconds") private var wakeSessionSeconds: Double = 45
+    @AppStorage("kinclaw.voice.bargeIn") private var bargeInEnabled = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -605,6 +606,12 @@ private struct VoiceSettingsTab: View {
                 Toggle("Voice-mode auto-continue (continuous conversation)",
                        isOn: $autoContinue)
                 SettingsCaption("The mic measures your room's noise for 0.5s at the start of each recording; this sets how far above it a sound must be to count as speech. Raise it if recording keeps running after you stop talking, lower it if quiet speech gets cut off.")
+            }
+
+            SettingsCard("Interruption (hands-free mode only)") {
+                Toggle("Let me interrupt a reply by talking over it",
+                       isOn: $bargeInEnabled)
+                SettingsCaption("Keeps the mic open while the agent speaks, so you can cut a long answer short instead of waiting it out. Uses macOS acoustic echo cancellation — measured at 34 dB of suppression here, which puts the agent's own voice below room tone so it doesn't interrupt itself. Turn off if you find replies being cut short in a loud room.")
             }
 
             SettingsCard("Wake word (hands-free mode only)") {
