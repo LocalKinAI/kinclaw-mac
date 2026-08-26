@@ -18,6 +18,8 @@ Same window, same agent picker shape, three different brains. Switch tabs to swi
 
 ## Status
 
+🧩 **Unreleased** — Settings gains **MCP** (tools from external servers), **Harvest** (the nightly skill-harvest job, made visible) and **Skills** (what the active soul actually exposes — 25 of 189 for pilot — with per-soul toggles that never rewrite the soul file).
+
 🎙 **Unreleased** — Hands-free voice conversation: speak, get a spoken reply, keep going without touching the keyboard. Mixed zh/en replies are split per language and spoken by a matching voice; optional wake word filters out speech that wasn't meant for the agent. See [Voice](#voice) below.
 
 ✅ **v0.4.0** — Detached spawn: dispatch a long-running task and get its result minutes later in its own bubble. Souls and skills read straight from the source repos (`KINCLAW_SOUL_DIRS`), no `~/.localkin/souls/` copy to drift.
@@ -130,6 +132,8 @@ Both local services come from [localkin-service-audio](https://github.com/LocalK
 |---|---|---|
 | Hotkey | ⌘⌥K | ✅ Settings → Hotkey |
 | Wake word | Off (empty) | ✅ Settings → Voice |
+| MCP servers | None | ✅ Settings → MCP (`~/.localkin/mcp.json`) |
+| Extra skills per soul | None | ✅ Settings → Skills (overlay, no soul edit) |
 | Conversation stays open | 45s after each reply | ✅ Settings → Voice |
 | Speech margin | +12 dB above measured room noise | ✅ Settings → Voice |
 | TTS voice | Auto (zh → `zf_xiaoxiao`, en → `af_bella`) | ✅ Settings → Voice |

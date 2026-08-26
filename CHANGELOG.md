@@ -2,6 +2,85 @@
 
 All notable changes to KinClaw Mac.
 
+## [Unreleased] - 2026-08-26 — Settings gains MCP, Harvest and Skills
+
+Three new tabs, all built on one principle: show configuration **and** what
+actually happened to it. A settings screen that reads only config files can
+display a server which has been failing to start for a week and look perfectly
+healthy doing it — which is precisely the failure mode these exist to expose.
+
+### Added — MCP tab
+
+Manage Model Context Protocol servers: add, remove, enable/disable, and see
+each one's live state pulled from the kernel's `GET /api/mcp`. A failed server
+shows its error inline plus a button to open its own stderr log, which is
+usually where the real reason is ("missing API key", "package not found").
+
+Editing writes `~/.localkin/mcp.json` in the ecosystem-standard `mcpServers`
+format, so configs move freely between this app, Claude Desktop and kincode.
+Arguments are entered one per line rather than space-separated — MCP arguments
+are usually paths, and paths contain spaces.
+
+Changes take effect on the next kernel restart, and the UI says so in an amber
+banner rather than pretending to be live: MCP servers are launched at kernel
+start, and a screen that looked live would be lying.
+
+### Added — Harvest tab
+
+The nightly skill-harvest job, made visible. Sources with what each has staged,
+candidates awaiting review with the curator's reasoning, and an **Accept**
+button that forges one into `skills/` — asynchronous, since the coder agent
+takes up to four minutes, with all four outcomes reported honestly (`forged`,
+`filed under library/`, `duplicate`, `failed`) rather than collapsed into a
+checkmark.
+
+Two things it deliberately surfaces:
+
+- **The schedule's actual arguments**, not just whether it is loaded. A
+  `--no-judge` entry looks perfectly healthy in `launchctl list` while doing
+  only half the job — that is how a stalled harvest went unnoticed for three
+  months. The tab flags it explicitly.
+- **Sources producing nothing.** Three of six have staged zero candidates,
+  usually because the library is written as prompt templates rather than
+  command wrappers — a shape mismatch that re-scanning will never resolve,
+  while still costing a clone and a scan every night.
+
+### Added — Skills tab
+
+What the active soul can actually use, out of everything the kernel loaded.
+Two numbers, deliberately not merged: for pilot it is **25 exposed / 189
+loaded**. Every "the skill is installed but my agent says it can't do that"
+question is that gap, and it was previously visible only as one line of startup
+output in a terminal nobody watches.
+
+Ticking a skill grants it to the active soul **without editing the soul file**
+— it goes to `~/.localkin/skill_extras.json` and takes effect immediately, no
+restart. Souls are hand-authored (pilot's enable list is interleaved with
+comments explaining each entry) and a checkbox that machine-rewrote that file
+would eventually mangle the reasoning to save one text edit.
+
+Soul-granted skills show a fixed checkmark instead of a toggle: the overlay is
+additive only. Removing one stays an edit to the soul, where git can see it —
+an overlay that subtracted would leave a soul file no longer describing the
+running agent.
+
+The tab also flags enable entries matching nothing loaded. Pilot currently has
+one (`kinthink`) — the soul claims a capability the agent silently lacks.
+
+### Changed — Settings window
+
+Resized from 620×460 to 820×620 (resizable to 1100×900). The old size was set
+when Voice was the busiest tab; MCP and Harvest rows carry a command line, a
+status and an error message, which wrapped into unreadable stacks.
+
+### Fixed — Settings opened behind the spotlight panel
+
+`SpotlightWindow` sets `.floating` while Settings used the default `.normal`
+level, so it opened *underneath* — indistinguishable from not opening at all.
+Both now float; the most recently activated one wins.
+
+---
+
 ## [Unreleased] - 2026-07-30 — Hands-free voice conversation
 
 Voice mode was already wired into the UI — a mic button, a waveform, a TTS
