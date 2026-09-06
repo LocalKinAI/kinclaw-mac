@@ -465,6 +465,7 @@ private struct BackendSettingsTab: View {
                         .textFieldStyle(.roundedBorder)
                         .font(.system(size: 11, design: .monospaced))
                         .frame(maxWidth: 320)
+                        .onSubmit { OllamaCatalog.setHost(ollamaHost) }
                 }
                 SettingsCaption("The Ollama that both brain dropdowns list models from and that Ollama brain switches point at, in Cowork and Code. Leave empty for this Mac; a LAN box looks like http://192.168.0.21:11434. Souls keep their own brain.endpoint for the boot default.")
                 SettingsRow(label: "SearXNG") {

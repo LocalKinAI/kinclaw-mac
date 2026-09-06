@@ -1281,8 +1281,23 @@ struct CodePane: View {
     /// Kincode card is where the default is set.
     private var brainMenu: some View {
         Menu {
+            Section("Source") {
+                ForEach(OllamaCatalog.knownHosts, id: \.self) { host in
+                    Button {
+                        switchOllamaSource(to: host)
+                    } label: {
+                        HStack {
+                            Image(systemName: host == OllamaCatalog.defaultBaseURL ? "laptopcomputer" : "network")
+                            Text(OllamaCatalog.hostLabel(host))
+                            Spacer()
+                            if host == OllamaCatalog.baseURL { Image(systemName: "checkmark") }
+                        }
+                    }
+                }
+            }
+            Divider()
             if brainPresets.isEmpty {
-                Text("Ollama not reachable on :11434")
+                Text("Ollama not reachable at \(OllamaCatalog.hostLabel(OllamaCatalog.baseURL))")
                     .foregroundColor(.secondary)
             } else {
                 ForEach(brainPresets) { preset in
@@ -1314,8 +1329,9 @@ struct CodePane: View {
                 .foregroundColor(.secondary)
         } label: {
             HStack(spacing: 4) {
-                Text("🧠")
-                    .font(.system(size: 12))
+                Image(systemName: OllamaCatalog.isRemote ? "network" : "laptopcomputer")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
                 Text(brainLabel)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(activeModel.isEmpty
@@ -1323,6 +1339,9 @@ struct CodePane: View {
                                      : .primary.opacity(0.85))
                     .lineLimit(1)
                     .truncationMode(.middle)
+                Text(OllamaCatalog.sourceBadge)
+                    .font(.system(size: 9))
+                    .foregroundColor(.secondary)
                 Image(systemName: "chevron.down")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundColor(.secondary)
@@ -1331,7 +1350,25 @@ struct CodePane: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("Switch brain for this session (default: Settings → Backend)")
+        .help("Switch brain or source for this session (default: Settings → Backend)")
+    }
+
+    /// Flip the Ollama source: reload the list from the new host and
+    /// re-point the running brain at it when the current model exists
+    /// there; otherwise leave the brain and let the user pick.
+    private func switchOllamaSource(to host: String) {
+        OllamaCatalog.setHost(host)
+        Task {
+            await reloadBrainPresets()
+            guard activeProvider == "ollama" else { return }
+            if let same = brainPresets.first(where: { $0.model == activeModel }) {
+                switchBrain(to: same)
+            } else {
+                await MainActor.run {
+                    connectError = "source is now \(OllamaCatalog.hostLabel(OllamaCatalog.baseURL)); \(activeModel) isn't there — pick a model"
+                }
+            }
+        }
     }
 
     /// Display label for the current brain — preset's pretty name

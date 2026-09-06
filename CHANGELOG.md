@@ -24,6 +24,19 @@ is about what brain. Approval and question cards now sit bottom-left,
 capped at 480pt, so they read as a prompt attached to the composer
 rather than a banner across the panel.
 
+### Added — source switch and search-engine health
+
+Both brain menus open with a **Source** section: This Mac, and every
+LAN Ollama you have used, one click to flip. The model list reloads
+from the new host and the running brain is re-pointed at it when the
+same model exists there; the composer badge shows `local` or the host.
+The Cowork bar gains a magnifier with a status dot: click for what the
+last `web_search` actually got — backend, engines that answered,
+engines that were CAPTCHA'd or rate-limited and why — plus **Probe
+now**, one search restricted to the major engines, never on a timer.
+The kernel now also prefixes weak results with a note naming the down
+engines so the model stops treating wiby's output as an answer.
+
 ### Added — Ollama host setting
 
 Settings → Backend → Sidecars gains **Ollama host**. Both brain

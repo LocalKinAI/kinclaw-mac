@@ -43,6 +43,49 @@ enum OllamaCatalog {
     /// True when models come from somewhere other than this Mac.
     static var isRemote: Bool { baseURL != defaultBaseURL }
 
+    /// UserDefaults key for remembered remote hosts (the source picker).
+    static let hostsKey = "kinclaw.ollama.hosts"
+
+    /// This Mac first, then every remote host ever set — the rows of the
+    /// "Source" section in both brain menus.
+    static var knownHosts: [String] {
+        var out = [defaultBaseURL]
+        let saved = UserDefaults.standard.stringArray(forKey: hostsKey) ?? []
+        for h in saved + [baseURL] where !out.contains(h) && h != defaultBaseURL {
+            out.append(h)
+        }
+        return out
+    }
+
+    /// Make `host` the active Ollama (normalized) and remember it.
+    /// Passing the default (or "") switches back to this Mac.
+    static func setHost(_ host: String) {
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || trimmed == defaultBaseURL {
+            UserDefaults.standard.removeObject(forKey: hostKey)
+            return
+        }
+        UserDefaults.standard.set(trimmed, forKey: hostKey)
+        let normalized = baseURL
+        var saved = UserDefaults.standard.stringArray(forKey: hostsKey) ?? []
+        if !saved.contains(normalized) {
+            saved.append(normalized)
+            UserDefaults.standard.set(saved, forKey: hostsKey)
+        }
+    }
+
+    /// "This Mac" or "192.168.0.21" — the row label for a host.
+    static func hostLabel(_ host: String) -> String {
+        if host == defaultBaseURL { return "This Mac" }
+        if let c = URLComponents(string: host), let h = c.host {
+            return c.port.map { $0 == 11434 ? h : "\(h):\($0)" } ?? h
+        }
+        return host
+    }
+
+    /// Short badge for the current source in the brain label.
+    static var sourceBadge: String { isRemote ? hostLabel(baseURL) : "local" }
+
     /// The endpoint kincode wants for an Ollama brain (full chat URL).
     static var kincodeEndpoint: String { baseURL + "/v1/chat/completions" }
 

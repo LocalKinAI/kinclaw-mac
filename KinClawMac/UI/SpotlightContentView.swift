@@ -105,6 +105,7 @@ struct SpotlightContentView: View {
     @State private var contextUsed: Int = 0
     @State private var contextLength: Int = 0
     @State private var coworkWorkspace: String = ""
+    @StateObject private var searchStatus = SearchStatusStore()
     /// Left folder pane in Cowork (⌘⇧L). Persisted; on by default.
     @AppStorage("kinclaw.cowork.sidebar") private var showWorkspaceSidebar = true
     /// Bumped after each turn / workspace change so the pane reloads.
@@ -718,6 +719,10 @@ struct SpotlightContentView: View {
                     .frame(width: 6, height: 6)
                     .help(coworkConnectError ?? "kinclaw :5001 connected")
 
+                // Search health — the last web_search's engines, and a
+                // probe on demand.
+                SearchStatusButton(store: searchStatus)
+
                 // Context meter — how full the model's window is, from
                 // the kernel's `usage` events. Same information Claude
                 // Code shows as "% of context"; here it also explains
@@ -987,8 +992,28 @@ struct SpotlightContentView: View {
     /// SSE hello / brain_switched events.
     private var coworkBrainMenu: some View {
         Menu {
+            // Source — which Ollama the models below come from. One
+            // click flips between this Mac and the LAN box; the model
+            // list reloads and the current model is re-pointed at the
+            // new host when it exists there.
+            Section("Source") {
+                ForEach(OllamaCatalog.knownHosts, id: \.self) { host in
+                    Button {
+                        switchOllamaSource(to: host)
+                    } label: {
+                        HStack {
+                            Image(systemName: host == OllamaCatalog.defaultBaseURL ? "laptopcomputer" : "network")
+                            Text(OllamaCatalog.hostLabel(host))
+                            Spacer()
+                            if host == OllamaCatalog.baseURL { Image(systemName: "checkmark") }
+                        }
+                    }
+                }
+                Button("Add a host in Settings…") { openSettings() }
+            }
+            Divider()
             if coworkBrainPresets.isEmpty {
-                Text("Ollama not reachable on :11434")
+                Text("Ollama not reachable at \(OllamaCatalog.hostLabel(OllamaCatalog.baseURL))")
                     .foregroundColor(.secondary)
             } else {
                 ForEach(coworkBrainPresets) { preset in
@@ -1020,8 +1045,9 @@ struct SpotlightContentView: View {
                 .foregroundColor(.secondary)
         } label: {
             HStack(spacing: 4) {
-                Text("🧠")
-                    .font(.system(size: 12))
+                Image(systemName: OllamaCatalog.isRemote ? "network" : "laptopcomputer")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
                 Text(coworkBrainLabel)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(coworkActiveModel.isEmpty
@@ -1029,6 +1055,9 @@ struct SpotlightContentView: View {
                                      : .primary.opacity(0.85))
                     .lineLimit(1)
                     .truncationMode(.middle)
+                Text(OllamaCatalog.sourceBadge)
+                    .font(.system(size: 9))
+                    .foregroundColor(.secondary)
                 Image(systemName: "chevron.down")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundColor(.secondary)
@@ -1037,7 +1066,27 @@ struct SpotlightContentView: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("Switch brain for Cowork (soul stays the same)")
+        .help("Switch brain or source for Cowork (soul stays the same)")
+    }
+
+    /// Flip the Ollama source. Reloads the model list from the new host
+    /// and, if the current model exists there, re-points the running
+    /// brain at it so the switch is complete in one click; otherwise
+    /// the list is refreshed and the user picks.
+    private func switchOllamaSource(to host: String) {
+        OllamaCatalog.setHost(host)
+        Task {
+            await reloadCoworkBrainPresets()
+            guard coworkActiveProvider == "ollama" else { return }
+            if let same = coworkBrainPresets.first(where: { $0.model == coworkActiveModel }) {
+                switchCoworkBrain(to: same)
+            } else {
+                await MainActor.run {
+                    messages.append(ChatMessage.assistant(
+                        "Source is now \(OllamaCatalog.hostLabel(OllamaCatalog.baseURL)); \(coworkActiveModel) isn't there — pick a model from the brain menu."))
+                }
+            }
+        }
     }
 
     private var coworkBrainLabel: String {
