@@ -120,16 +120,24 @@ struct CodePane: View {
             repoBar
             Divider().opacity(0.15)
             HStack(spacing: 0) {
-                if showCodeSidebar && !repoPath.isEmpty {
-                    WorkspaceSidebar(workspace: repoPath,
-                                     touched: touchedFiles,
-                                     refreshToken: sidebarRefresh,
-                                     onPick: pickRepo)
-                        .frame(width: 210)
-                    Divider().opacity(0.15)
+                if !repoPath.isEmpty {
+                    if showCodeSidebar {
+                        WorkspaceSidebar(workspace: repoPath,
+                                         touched: touchedFiles,
+                                         refreshToken: sidebarRefresh,
+                                         onPick: pickRepo,
+                                         onCollapse: { toggleCodeSidebar() })
+                            .frame(width: 210)
+                            .transition(.move(edge: .leading).combined(with: .opacity))
+                        Divider().opacity(0.15)
+                    } else {
+                        WorkspaceSidebarHandle { toggleCodeSidebar() }
+                            .transition(.opacity)
+                    }
                 }
                 messagesArea
             }
+            .animation(.easeOut(duration: 0.18), value: showCodeSidebar)
             Divider().opacity(0.15)
             // Outer paddings match chatBody.inputBar wrapping —
             // 12pt horizontal, 8pt vertical around the rounded
@@ -240,7 +248,7 @@ struct CodePane: View {
             // Folder pane toggle (⇧⌘L). The brain picker lives in the
             // composer's bottom-right corner now.
             Button {
-                withAnimation(.easeOut(duration: 0.15)) { showCodeSidebar.toggle() }
+                toggleCodeSidebar()
             } label: {
                 Image(systemName: showCodeSidebar ? "sidebar.left" : "sidebar.leading")
                     .font(.system(size: 12))
@@ -806,6 +814,10 @@ struct CodePane: View {
     }
 
     // MARK: - Actions
+
+    private func toggleCodeSidebar() {
+        withAnimation(.easeOut(duration: 0.18)) { showCodeSidebar.toggle() }
+    }
 
     private func pickRepo() {
         let panel = NSOpenPanel()

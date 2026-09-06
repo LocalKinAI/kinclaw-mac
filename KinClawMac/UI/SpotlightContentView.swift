@@ -324,16 +324,24 @@ struct SpotlightContentView: View {
                     // workspace, what the agent touched this session,
                     // and the folder's files — Claude Desktop's layout.
                     HStack(spacing: 0) {
-                        if mode == .cowork && showWorkspaceSidebar {
-                            WorkspaceSidebar(workspace: coworkWorkspace,
-                                             touched: touchedFiles,
-                                             refreshToken: sidebarRefresh,
-                                             onPick: pickWorkspace)
-                                .frame(width: 210)
-                            Divider().opacity(0.15)
+                        if mode == .cowork {
+                            if showWorkspaceSidebar {
+                                WorkspaceSidebar(workspace: coworkWorkspace,
+                                                 touched: touchedFiles,
+                                                 refreshToken: sidebarRefresh,
+                                                 onPick: pickWorkspace,
+                                                 onCollapse: { toggleWorkspaceSidebar() })
+                                    .frame(width: 210)
+                                    .transition(.move(edge: .leading).combined(with: .opacity))
+                                Divider().opacity(0.15)
+                            } else {
+                                WorkspaceSidebarHandle { toggleWorkspaceSidebar() }
+                                    .transition(.opacity)
+                            }
                         }
                         chatBody
                     }
+                    .animation(.easeOut(duration: 0.18), value: showWorkspaceSidebar)
                 case .code:
                     CodePane()
                 }
@@ -737,7 +745,7 @@ struct SpotlightContentView: View {
 
                 // Folder pane toggle (⌘⇧L).
                 Button {
-                    withAnimation(.easeOut(duration: 0.15)) { showWorkspaceSidebar.toggle() }
+                    toggleWorkspaceSidebar()
                 } label: {
                     Image(systemName: showWorkspaceSidebar ? "sidebar.left" : "sidebar.leading")
                         .font(.system(size: 12))
@@ -2102,6 +2110,10 @@ struct SpotlightContentView: View {
             }
         }
         return order.reversed().compactMap { byPath[$0] }
+    }
+
+    private func toggleWorkspaceSidebar() {
+        withAnimation(.easeOut(duration: 0.18)) { showWorkspaceSidebar.toggle() }
     }
 
     /// Folder picker for the Cowork workspace → POST /api/workspace.

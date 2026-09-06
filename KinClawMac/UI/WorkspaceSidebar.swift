@@ -21,6 +21,9 @@ struct WorkspaceSidebar: View {
     /// Bumped by the owner after every turn so the listing reloads.
     let refreshToken: Int
     let onPick: () -> Void
+    /// Hides the pane (the ‹ button in the header). ⇧⌘L and the toolbar
+    /// icon do the same; this one is the discoverable one.
+    var onCollapse: (() -> Void)? = nil
 
     struct FileEntry: Identifiable, Equatable {
         let path: String
@@ -77,35 +80,49 @@ struct WorkspaceSidebar: View {
     // MARK: Header
 
     private var header: some View {
-        Button(action: onPick) {
-            HStack(spacing: 6) {
-                Image(systemName: "folder.fill")
-                    .font(.system(size: 12))
-                    .foregroundColor(.green.opacity(0.8))
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(workspace.isEmpty ? "Choose folder…"
-                         : URL(fileURLWithPath: workspace).lastPathComponent)
-                        .font(.system(size: 12, weight: .semibold))
-                        .lineLimit(1)
-                    if !workspace.isEmpty {
-                        Text(abbreviated(workspace))
-                            .font(.system(size: 9))
-                            .foregroundColor(.secondary)
+        HStack(spacing: 4) {
+            Button(action: onPick) {
+                HStack(spacing: 6) {
+                    Image(systemName: "folder.fill")
+                        .font(.system(size: 12))
+                        .foregroundColor(.green.opacity(0.8))
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(workspace.isEmpty ? "Choose folder…"
+                             : URL(fileURLWithPath: workspace).lastPathComponent)
+                            .font(.system(size: 12, weight: .semibold))
                             .lineLimit(1)
-                            .truncationMode(.middle)
+                        if !workspace.isEmpty {
+                            Text(abbreviated(workspace))
+                                .font(.system(size: 9))
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
                     }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 8))
+                        .foregroundColor(.secondary)
                 }
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 8))
-                    .foregroundColor(.secondary)
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .help(workspace.isEmpty ? "Choose the folder Pilot works in" : "\(workspace)\nClick to change the workspace")
+
+            if let collapse = onCollapse {
+                Button(action: collapse) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(.secondary)
+                        .frame(width: 18, height: 18)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Hide the folder pane (⇧⌘L)")
+            }
         }
-        .buttonStyle(.plain)
-        .help(workspace.isEmpty ? "Choose the folder Pilot works in" : "\(workspace)\nClick to change the workspace")
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
     }
 
     // MARK: Rows
@@ -267,5 +284,30 @@ struct WorkspaceSidebar: View {
         }
         if out.count > 200 { out = Array(out.prefix(200)) }
         return out
+    }
+}
+
+
+/// The collapsed state: a slim strip on the left edge with one button
+/// that brings the pane back, so it never disappears without a trace.
+struct WorkspaceSidebarHandle: View {
+    let onExpand: () -> Void
+
+    var body: some View {
+        VStack {
+            Button(action: onExpand) {
+                Image(systemName: "sidebar.leading")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .frame(width: 22, height: 26)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Show the folder pane (⇧⌘L)")
+            Spacer()
+        }
+        .frame(width: 22)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(Color.platformSecondaryBackground.opacity(0.2))
     }
 }
