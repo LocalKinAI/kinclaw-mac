@@ -85,8 +85,10 @@ struct PermissionCardView: View {
                     .keyboardShortcut(.escape, modifiers: [])
                     .help("Refuse — the agent is told and will adapt (Esc)")
                 Spacer()
-                Button("Always this session") { onDecision("allow_session") }
+                Button("This session") { onDecision("allow_session") }
                     .help("Approve every \(request.skill) call until the helper restarts")
+                Button("Always") { onDecision("allow_always") }
+                    .help("Approve this shape of call from now on — saves a rule like \(request.skill)(<first word>*) to ~/.kinclaw/permissions.json")
                 Button("Allow") { onDecision("allow") }
                     .keyboardShortcut(.return, modifiers: .command)
                     .buttonStyle(.borderedProminent)

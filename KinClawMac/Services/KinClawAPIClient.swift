@@ -48,6 +48,12 @@ struct KinClawEvent: Codable {
     let before_tokens: Int?
     let after_tokens: Int?
 
+    // question: choices offered with the question (message = the question).
+    let options: [String]?
+
+    // workspace: the folder relative paths resolve against.
+    let workspace: String?
+
     // user_message: image-attachment count (kincode plan mode).
     let image_count: Int?
 
@@ -87,6 +93,11 @@ extension KinClawEvent {
         /// Kernel-originated text mid-turn (circuit breaker, hook block,
         /// permission denial). NOT an error: the turn continues.
         case notice
+        /// ask_user: the agent has a question; answer via POST /api/answer.
+        case question
+        case questionResolved = "question_resolved"
+        /// The session's working folder changed.
+        case workspace
         case error
     }
 
@@ -298,6 +309,34 @@ final class KinClawAPIClient {
         try checkOK(response as? HTTPURLResponse, body: data)
     }
 
+    /// `POST /api/answer {id, text}` — answer an `ask_user` question.
+    /// 404 means it already resolved (timeout / stop); treated as stale.
+    func answerQuestion(id: String, text: String) async throws {
+        let url = baseURL.appendingPathComponent("api/answer")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(["id": id, "text": text])
+        let (data, response) = try await sessionDataFor(request: request)
+        if (response as? HTTPURLResponse)?.statusCode == 404 { return }
+        try checkOK(response as? HTTPURLResponse, body: data)
+    }
+
+    /// `POST /api/workspace {path}` — change the folder relative paths and
+    /// shell commands use; writes outside it ask first. Returns the
+    /// cleaned path the kernel settled on.
+    func setWorkspace(path: String) async throws -> String {
+        let url = baseURL.appendingPathComponent("api/workspace")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(["path": path])
+        let (data, response) = try await sessionDataFor(request: request)
+        try checkOK(response as? HTTPURLResponse, body: data)
+        struct Reply: Decodable { let workspace: String }
+        return try decoder.decode(Reply.self, from: data).workspace
+    }
+
     /// `POST /api/compact` — fold older conversation into a summary
     /// now. Returns the kernel's one-line outcome. 409 while a turn is
     /// running.
@@ -325,6 +364,9 @@ final class KinClawAPIClient {
         let context_length: Int?
         let total_input_tokens: Int?
         let total_output_tokens: Int?
+        let workspace: String?
+        let deferred: [String]?
+        let loaded: [String]?
     }
     func fetchKinClawState() async throws -> KinClawState {
         let url = baseURL.appendingPathComponent("api/state")

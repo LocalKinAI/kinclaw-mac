@@ -1,4 +1,5 @@
 import SwiftUI
+import UserNotifications
 
 /// The single-pane chat surface that lives inside `SpotlightWindow`.
 ///
@@ -99,9 +100,11 @@ struct SpotlightContentView: View {
     // window for the meter. Fed by SSE mid-turn and by GET /api/state
     // between turns.
     @State private var pendingPermission: PermissionRequest?
+    @State private var pendingQuestion: PendingQuestion?
     @State private var coworkPlanMode = false
     @State private var contextUsed: Int = 0
     @State private var contextLength: Int = 0
+    @State private var coworkWorkspace: String = ""
 
     /// Chat-tab "browse vs chat" state. True = show the agent
     /// gallery (discovery surface). False = show welcomeCard /
@@ -552,6 +555,13 @@ struct SpotlightContentView: View {
                 .padding(.horizontal, 12)
                 .padding(.top, 8)
             }
+            if mode == .cowork, let q = pendingQuestion {
+                QuestionCardView(question: q) { answer in
+                    answerQuestion(q, text: answer)
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+            }
             if mode == .cowork && coworkPlanMode {
                 PlanModeBannerView { toggleCoworkPlanMode() }
                     .padding(.horizontal, 12)
@@ -697,6 +707,26 @@ struct SpotlightContentView: View {
                       ? "Plan mode ON — the agent can look but not act (⇧⌘P to exit)"
                       : "Plan mode — investigate and propose before acting (⇧⌘P)")
                 .keyboardShortcut("p", modifiers: [.command, .shift])
+
+                // Workspace — the folder relative paths and shell commands
+                // live in; writes outside it ask first. Cowork's version
+                // of Claude Desktop's "working folder".
+                Button {
+                    pickWorkspace()
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: "folder")
+                            .font(.system(size: 12))
+                        if !coworkWorkspace.isEmpty {
+                            Text(URL(fileURLWithPath: coworkWorkspace).lastPathComponent)
+                                .font(.system(size: 10))
+                                .lineLimit(1)
+                        }
+                    }
+                    .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Workspace: \(coworkWorkspace.isEmpty ? "(not set)" : coworkWorkspace)\nRelative paths and shell commands live here; writing elsewhere asks first. Click to change.")
             }
 
             // Stop button — interrupts the in-flight turn via
@@ -1969,9 +1999,63 @@ struct SpotlightContentView: View {
             try? await KinClawAPIClient.default.cancelTurn()
         }
         isStreaming = false
-        // The kernel cancels any parked approval when the turn dies;
-        // drop the card now rather than waiting for the echo.
+        // The kernel cancels any parked approval / question when the
+        // turn dies; drop the cards now rather than waiting for the echo.
         pendingPermission = nil
+        pendingQuestion = nil
+    }
+
+    /// Answer the agent's ask_user question. Optimistic: the card goes
+    /// away immediately; 404 from the server means it already resolved.
+    private func answerQuestion(_ q: PendingQuestion, text: String) {
+        pendingQuestion = nil
+        Task {
+            do {
+                try await KinClawAPIClient.default.answerQuestion(id: q.id, text: text)
+            } catch {
+                FileHandle.standardError.write(
+                    "kinclaw answerQuestion failed: \(error.localizedDescription)\n"
+                        .data(using: .utf8) ?? Data())
+            }
+        }
+    }
+
+    /// Folder picker for the Cowork workspace → POST /api/workspace.
+    private func pickWorkspace() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose the folder Pilot works in"
+        if !coworkWorkspace.isEmpty {
+            panel.directoryURL = URL(fileURLWithPath: coworkWorkspace)
+        }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task {
+            do {
+                coworkWorkspace = try await KinClawAPIClient.default.setWorkspace(path: url.path)
+            } catch {
+                FileHandle.standardError.write(
+                    "kinclaw setWorkspace failed: \(error.localizedDescription)\n"
+                        .data(using: .utf8) ?? Data())
+            }
+        }
+    }
+
+    /// Local notification when the panel is hidden — the agent finished,
+    /// needs approval, or has a question — so a task the user started
+    /// and walked away from still reaches them. Clicking it shows the
+    /// panel (AppDelegate is the notification delegate).
+    private func notifyIfHidden(title: String, body: String) {
+        guard let delegate = NSApp.delegate as? AppDelegate,
+              !delegate.spotlightWindow.isVisible else { return }
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = String(body.trimmingCharacters(in: .whitespacesAndNewlines).prefix(160))
+        content.sound = .default
+        let request = UNNotificationRequest(identifier: UUID().uuidString,
+                                            content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request)
     }
 
     /// Answer the kernel's approval request. Optimistic: the card goes
@@ -2016,6 +2100,7 @@ struct SpotlightContentView: View {
             if let n = st.input_tokens { contextUsed = n }
             if let c = st.context_length, c > 0 { contextLength = c }
             if let p = st.plan_mode { coworkPlanMode = p }
+            if let w = st.workspace { coworkWorkspace = w }
         }
     }
 
@@ -2059,6 +2144,7 @@ struct SpotlightContentView: View {
         currentSessionID = UUID()
         sessionTitle = "New chat"
         pendingPermission = nil
+        pendingQuestion = nil
         contextUsed = 0
 
         if mode == .cowork {
@@ -2541,7 +2627,15 @@ struct SpotlightContentView: View {
             }
             isStreaming = false
             pendingPermission = nil
+            pendingQuestion = nil
             refreshCoworkState()
+            if messages.indices.contains(assistantIndex) {
+                let reply = messages[assistantIndex].content
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if !reply.isEmpty {
+                    notifyIfHidden(title: "\(agent.displayName) finished", body: reply)
+                }
+            }
             ChatHistory.save(messages: messages, for: agent.slug)
             if ttsEnabled,
                messages.indices.contains(assistantIndex),
@@ -2607,6 +2701,7 @@ struct SpotlightContentView: View {
             let body = event.output ?? "(no output)"
             let header = "🔬 \(soulName) (job \(jobID)) finished in \(dur)s"
             messages.append(ChatMessage.assistant("**\(header)**\n\n\(body)"))
+            notifyIfHidden(title: "\(soulName) finished", body: body)
             scrollTrigger += 1
             return
         }
@@ -2618,16 +2713,31 @@ struct SpotlightContentView: View {
         switch event.kind {
         case .permissionRequest:
             guard let id = event.id else { return }
-            pendingPermission = PermissionRequest(
+            let req = PermissionRequest(
                 id: id,
                 skill: event.name ?? "?",
                 summary: event.summary ?? (event.name ?? "?"),
                 reason: event.reason ?? "",
                 params: event.params ?? [:])
+            pendingPermission = req
+            notifyIfHidden(title: "Pilot needs approval", body: req.summary)
             scrollTrigger += 1
             return
         case .permissionResolved:
             if pendingPermission?.id == event.id { pendingPermission = nil }
+            return
+        case .question:
+            guard let id = event.id else { return }
+            let q = PendingQuestion(id: id, text: event.message ?? "?", options: event.options ?? [])
+            pendingQuestion = q
+            notifyIfHidden(title: "Pilot asks", body: q.text)
+            scrollTrigger += 1
+            return
+        case .questionResolved:
+            if pendingQuestion?.id == event.id { pendingQuestion = nil }
+            return
+        case .workspace:
+            if let w = event.workspace { coworkWorkspace = w }
             return
         case .usage:
             if let n = event.input_tokens { contextUsed = n }
@@ -2771,9 +2881,10 @@ struct SpotlightContentView: View {
             // is unreachable but kept exhaustive for the compiler.
             break
         case .userMessage, .turnDone, .planMode,
-             .permissionRequest, .permissionResolved, .usage, .compacted, .none:
-            // plan_mode / permission / usage / compacted are handled
-            // above the stale-index guard.
+             .permissionRequest, .permissionResolved, .usage, .compacted,
+             .question, .questionResolved, .workspace, .none:
+            // plan_mode / permission / question / usage / compacted /
+            // workspace are handled above the stale-index guard.
             break
         }
     }

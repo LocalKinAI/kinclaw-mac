@@ -25,7 +25,7 @@ struct KinClawMacSettingsView: View {
     @State private var selectedTab: Tab = .general
 
     enum Tab: String, CaseIterable, Identifiable {
-        case general, hotkey, backend, agents, skills, voice, mcp, harvest, data, about
+        case general, hotkey, backend, agents, skills, voice, mcp, harvest, routines, data, about
         var id: String { rawValue }
         var label: String {
             switch self {
@@ -37,6 +37,7 @@ struct KinClawMacSettingsView: View {
             case .voice:   return "Voice"
             case .mcp:     return "MCP"
             case .harvest: return "Harvest"
+            case .routines: return "Routines"
             case .data:    return "Data"
             case .about:   return "About"
             }
@@ -51,6 +52,7 @@ struct KinClawMacSettingsView: View {
             case .voice:   return "waveform"
             case .mcp:     return "puzzlepiece.extension"
             case .harvest: return "leaf"
+            case .routines: return "clock.arrow.2.circlepath"
             case .data:    return "externaldrive"
             case .about:   return "info.circle"
             }
@@ -141,6 +143,7 @@ struct KinClawMacSettingsView: View {
                 case .voice:   VoiceSettingsTab()
                 case .mcp:     MCPSettingsTab()
                 case .harvest: HarvestSettingsTab()
+                case .routines: RoutinesSettingsTab()
                 case .data:    DataSettingsTab()
                 case .about:   AboutSettingsTab()
                 }
@@ -1553,5 +1556,184 @@ private struct SkillsSettingsTab: View {
                 SettingsCaption("Showing 60 of \(items.count) — narrow it with the filter.")
             }
         }
+    }
+}
+
+
+// MARK: - Routines
+
+/// Settings → Routines: scheduled one-shot runs (Claude Desktop's
+/// "scheduled tasks"). Each routine is a prompt + a schedule; the kernel
+/// installs a LaunchAgent that runs `kinclaw -permissions auto -exec
+/// <prompt>` and logs to ~/.kinclaw/routines/<id>.log.
+private struct RoutinesSettingsTab: View {
+    @StateObject private var store = RoutineStore()
+
+    @State private var name = ""
+    @State private var prompt = ""
+    @State private var preset: Preset = .daily
+    @State private var time = Calendar.current.date(from: DateComponents(hour: 9, minute: 0)) ?? Date()
+    @State private var weekday = 1
+    @State private var everyMinutes = 30
+    @State private var addResult: String?
+    @State private var expandedLog: String?
+
+    enum Preset: String, CaseIterable, Identifiable {
+        case daily, weekdays, weekly, hourly, interval
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .daily: return "Every day"
+            case .weekdays: return "Weekdays"
+            case .weekly: return "Weekly"
+            case .hourly: return "Every hour"
+            case .interval: return "Every N minutes"
+            }
+        }
+    }
+
+    private static let days = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]
+
+    /// The schedule string the kernel parses.
+    private var scheduleRaw: String {
+        let hm = DateFormatter()
+        hm.dateFormat = "HH:mm"
+        switch preset {
+        case .daily: return "daily \(hm.string(from: time))"
+        case .weekdays: return "weekdays \(hm.string(from: time))"
+        case .weekly: return "weekly \(Self.days[weekday]) \(hm.string(from: time))"
+        case .hourly: return "hourly"
+        case .interval: return "every \(everyMinutes)m"
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            SettingsCard("Routines") {
+                if store.routines.isEmpty {
+                    SettingsCaption(store.fetchFailed
+                        ? "Couldn't reach the local kinclaw kernel. Routines are stored by it, so this fills in once it's running."
+                        : "No routines yet. Add one below — a prompt that runs on a schedule, like a morning brief or a nightly check.")
+                } else {
+                    ForEach(store.routines) { r in
+                        routineRow(r)
+                        if r.id != store.routines.last?.id { Divider().opacity(0.12) }
+                    }
+                }
+            }
+
+            SettingsCard("New routine") {
+                SettingsRow(label: "Name") {
+                    TextField("Morning brief", text: $name).textFieldStyle(.roundedBorder)
+                }
+                SettingsRow(label: "Prompt") {
+                    TextEditor(text: $prompt)
+                        .font(.system(size: 12))
+                        .frame(minHeight: 60, maxHeight: 120)
+                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.white.opacity(0.1)))
+                }
+                SettingsRow(label: "When") {
+                    HStack(spacing: 8) {
+                        Picker("", selection: $preset) {
+                            ForEach(Preset.allCases) { Text($0.label).tag($0) }
+                        }
+                        .labelsHidden()
+                        .frame(width: 150)
+                        if preset == .weekly {
+                            Picker("", selection: $weekday) {
+                                ForEach(0..<7, id: \.self) { i in
+                                    Text(Self.days[i].capitalized).tag(i)
+                                }
+                            }
+                            .labelsHidden()
+                            .frame(width: 80)
+                        }
+                        if preset == .daily || preset == .weekdays || preset == .weekly {
+                            DatePicker("", selection: $time, displayedComponents: .hourAndMinute)
+                                .labelsHidden()
+                        }
+                        if preset == .interval {
+                            Stepper("\(everyMinutes) min", value: $everyMinutes, in: 5...720, step: 5)
+                                .font(.system(size: 12))
+                        }
+                        Text(scheduleRaw)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundColor(.secondary)
+                    }
+                }
+                HStack {
+                    Spacer()
+                    Button("Add routine") {
+                        Task {
+                            addResult = await store.add(name: name, prompt: prompt, schedule: scheduleRaw)
+                            if addResult == nil { name = ""; prompt = "" }
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.green)
+                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty
+                              || prompt.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                if let r = addResult {
+                    Text(r).font(.system(size: 11)).foregroundColor(.orange)
+                }
+                SettingsCaption("Runs use the active soul with `-permissions auto` — nobody is there to answer an approval card at 03:00 — so keep routine prompts to things you'd let run unattended. Output lands in ~/.kinclaw/routines/<id>.log; `kinclaw routine list` shows the same registry.")
+            }
+        }
+        .task { await store.refresh() }
+    }
+
+    @ViewBuilder
+    private func routineRow(_ r: RoutineStore.Routine) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Toggle("", isOn: Binding(
+                    get: { r.enabled },
+                    set: { on in Task { await store.setEnabled(id: r.id, on: on) } }))
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .labelsHidden()
+                Text(r.name).font(.system(size: 12, weight: .semibold))
+                Text(r.schedule).font(.system(size: 11)).foregroundColor(.secondary)
+                if r.enabled && !r.installed {
+                    Text("not scheduled").font(.system(size: 10)).foregroundColor(.orange)
+                        .help("The LaunchAgent isn't installed — see the log or re-enable.")
+                }
+                Spacer()
+                Text("last: \(r.lastRunText)").font(.system(size: 10)).foregroundColor(.secondary)
+                Button("Run now") { Task { await store.runNow(id: r.id) } }
+                    .buttonStyle(.plain).font(.system(size: 11)).foregroundColor(.green)
+                Button(expandedLog == r.id ? "Hide log" : "Log") {
+                    if expandedLog == r.id { expandedLog = nil } else {
+                        expandedLog = r.id
+                        Task { await store.loadLog(id: r.id) }
+                    }
+                }
+                .buttonStyle(.plain).font(.system(size: 11)).foregroundColor(.secondary)
+                Button(role: .destructive) { Task { await store.remove(id: r.id) } } label: {
+                    Image(systemName: "trash").font(.system(size: 11))
+                }
+                .buttonStyle(.plain).foregroundColor(.secondary)
+            }
+            Text(r.prompt)
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+                .lineLimit(2)
+                .padding(.leading, 40)
+            if expandedLog == r.id {
+                ScrollView {
+                    Text(store.logText[r.id] ?? "loading…")
+                        .font(.system(size: 10, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 180)
+                .padding(6)
+                .background(Color.black.opacity(0.25))
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .padding(.leading, 40)
+            }
+        }
+        .padding(.vertical, 4)
     }
 }

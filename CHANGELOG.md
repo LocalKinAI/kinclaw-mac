@@ -2,6 +2,53 @@
 
 All notable changes to KinClaw Mac.
 
+## [Unreleased] - 2026-09-05 (evening) — workspace, questions, diffs, notifications, Routines
+
+Second pass, pairing with kinclaw's deferred skills / workspace /
+ask_user / routines. Same rule as the morning: all of it degrades to
+nothing on an older kernel.
+
+### Added — workspace picker
+
+A folder button in the Cowork agent bar (next to the context meter)
+shows the current working folder and opens a picker; the choice goes to
+`POST /api/workspace`. The agent's relative paths and shell commands
+live there, and writes outside it now ask first — Cowork's "the folder
+you granted".
+
+### Added — question card
+
+When the agent calls `ask_user` (`question` SSE), a cyan card above the
+composer shows the question with its options as chips — one click
+answers — plus a text field for anything else (⌘⏎). Answered via
+`POST /api/answer`.
+
+### Added — diffs for file edits
+
+`file_edit` / `file_write` tool cards render the kernel's unified diff
+with the same DiffView the Code tab uses for kincode, and open expanded:
+the diff is the information.
+
+### Added — notifications
+
+When the panel is hidden and the agent finishes a turn, needs an
+approval, has a question, or a detached spawn returns, a macOS
+notification says so; clicking it summons the panel. Asked for
+permission once at launch.
+
+### Added — "Always" on the approval card
+
+Four answers now: Deny · This session · Always · Allow. Always saves a
+narrow rule (`shell(git*)`) to `~/.kinclaw/permissions.json` so it
+survives restarts.
+
+### Added — Settings → Routines
+
+Scheduled runs over the kernel's `/api/routines`: list with schedule,
+last run, enabled toggle, Run now, log tail, remove; an add form with
+Every day / Weekdays / Weekly / Every hour / Every N minutes presets.
+Same registry as `kinclaw routine`.
+
 ## [Unreleased] - 2026-09-05 — Cowork gets Claude Desktop's manners
 
 Pairs with kinclaw v1.18 (permission gate, plan mode, compaction, usage

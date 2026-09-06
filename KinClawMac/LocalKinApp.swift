@@ -1,4 +1,5 @@
 import SwiftUI
+import UserNotifications
 import AppKit
 import KeyboardShortcuts
 
@@ -120,6 +121,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         //    user still gets Code mode, and vice versa. Runs async
         //    too; both probes happen concurrently.
         Task { await kincodeSupervisor.start() }
+
+        // 8. Local notifications: a task finished, needs approval, or
+        //    has a question while the panel is hidden. Clicking one
+        //    brings the panel back. Asked once; macOS remembers.
+        let center = UNUserNotificationCenter.current()
+        center.delegate = self
+        center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -290,5 +298,25 @@ struct ContentView: View {
                 }
         }
         .tint(Color("AccentGreen"))
+    }
+}
+
+
+// MARK: - Notifications
+
+extension AppDelegate: UNUserNotificationCenterDelegate {
+    /// Show banners even while the app is "active" — as a menubar app it
+    /// counts as active whenever the panel was the last thing focused,
+    /// which is exactly when the panel is hidden and the banner matters.
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                            willPresent notification: UNNotification) async
+        -> UNNotificationPresentationOptions {
+        [.banner, .sound]
+    }
+
+    /// Clicking a notification summons the panel.
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                            didReceive response: UNNotificationResponse) async {
+        await MainActor.run { self.spotlightWindow.show() }
     }
 }

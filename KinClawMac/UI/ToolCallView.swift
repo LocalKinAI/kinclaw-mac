@@ -12,7 +12,18 @@ import SwiftUI
 struct ToolCallView: View {
     let call: ToolCall
 
-    @State private var expanded = false
+    @State private var expanded: Bool
+
+    init(call: ToolCall) {
+        self.call = call
+        // File edits open expanded: the diff IS the information the
+        // user wants to see, the same way Claude Desktop shows edits.
+        _expanded = State(initialValue: Self.isFileEdit(call.name))
+    }
+
+    private static func isFileEdit(_ name: String) -> Bool {
+        name == "file_edit" || name == "file_write"
+    }
 
     private var status: Status {
         guard let out = call.output else { return .running }
@@ -129,7 +140,11 @@ struct ToolCallView: View {
     /// other tools (raw stdout, AX trees, file paths) want mono.
     @ViewBuilder
     private func renderedOutput(_ out: String) -> some View {
-        if looksLikeMarkdown(out) {
+        if Self.isFileEdit(call.name), looksLikeDiff(out) {
+            // kinclaw ≥ 1.18 appends a coloured unified diff to file_edit /
+            // file_write results, in kincode's format — DiffView parses both.
+            DiffView(raw: out)
+        } else if looksLikeMarkdown(out) {
             MarkdownView(text: out)
                 .textSelection(.enabled)
         } else {
@@ -140,6 +155,11 @@ struct ToolCallView: View {
                 .foregroundColor(.primary.opacity(0.9))
                 .textSelection(.enabled)
         }
+    }
+
+    /// The kernel's diff lines carry ANSI colour codes (red/green/gray).
+    private func looksLikeDiff(_ out: String) -> Bool {
+        out.contains("\u{1B}[31m") || out.contains("\u{1B}[32m")
     }
 
     /// Heuristic for "this looks like rich content, not raw stdout":

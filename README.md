@@ -18,6 +18,8 @@ Same window, same agent picker shape, three different brains. Switch tabs to swi
 
 ## Status
 
+📁 **Unreleased (evening)** — Cowork gains a **workspace picker** (writes outside the folder ask first), a **question card** for the agent's `ask_user` questions, **diffs** on file edits, macOS **notifications** when the panel is hidden, an **Always** approval that persists, and a **Routines** settings tab for scheduled runs. Needs kinclaw ≥ 1.18 (evening build).
+
 🛡 **Unreleased** — Cowork gets Claude Desktop's manners: an inline **approval card** when the kernel's permission gate stops a call (Allow / Always this session / Deny), a **plan mode** toggle (⇧⌘P — the agent looks and proposes, nothing on your screen changes), a **context meter** fed by per-call usage, and compaction dividers in the transcript. Needs kinclaw ≥ 1.18.
 
 🧩 **Unreleased** — Settings gains **MCP** (tools from external servers), **Harvest** (the nightly skill-harvest job, made visible) and **Skills** (what the active soul actually exposes — 25 of 189 for pilot — with per-soul toggles that never rewrite the soul file).
