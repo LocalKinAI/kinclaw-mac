@@ -40,6 +40,9 @@ struct CodePane: View {
     @State private var messages: [CodeMessage] = []
     @State private var inputText: String = ""
     @State private var isStreaming: Bool = false
+    /// Left folder pane (⇧⌘L): the repo tree + files touched this session.
+    @AppStorage("kinclaw.code.sidebar") private var showCodeSidebar = true
+    @State private var sidebarRefresh = 0
     @State private var streamTask: Task<Void, Never>?
     @State private var connectError: String?
 
@@ -116,7 +119,17 @@ struct CodePane: View {
         VStack(spacing: 0) {
             repoBar
             Divider().opacity(0.15)
-            messagesArea
+            HStack(spacing: 0) {
+                if showCodeSidebar && !repoPath.isEmpty {
+                    WorkspaceSidebar(workspace: repoPath,
+                                     touched: touchedFiles,
+                                     refreshToken: sidebarRefresh,
+                                     onPick: pickRepo)
+                        .frame(width: 210)
+                    Divider().opacity(0.15)
+                }
+                messagesArea
+            }
             Divider().opacity(0.15)
             // Outer paddings match chatBody.inputBar wrapping —
             // 12pt horizontal, 8pt vertical around the rounded
@@ -224,10 +237,18 @@ struct CodePane: View {
             .menuIndicator(.hidden)
             .fixedSize()
 
-            // Brain picker — live switch via POST /api/brain. Doesn't
-            // persist (Settings → Backend → Kincode is where you set
-            // the default). Compact: emoji + truncated model label.
-            brainMenu
+            // Folder pane toggle (⇧⌘L). The brain picker lives in the
+            // composer's bottom-right corner now.
+            Button {
+                withAnimation(.easeOut(duration: 0.15)) { showCodeSidebar.toggle() }
+            } label: {
+                Image(systemName: showCodeSidebar ? "sidebar.left" : "sidebar.leading")
+                    .font(.system(size: 12))
+                    .foregroundColor(showCodeSidebar ? .green : .secondary)
+            }
+            .buttonStyle(.plain)
+            .help(showCodeSidebar ? "Hide the folder pane (⇧⌘L)" : "Show the folder pane (⇧⌘L)")
+            .keyboardShortcut("l", modifiers: [.command, .shift])
 
             Spacer(minLength: 0)
 
@@ -630,7 +651,14 @@ struct CodePane: View {
                     .lineLimit(1...5)
                     .focused($inputFocused)
                     .onSubmit { send() }
+            }
 
+            // Composer footer — model picker bottom-right, next to send
+            // (live switch via POST /api/brain; the default lives in
+            // Settings → Backend → Kincode).
+            HStack(spacing: 10) {
+                Spacer()
+                brainMenu
                 Button {
                     send()
                 } label: {
@@ -743,6 +771,38 @@ struct CodePane: View {
     private func decodeImagePreview(_ base64: String) -> NSImage? {
         guard let data = Data(base64Encoded: base64) else { return nil }
         return NSImage(data: data)
+    }
+
+    /// Files kincode read or changed this session, newest first, from
+    /// the file_* / multi_edit tool rows (kincode's parameter is
+    /// file_path; kinclaw-format skills use path).
+    private var touchedFiles: [TouchedFile] {
+        var byPath: [String: TouchedFile] = [:]
+        var order: [String] = []
+        for m in messages where m.role == .toolCall {
+            let action: String
+            switch m.toolName ?? "" {
+            case "file_read":              action = "read"
+            case "file_write":             action = "write"
+            case "file_edit", "multi_edit": action = "edit"
+            default: continue
+            }
+            let params = m.toolParams ?? [:]
+            guard var p = params["file_path"] ?? params["path"], !p.isEmpty else { continue }
+            if p.hasPrefix("~") { p = NSString(string: p).expandingTildeInPath }
+            if !p.hasPrefix("/") { p = (repoPath as NSString).appendingPathComponent(p) }
+            p = URL(fileURLWithPath: p).standardizedFileURL.path
+            if let prev = byPath[p] {
+                if prev.action == "read" && action != "read" {
+                    byPath[p] = TouchedFile(path: p, action: action)
+                }
+                order.removeAll { $0 == p }
+            } else {
+                byPath[p] = TouchedFile(path: p, action: action)
+            }
+            order.append(p)
+        }
+        return order.reversed().compactMap { byPath[$0] }
     }
 
     // MARK: - Actions
@@ -1004,6 +1064,7 @@ struct CodePane: View {
         case .turnDone:
             isStreaming = false
             streamingMessageID = nil
+            sidebarRefresh += 1
             // Persist after each completed turn — survives app
             // quit, hotkey-driven panel close, repo switch.
             saveSession()

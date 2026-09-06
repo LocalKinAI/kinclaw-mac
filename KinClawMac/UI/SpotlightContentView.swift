@@ -565,16 +565,26 @@ struct SpotlightContentView: View {
             // Approval card — the kernel's permission gate parked the
             // turn on a call it wants a human to okay. Sits right above
             // the composer, where the user is already looking.
+            // Cards sit bottom-left, capped in width, so they read as
+            // a prompt attached to the composer rather than a banner.
             if mode == .cowork, let req = pendingPermission {
-                PermissionCardView(request: req) { decision in
-                    respondPermission(req, decision: decision)
+                HStack(alignment: .top, spacing: 0) {
+                    PermissionCardView(request: req) { decision in
+                        respondPermission(req, decision: decision)
+                    }
+                    .frame(maxWidth: 480)
+                    Spacer(minLength: 0)
                 }
                 .padding(.horizontal, 12)
                 .padding(.top, 8)
             }
             if mode == .cowork, let q = pendingQuestion {
-                QuestionCardView(question: q) { answer in
-                    answerQuestion(q, text: answer)
+                HStack(alignment: .top, spacing: 0) {
+                    QuestionCardView(question: q) { answer in
+                        answerQuestion(q, text: answer)
+                    }
+                    .frame(maxWidth: 480)
+                    Spacer(minLength: 0)
                 }
                 .padding(.horizontal, 12)
                 .padding(.top, 8)
@@ -645,9 +655,9 @@ struct SpotlightContentView: View {
             // independent — pick Pilot then swap brain without
             // reloading. Mirrors Code mode's brainMenu but hits
             // kinclaw on :5001 instead of kincode on :5002.
-            if mode == .cowork {
-                coworkBrainMenu
-            }
+            // (The brain picker moved to the composer's bottom-right
+            // corner — the agent bar is about who and where, the
+            // composer footer about what brain, as in Claude Desktop.)
 
             // Session history (📚) — popover with all saved chats
             // for the active agent + "+ New chat" + delete.
@@ -1896,6 +1906,7 @@ struct SpotlightContentView: View {
     }
 
     private var inputBar: some View {
+        VStack(spacing: 6) {
         HStack(spacing: 8) {
             // Paperclip — opens file picker. Same destination as
             // drag-drop (pendingAttachments). Visible affordance so
@@ -1951,7 +1962,15 @@ struct SpotlightContentView: View {
             .onSubmit { send() }
             .lineLimit(1...5)
             .disabled(selectedAgent == nil)
+        }
 
+        // Composer footer — the model picker sits bottom-right next to
+        // send, where Claude Desktop keeps it.
+        HStack(spacing: 10) {
+            Spacer()
+            if mode == .cowork {
+                coworkBrainMenu
+            }
             Button {
                 send()
             } label: {
@@ -1962,6 +1981,7 @@ struct SpotlightContentView: View {
             .buttonStyle(.plain)
             .disabled(!canSend)
             .keyboardShortcut(.return, modifiers: .command)
+        }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)

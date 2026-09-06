@@ -15,10 +15,19 @@ in red. Same fold in the Code tab for consecutive kincode tool rows.
 `todo_write` stays outside the fold, and only the latest checklist
 renders — each call replaces the whole list, so older ones were stale.
 
-### Added — folder pane (Cowork)
+### Changed — composer footer, cards bottom-left
 
-A left column, on by default, ⇧⌘L to hide: the workspace folder at the
-top (click to change), **This session** — every file the agent read,
+The model picker moved out of the top bar into the composer's
+bottom-right corner next to Send, in both Cowork and Code — the top bar
+is about who (agent / repo) and where (workspace); the composer footer
+is about what brain. Approval and question cards now sit bottom-left,
+capped at 480pt, so they read as a prompt attached to the composer
+rather than a banner across the panel.
+
+### Added — folder pane (Cowork and Code)
+
+A left column in both Cowork and Code, on by default, ⇧⌘L to hide: the
+workspace (or repo) folder at the top (click to change), **This session** — every file the agent read,
 wrote or edited, newest first, with an eye / plus / pencil marker —
 and **Files**, the folder's contents as an expandable tree with touched
 files highlighted. Click reveals in Finder; right-click opens or copies
