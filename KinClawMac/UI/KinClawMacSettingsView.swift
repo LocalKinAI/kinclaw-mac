@@ -308,6 +308,9 @@ private struct BackendSettingsTab: View {
     @AppStorage("kinclaw.backend.searxng") private var searxng = "http://localhost:8080"
     @AppStorage("kinclaw.backend.stt") private var stt = "http://localhost:8000"
     @AppStorage("kinclaw.backend.tts") private var tts = "http://localhost:8001"
+    /// Which Ollama the brain dropdowns list and Ollama brain switches
+    /// target (Cowork and Code). Empty = this Mac's :11434.
+    @AppStorage(OllamaCatalog.hostKey) private var ollamaHost = ""
 
     // Kincode (Code mode kernel — Stage 1 / 5).
     @AppStorage("kinclaw.kincode.autostart") private var kincodeAutostart = true
@@ -457,6 +460,13 @@ private struct BackendSettingsTab: View {
             }
 
             SettingsCard("Sidecars") {
+                SettingsRow(label: "Ollama host") {
+                    TextField("http://localhost:11434 (this Mac)", text: $ollamaHost)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 11, design: .monospaced))
+                        .frame(maxWidth: 320)
+                }
+                SettingsCaption("The Ollama that both brain dropdowns list models from and that Ollama brain switches point at, in Cowork and Code. Leave empty for this Mac; a LAN box looks like http://192.168.0.21:11434. Souls keep their own brain.endpoint for the boot default.")
                 SettingsRow(label: "SearXNG") {
                     TextField("", text: $searxng)
                         .textFieldStyle(.roundedBorder)

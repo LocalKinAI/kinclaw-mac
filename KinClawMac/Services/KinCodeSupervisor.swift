@@ -190,6 +190,11 @@ final class KinCodeSupervisor: ObservableObject {
         let savedModel = UserDefaults.standard.string(forKey: "kinclaw.kincode.brain.model") ?? ""
         if !savedProvider.isEmpty && !savedModel.isEmpty {
             args.append(contentsOf: ["-provider", savedProvider, "-model", savedModel])
+            // A remote Ollama (Settings → Backend → Ollama host) needs the
+            // full chat URL on kincode's side.
+            if savedProvider == "ollama", OllamaCatalog.isRemote {
+                args.append(contentsOf: ["-endpoint", OllamaCatalog.kincodeEndpoint])
+            }
             print("[KinCodeSupervisor] brain: \(savedProvider) / \(savedModel) (Settings)")
         }
 

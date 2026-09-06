@@ -20,12 +20,38 @@ enum OllamaCatalog {
     /// Default Ollama endpoint base (no path, no trailing slash).
     static let defaultBaseURL = "http://localhost:11434"
 
+    /// UserDefaults key for the Ollama host (Settings → Backend).
+    static let hostKey = "kinclaw.ollama.host"
+
+    /// The Ollama the dropdowns list models from and brain switches
+    /// point at — the laptop's own by default, or a box on the LAN
+    /// (`http://192.168.0.21:11434`). Normalized: scheme added if
+    /// missing, trailing slash and any path dropped.
+    static var baseURL: String {
+        let raw = (UserDefaults.standard.string(forKey: hostKey) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return defaultBaseURL }
+        var s = raw
+        if !s.hasPrefix("http://") && !s.hasPrefix("https://") { s = "http://" + s }
+        if let comps = URLComponents(string: s), let host = comps.host {
+            let port = comps.port.map { ":\($0)" } ?? ":11434"
+            return "\(comps.scheme ?? "http")://\(host)\(port)"
+        }
+        return s.hasSuffix("/") ? String(s.dropLast()) : s
+    }
+
+    /// True when models come from somewhere other than this Mac.
+    static var isRemote: Bool { baseURL != defaultBaseURL }
+
+    /// The endpoint kincode wants for an Ollama brain (full chat URL).
+    static var kincodeEndpoint: String { baseURL + "/v1/chat/completions" }
+
     /// Fetch installed models and map to BrainPreset rows. Returns an
     /// empty array if Ollama is unreachable or no models match the
     /// chat filter — caller can decide what to fall back to. Never
     /// throws; network failures surface as empty result + a printed
     /// note (Ollama might just not be running).
-    static func loadPresets(baseURL: String = defaultBaseURL) async -> [BrainPreset] {
+    static func loadPresets(baseURL: String = OllamaCatalog.baseURL) async -> [BrainPreset] {
         guard let url = URL(string: "\(baseURL)/api/tags") else {
             return []
         }

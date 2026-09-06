@@ -1057,9 +1057,12 @@ struct SpotlightContentView: View {
     private func switchCoworkBrain(to preset: BrainPreset) {
         Task {
             do {
+                // Ollama presets carry the configured host (kinclaw
+                // takes the base URL and adds the path itself).
                 try await KinClawAPIClient.default.switchBrain(
                     provider: preset.provider,
-                    model: preset.model)
+                    model: preset.model,
+                    endpoint: preset.provider == "ollama" ? OllamaCatalog.baseURL : nil)
                 // Optimistic local update — SSE brain_switched will
                 // confirm authoritatively in ~10ms.
                 await MainActor.run {

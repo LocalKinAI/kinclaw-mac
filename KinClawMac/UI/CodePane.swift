@@ -1385,8 +1385,12 @@ struct CodePane: View {
     private func switchBrain(to preset: BrainPreset) {
         Task {
             do {
+                // Ollama presets carry the configured host: kincode
+                // takes the full chat-completions URL.
                 try await client.switchBrain(provider: preset.provider,
-                                             model: preset.model)
+                                             model: preset.model,
+                                             endpoint: preset.provider == "ollama"
+                                                 ? OllamaCatalog.kincodeEndpoint : nil)
                 await refreshState()
                 connectError = nil
             } catch {

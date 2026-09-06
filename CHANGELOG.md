@@ -24,6 +24,16 @@ is about what brain. Approval and question cards now sit bottom-left,
 capped at 480pt, so they read as a prompt attached to the composer
 rather than a banner across the panel.
 
+### Added — Ollama host setting
+
+Settings → Backend → Sidecars gains **Ollama host**. Both brain
+dropdowns (Cowork and Code) list models from it and Ollama brain
+switches carry it as the endpoint — kinclaw takes the base URL, kincode
+the full chat-completions URL, the setting handles both. Empty means
+this Mac; a LAN inference box looks like `http://192.168.0.21:11434`.
+The kincode supervisor passes `-endpoint` too when it spawns with a
+saved default brain.
+
 ### Added — folder pane (Cowork and Code)
 
 A left column in both Cowork and Code, on by default, ⇧⌘L to hide: the
