@@ -2,6 +2,62 @@
 
 All notable changes to KinClaw Mac.
 
+## [Unreleased] - 2026-09-05 — Cowork gets Claude Desktop's manners
+
+Pairs with kinclaw v1.18 (permission gate, plan mode, compaction, usage
+events). Everything here degrades gracefully on an older kernel: the
+events simply never arrive and the new controls stay idle.
+
+### Added — approval card
+
+When the kernel's permission gate stops a call (`permission_request`
+SSE), an orange card appears above the composer: what Pilot wants to
+run in one monospace line, why the gate stopped it, an expandable
+params view, and three answers — **Deny** (Esc), **Always this
+session**, **Allow** (⌘⏎). The turn is parked on the kernel until you
+answer; Stop cancels the wait and the card. This is the Cowork
+equivalent of Claude Desktop's "Allow this tool?" sheet, inline so your
+eyes stay on the conversation.
+
+### Added — plan mode for Cowork
+
+A clipboard button in the agent bar (⇧⌘P) flips the kernel's read-only
+gate — the same `POST /api/plan_mode` the Code tab already used for
+kincode. While on, an amber banner explains that the agent investigates
+and proposes but nothing on your screen changes, with an **Act** button
+to leave. State reconciles from `plan_mode` events and `GET /api/state`.
+
+### Added — context meter
+
+A small capsule + percentage next to the connection dot, fed by the
+kernel's per-call `usage` events: how full the model's window is. Green
+→ yellow → orange past the compaction threshold, so an automatic fold is
+never a surprise. Primed from `GET /api/state` on entering Cowork and
+refreshed after every turn.
+
+### Added — compaction dividers
+
+When the kernel folds older conversation into a summary (`compacted`
+event) a centered dim divider marks the spot in the transcript. System
+markers render as dividers, not as bubbles from either party.
+
+### Changed — kernel notices no longer end the turn
+
+kinclaw ≥ 1.18 sends circuit-breaker trips, hook blocks and permission
+denials as `notice` events instead of `error`. The Cowork stream loop
+stops on `error` (correctly — the turn is over), which meant a mid-turn
+`[SYSTEM]` warning used to truncate the rest of the turn in the UI.
+Notices now render as a quiet ⚠︎ blockquote inside the bubble and the
+turn plays on.
+
+### API client
+
+`KinClawAPIClient` gains `respondPermission(id:decision:)`,
+`compact()`, `fetchKinClawState()`; `KinClawEvent` gains `reason`,
+`context_length`, `before_tokens`, `after_tokens` and the kinds
+`permissionRequest`, `permissionResolved`, `usage`, `compacted`,
+`notice`.
+
 ## [Unreleased] - 2026-08-26 — Settings gains MCP, Harvest and Skills
 
 Three new tabs, all built on one principle: show configuration **and** what

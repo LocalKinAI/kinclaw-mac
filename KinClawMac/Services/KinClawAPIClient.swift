@@ -24,8 +24,11 @@ struct KinClawEvent: Codable {
     let params: [String: String]?
     /// Pre-computed display string for tool_call ("ls -la /tmp",
     /// "src/main.go"). Emitted by kincode; kinclaw events leave this
-    /// nil and the UI derives a label from `params`.
+    /// nil and the UI derives a label from `params`. For kinclaw
+    /// `permission_request` events it is the one-line call summary.
     let summary: String?
+    /// permission_request: why the gate stopped (rule / dangerous).
+    let reason: String?
 
     // tool_result / screen_frame / record_done payloads
     let output: String?
@@ -34,9 +37,16 @@ struct KinClawEvent: Codable {
     let path: String?
     let url: String?
 
-    // usage stats (kincode emits at end of turn)
+    // usage stats — kincode emits at end of turn; kinclaw emits a
+    // `usage` event after every model call with context_length so the
+    // UI can draw a meter.
     let input_tokens: Int?
     let output_tokens: Int?
+    let context_length: Int?
+
+    // compacted: what the fold removed.
+    let before_tokens: Int?
+    let after_tokens: Int?
 
     // user_message: image-attachment count (kincode plan mode).
     let image_count: Int?
@@ -65,6 +75,18 @@ extension KinClawEvent {
         case spawnDone     = "spawn_done"
         case turnDone      = "turn_done"
         case planMode      = "plan_mode"
+        /// kinclaw ≥ 1.18: the kernel's permission gate wants a human
+        /// decision; answer via POST /api/permission with the same id.
+        case permissionRequest  = "permission_request"
+        /// Someone answered (or the wait was cancelled) — drop the card.
+        case permissionResolved = "permission_resolved"
+        /// Token accounting after each model call.
+        case usage
+        /// Older turns were folded into a summary.
+        case compacted
+        /// Kernel-originated text mid-turn (circuit breaker, hook block,
+        /// permission denial). NOT an error: the turn continues.
+        case notice
         case error
     }
 
@@ -257,6 +279,58 @@ final class KinClawAPIClient {
         request.httpMethod = "DELETE"
         let (data, response) = try await sessionDataFor(request: request)
         try checkOK(response as? HTTPURLResponse, body: data)
+    }
+
+    // MARK: - Permission gate / context (kinclaw ≥ 1.18)
+
+    /// `POST /api/permission {id, decision}` — answer a
+    /// `permission_request`. decision ∈ allow | allow_session | deny.
+    /// 404 means the request already resolved (timed out, or the turn
+    /// was stopped) — callers treat that as "card is stale", not error.
+    func respondPermission(id: String, decision: String) async throws {
+        let url = baseURL.appendingPathComponent("api/permission")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(["id": id, "decision": decision])
+        let (data, response) = try await sessionDataFor(request: request)
+        if (response as? HTTPURLResponse)?.statusCode == 404 { return }
+        try checkOK(response as? HTTPURLResponse, body: data)
+    }
+
+    /// `POST /api/compact` — fold older conversation into a summary
+    /// now. Returns the kernel's one-line outcome. 409 while a turn is
+    /// running.
+    func compact() async throws -> String {
+        let url = baseURL.appendingPathComponent("api/compact")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        let (data, response) = try await sessionDataFor(request: request)
+        try checkOK(response as? HTTPURLResponse, body: data)
+        struct Reply: Decodable { let message: String? }
+        return (try? decoder.decode(Reply.self, from: data))?.message ?? "compacted"
+    }
+
+    /// `GET /api/state` on kinclaw — soul, brain, gate mode, plan mode,
+    /// prompt size vs context window. Used to prime the Cowork header
+    /// on connect and refresh it after each turn.
+    struct KinClawState: Decodable {
+        let soul: String?
+        let brain: String?
+        let permission_mode: String?
+        let plan_mode: Bool?
+        let session_allowed: [String]?
+        let messages: Int?
+        let input_tokens: Int?
+        let context_length: Int?
+        let total_input_tokens: Int?
+        let total_output_tokens: Int?
+    }
+    func fetchKinClawState() async throws -> KinClawState {
+        let url = baseURL.appendingPathComponent("api/state")
+        let (data, response) = try await sessionData(from: url)
+        try checkOK(response as? HTTPURLResponse, body: data)
+        return try decoder.decode(KinClawState.self, from: data)
     }
 
     // MARK: - Voice

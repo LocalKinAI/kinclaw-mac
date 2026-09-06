@@ -18,6 +18,8 @@ Same window, same agent picker shape, three different brains. Switch tabs to swi
 
 ## Status
 
+🛡 **Unreleased** — Cowork gets Claude Desktop's manners: an inline **approval card** when the kernel's permission gate stops a call (Allow / Always this session / Deny), a **plan mode** toggle (⇧⌘P — the agent looks and proposes, nothing on your screen changes), a **context meter** fed by per-call usage, and compaction dividers in the transcript. Needs kinclaw ≥ 1.18.
+
 🧩 **Unreleased** — Settings gains **MCP** (tools from external servers), **Harvest** (the nightly skill-harvest job, made visible) and **Skills** (what the active soul actually exposes — 25 of 189 for pilot — with per-soul toggles that never rewrite the soul file).
 
 🎙 **Unreleased** — Hands-free voice conversation: speak, get a spoken reply, keep going without touching the keyboard. Mixed zh/en replies are split per language and spoken by a matching voice; optional wake word filters out speech that wasn't meant for the agent. See [Voice](#voice) below.

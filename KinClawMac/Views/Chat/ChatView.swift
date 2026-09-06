@@ -589,11 +589,17 @@ struct ChatView: View {
             }
             messages[assistantIndex].content += "[error: \(msg)]"
             scrollTrigger += 1
+        case .notice:
+            if let m = event.message, !m.isEmpty {
+                messages[assistantIndex].content += "\n\n> ⚠︎ \(m)"
+                scrollTrigger += 1
+            }
         case .hello, .userMessage, .turnDone,
              .screenFrame, .recordDone, .soulSwitched, .brainSwitched,
-             .sessionReset, .spawnDone, .planMode, .none:
-            // brain_switched / session_reset / spawn_done: Cowork-
-            // mode-only; Chat ignores. (Other branches: see above.)
+             .sessionReset, .spawnDone, .planMode,
+             .permissionRequest, .permissionResolved, .usage, .compacted, .none:
+            // brain_switched / session_reset / spawn_done / permission
+            // / usage / compacted: Cowork-mode-only; Chat ignores.
             break
         }
     }

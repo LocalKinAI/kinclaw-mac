@@ -94,6 +94,15 @@ struct SpotlightContentView: View {
     /// errors, and after a brain switch.
     @State private var coworkConnectError: String?
 
+    // Cowork kernel state mirrored from kinclaw (≥ 1.18): the pending
+    // approval card, the plan-mode gate, and prompt size vs context
+    // window for the meter. Fed by SSE mid-turn and by GET /api/state
+    // between turns.
+    @State private var pendingPermission: PermissionRequest?
+    @State private var coworkPlanMode = false
+    @State private var contextUsed: Int = 0
+    @State private var contextLength: Int = 0
+
     /// Chat-tab "browse vs chat" state. True = show the agent
     /// gallery (discovery surface). False = show welcomeCard /
     /// messages for the selected agent. Default true so first-time
@@ -440,6 +449,9 @@ struct SpotlightContentView: View {
             wakeSessionExpiry = nil
         }
         .onChange(of: mode) { _, newMode in
+            // Entering Cowork: prime the header (context meter, plan
+            // mode) from the kernel so it's right before the first turn.
+            if newMode == .cowork { refreshCoworkState() }
             // Save the outgoing session and clear the surface
             // SYNCHRONOUSLY before the agent-swap chain fires.
             // Without this clear-first step there's a 1-frame
@@ -529,6 +541,22 @@ struct SpotlightContentView: View {
                 }
 
             Divider().opacity(0.15)
+
+            // Approval card — the kernel's permission gate parked the
+            // turn on a call it wants a human to okay. Sits right above
+            // the composer, where the user is already looking.
+            if mode == .cowork, let req = pendingPermission {
+                PermissionCardView(request: req) { decision in
+                    respondPermission(req, decision: decision)
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+            }
+            if mode == .cowork && coworkPlanMode {
+                PlanModeBannerView { toggleCoworkPlanMode() }
+                    .padding(.horizontal, 12)
+                    .padding(.top, 6)
+            }
 
             pendingAttachmentsBar
 
@@ -644,6 +672,31 @@ struct SpotlightContentView: View {
                           : Color.orange.opacity(0.7))
                     .frame(width: 6, height: 6)
                     .help(coworkConnectError ?? "kinclaw :5001 connected")
+
+                // Context meter — how full the model's window is, from
+                // the kernel's `usage` events. Same information Claude
+                // Code shows as "% of context"; here it also explains
+                // the automatic compaction dividers in the transcript.
+                if contextLength > 0 {
+                    ContextMeterView(used: contextUsed, total: contextLength)
+                }
+
+                // Plan mode — read-only gate on the kernel. The agent
+                // investigates and proposes; clicks / typing / shell /
+                // writes are refused until the user flips it back.
+                Button {
+                    toggleCoworkPlanMode()
+                } label: {
+                    Image(systemName: coworkPlanMode
+                          ? "list.clipboard.fill" : "list.clipboard")
+                        .font(.system(size: 12))
+                        .foregroundColor(coworkPlanMode ? .orange : .secondary)
+                }
+                .buttonStyle(.plain)
+                .help(coworkPlanMode
+                      ? "Plan mode ON — the agent can look but not act (⇧⌘P to exit)"
+                      : "Plan mode — investigate and propose before acting (⇧⌘P)")
+                .keyboardShortcut("p", modifiers: [.command, .shift])
             }
 
             // Stop button — interrupts the in-flight turn via
@@ -1594,7 +1647,34 @@ struct SpotlightContentView: View {
         .frame(maxWidth: .infinity)
     }
 
+    @ViewBuilder
     private func messageBubble(_ msg: ChatMessage) -> some View {
+        if msg.role == .system {
+            systemDivider(msg)
+        } else {
+            messageBubbleBody(msg)
+        }
+    }
+
+    /// Kernel-originated transcript markers (a context compaction, a
+    /// session boundary) render as a centered dim divider, not as a
+    /// speech bubble from either party.
+    private func systemDivider(_ msg: ChatMessage) -> some View {
+        HStack(spacing: 8) {
+            Rectangle().fill(Color.secondary.opacity(0.25)).frame(height: 1)
+            Text(msg.content)
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            Rectangle().fill(Color.secondary.opacity(0.25)).frame(height: 1)
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 24)
+    }
+
+    private func messageBubbleBody(_ msg: ChatMessage) -> some View {
         let isLastAssistantWhileStreaming = !msg.isUser
             && isStreaming
             && msg.id == messages.last?.id
@@ -1889,6 +1969,54 @@ struct SpotlightContentView: View {
             try? await KinClawAPIClient.default.cancelTurn()
         }
         isStreaming = false
+        // The kernel cancels any parked approval when the turn dies;
+        // drop the card now rather than waiting for the echo.
+        pendingPermission = nil
+    }
+
+    /// Answer the kernel's approval request. Optimistic: the card goes
+    /// away immediately; a 404 from the server means the request had
+    /// already resolved (timeout / stop) and there is nothing to show.
+    private func respondPermission(_ req: PermissionRequest, decision: String) {
+        pendingPermission = nil
+        Task {
+            do {
+                try await KinClawAPIClient.default.respondPermission(id: req.id, decision: decision)
+            } catch {
+                FileHandle.standardError.write(
+                    "kinclaw respondPermission failed: \(error.localizedDescription)\n"
+                        .data(using: .utf8) ?? Data())
+            }
+        }
+    }
+
+    /// Flip the kernel's plan-mode gate. Optimistic, reconciled by the
+    /// server's reply (it may refuse) and by later plan_mode events.
+    private func toggleCoworkPlanMode() {
+        let target = !coworkPlanMode
+        coworkPlanMode = target
+        Task {
+            do {
+                coworkPlanMode = try await KinClawAPIClient.default.setPlanMode(target)
+            } catch {
+                coworkPlanMode = !target
+                FileHandle.standardError.write(
+                    "kinclaw setPlanMode failed: \(error.localizedDescription)\n"
+                        .data(using: .utf8) ?? Data())
+            }
+        }
+    }
+
+    /// Pull GET /api/state to prime the header (meter, plan mode) —
+    /// on entering Cowork and after every turn. Silent on failure:
+    /// the connection dot already reports an unreachable kernel.
+    private func refreshCoworkState() {
+        Task {
+            guard let st = try? await KinClawAPIClient.default.fetchKinClawState() else { return }
+            if let n = st.input_tokens { contextUsed = n }
+            if let c = st.context_length, c > 0 { contextLength = c }
+            if let p = st.plan_mode { coworkPlanMode = p }
+        }
     }
 
     private func clearChat() {
@@ -1930,6 +2058,8 @@ struct SpotlightContentView: View {
         messages = []
         currentSessionID = UUID()
         sessionTitle = "New chat"
+        pendingPermission = nil
+        contextUsed = 0
 
         if mode == .cowork {
             Task {
@@ -2410,6 +2540,8 @@ struct SpotlightContentView: View {
                 }
             }
             isStreaming = false
+            pendingPermission = nil
+            refreshCoworkState()
             ChatHistory.save(messages: messages, for: agent.slug)
             if ttsEnabled,
                messages.indices.contains(assistantIndex),
@@ -2479,6 +2611,44 @@ struct SpotlightContentView: View {
             return
         }
 
+        // Kernel-level events that aren't bound to the streaming
+        // bubble either: the permission gate, context accounting, plan
+        // mode. Handled before the stale-index guard for the same
+        // reason spawn_done is.
+        switch event.kind {
+        case .permissionRequest:
+            guard let id = event.id else { return }
+            pendingPermission = PermissionRequest(
+                id: id,
+                skill: event.name ?? "?",
+                summary: event.summary ?? (event.name ?? "?"),
+                reason: event.reason ?? "",
+                params: event.params ?? [:])
+            scrollTrigger += 1
+            return
+        case .permissionResolved:
+            if pendingPermission?.id == event.id { pendingPermission = nil }
+            return
+        case .usage:
+            if let n = event.input_tokens { contextUsed = n }
+            if let c = event.context_length, c > 0 { contextLength = c }
+            return
+        case .compacted:
+            // Appended after the streaming bubble on purpose: inserting
+            // before it would shift assistantIndex under the deltas
+            // still arriving for this turn.
+            let m = event.message ?? "Older conversation compacted into a summary"
+            messages.append(ChatMessage(id: UUID(), role: .system,
+                                        content: "🗜 \(m)", timestamp: Date()))
+            scrollTrigger += 1
+            return
+        case .planMode:
+            if let p = event.plan_mode { coworkPlanMode = p }
+            return
+        default:
+            break
+        }
+
         // Stale-index guard. SSE events arrive async, so by the time
         // a chunk lands the user might have cleared / switched chats
         // and `assistantIndex` no longer points at a real row. A raw
@@ -2539,6 +2709,14 @@ struct SpotlightContentView: View {
             }
             messages[assistantIndex].content += "**Error:** \(m)"
             scrollTrigger += 1
+        case .notice:
+            // Kernel commentary mid-turn (circuit breaker replan, hook
+            // block, denied permission). The turn goes on — render as
+            // a quiet blockquote inside the bubble, not as an error.
+            if let m = event.message, !m.isEmpty {
+                messages[assistantIndex].content += "\n\n> ⚠︎ \(m)\n"
+                scrollTrigger += 1
+            }
         case .screenFrame, .recordDone:
             // Agent emitted a screenshot or video recording —
             // attach to the assistant bubble so the user sees it
@@ -2592,8 +2770,10 @@ struct SpotlightContentView: View {
             // Already handled above the stale-index guard — this case
             // is unreachable but kept exhaustive for the compiler.
             break
-        case .userMessage, .turnDone, .planMode, .none:
-            // plan_mode is Code-mode-only; Spotlight ignores it.
+        case .userMessage, .turnDone, .planMode,
+             .permissionRequest, .permissionResolved, .usage, .compacted, .none:
+            // plan_mode / permission / usage / compacted are handled
+            // above the stale-index guard.
             break
         }
     }
