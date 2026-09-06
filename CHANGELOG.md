@@ -2,6 +2,28 @@
 
 All notable changes to KinClaw Mac.
 
+## [Unreleased] - 2026-09-05 (night) — folded tool calls, folder pane
+
+### Changed — long tool-call runs fold into one row
+
+A turn with three or more tool calls now shows a single "Ran N tools ›"
+row (Claude Desktop's "Ran 6 commands ›") instead of a wall of cards;
+click to expand. While the turn streams, the header reads "N tools ·
+web_fetch running…" and the call in flight stays visible underneath, so
+you still see what the agent is doing right now. A failure count shows
+in red. Same fold in the Code tab for consecutive kincode tool rows.
+`todo_write` stays outside the fold, and only the latest checklist
+renders — each call replaces the whole list, so older ones were stale.
+
+### Added — folder pane (Cowork)
+
+A left column, on by default, ⇧⌘L to hide: the workspace folder at the
+top (click to change), **This session** — every file the agent read,
+wrote or edited, newest first, with an eye / plus / pencil marker —
+and **Files**, the folder's contents as an expandable tree with touched
+files highlighted. Click reveals in Finder; right-click opens or copies
+the path. Reloads after every turn.
+
 ## [Unreleased] - 2026-09-05 (evening) — workspace, questions, diffs, notifications, Routines
 
 Second pass, pairing with kinclaw's deferred skills / workspace /

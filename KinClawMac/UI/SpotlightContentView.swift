@@ -105,6 +105,10 @@ struct SpotlightContentView: View {
     @State private var contextUsed: Int = 0
     @State private var contextLength: Int = 0
     @State private var coworkWorkspace: String = ""
+    /// Left folder pane in Cowork (⌘⇧L). Persisted; on by default.
+    @AppStorage("kinclaw.cowork.sidebar") private var showWorkspaceSidebar = true
+    /// Bumped after each turn / workspace change so the pane reloads.
+    @State private var sidebarRefresh = 0
 
     /// Chat-tab "browse vs chat" state. True = show the agent
     /// gallery (discovery surface). False = show welcomeCard /
@@ -316,7 +320,20 @@ struct SpotlightContentView: View {
                     // The screen / input claws are tools the AGENT
                     // uses when invoked; the user's actual desktop is
                     // right there, no need to embed a preview.
-                    chatBody
+                    // Cowork adds the folder pane on the left: the
+                    // workspace, what the agent touched this session,
+                    // and the folder's files — Claude Desktop's layout.
+                    HStack(spacing: 0) {
+                        if mode == .cowork && showWorkspaceSidebar {
+                            WorkspaceSidebar(workspace: coworkWorkspace,
+                                             touched: touchedFiles,
+                                             refreshToken: sidebarRefresh,
+                                             onPick: pickWorkspace)
+                                .frame(width: 210)
+                            Divider().opacity(0.15)
+                        }
+                        chatBody
+                    }
                 case .code:
                     CodePane()
                 }
@@ -707,6 +724,18 @@ struct SpotlightContentView: View {
                       ? "Plan mode ON — the agent can look but not act (⇧⌘P to exit)"
                       : "Plan mode — investigate and propose before acting (⇧⌘P)")
                 .keyboardShortcut("p", modifiers: [.command, .shift])
+
+                // Folder pane toggle (⌘⇧L).
+                Button {
+                    withAnimation(.easeOut(duration: 0.15)) { showWorkspaceSidebar.toggle() }
+                } label: {
+                    Image(systemName: showWorkspaceSidebar ? "sidebar.left" : "sidebar.leading")
+                        .font(.system(size: 12))
+                        .foregroundColor(showWorkspaceSidebar ? .green : .secondary)
+                }
+                .buttonStyle(.plain)
+                .help(showWorkspaceSidebar ? "Hide the folder pane (⇧⌘L)" : "Show the folder pane (⇧⌘L)")
+                .keyboardShortcut("l", modifiers: [.command, .shift])
 
                 // Workspace — the folder relative paths and shell commands
                 // live in; writes outside it ask first. Cowork's version
@@ -1761,21 +1790,20 @@ struct SpotlightContentView: View {
             } else if !msg.content.isEmpty || showCursor {
                 streamingMarkdownText(msg, showCursor: showCursor)
             }
-            ForEach(msg.toolCalls) { call in
-                // todo_write is its own surface — render as inline
-                // checklist (full-width, no fold) instead of the
-                // generic ToolCallView pill. Mirrors Code mode's
-                // special case in CodePane (line ~470). Cowork is
-                // where this matters MOST: Pilot's multi-step plan
-                // ("open Numbers, click A1, type 42, screenshot")
-                // is invisible without it — user has to trust or
-                // ⌘. abort blindly.
-                if call.name == "todo_write",
-                   let todos = parseCoworkTodos(from: call.params) {
-                    TodoChecklistView(items: todos)
-                } else {
-                    ToolCallView(call: call)
-                }
+            // todo_write is its own surface — the LATEST list renders as
+            // an inline checklist (each call replaces the whole list, so
+            // older ones are stale). Cowork is where this matters most:
+            // Pilot's multi-step plan is invisible without it.
+            if let latestTodo = msg.toolCalls.last(where: { $0.name == "todo_write" }),
+               let todos = parseCoworkTodos(from: latestTodo.params) {
+                TodoChecklistView(items: todos)
+            }
+            // Everything else folds into one "Ran N tools ›" row once a
+            // turn has three or more calls; the call in flight stays
+            // visible while streaming.
+            let toolCalls = msg.toolCalls.filter { $0.name != "todo_write" }
+            if !toolCalls.isEmpty {
+                ToolCallGroupView(calls: toolCalls, streaming: showCursor)
             }
             ForEach(msg.attachments) { attachment in
                 AttachmentView(attachment: attachment)
@@ -2018,6 +2046,42 @@ struct SpotlightContentView: View {
                         .data(using: .utf8) ?? Data())
             }
         }
+    }
+
+    /// Files the agent read or changed this session, newest first, from
+    /// the file_* tool calls in the transcript. Relative paths resolve
+    /// against the workspace the same way the kernel resolves them.
+    private var touchedFiles: [TouchedFile] {
+        var byPath: [String: TouchedFile] = [:]
+        var order: [String] = []
+        for msg in messages {
+            for call in msg.toolCalls {
+                let action: String
+                switch call.name {
+                case "file_read":  action = "read"
+                case "file_write": action = "write"
+                case "file_edit":  action = "edit"
+                default: continue
+                }
+                guard var p = call.params["path"], !p.isEmpty else { continue }
+                if p.hasPrefix("~") { p = NSString(string: p).expandingTildeInPath }
+                if !p.hasPrefix("/") {
+                    p = (coworkWorkspace as NSString).appendingPathComponent(p)
+                }
+                p = URL(fileURLWithPath: p).standardizedFileURL.path
+                if let prev = byPath[p] {
+                    // A file both read and written counts as written.
+                    if prev.action == "read" && action != "read" {
+                        byPath[p] = TouchedFile(path: p, action: action)
+                    }
+                    order.removeAll { $0 == p }
+                } else {
+                    byPath[p] = TouchedFile(path: p, action: action)
+                }
+                order.append(p)
+            }
+        }
+        return order.reversed().compactMap { byPath[$0] }
     }
 
     /// Folder picker for the Cowork workspace → POST /api/workspace.
@@ -2629,6 +2693,7 @@ struct SpotlightContentView: View {
             pendingPermission = nil
             pendingQuestion = nil
             refreshCoworkState()
+            sidebarRefresh += 1
             if messages.indices.contains(assistantIndex) {
                 let reply = messages[assistantIndex].content
                     .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2738,6 +2803,7 @@ struct SpotlightContentView: View {
             return
         case .workspace:
             if let w = event.workspace { coworkWorkspace = w }
+            sidebarRefresh += 1
             return
         case .usage:
             if let n = event.input_tokens { contextUsed = n }

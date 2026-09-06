@@ -290,9 +290,18 @@ struct CodePane: View {
                         emptyState
                             .padding(.top, 36)
                     } else {
-                        ForEach(messages) { msg in
-                            messageRow(msg)
-                                .id(msg.id)
+                        ForEach(displayItems) { item in
+                            switch item {
+                            case .single(let msg):
+                                messageRow(msg)
+                                    .id(msg.id)
+                            case .group(let msgs):
+                                // Folded run of tool calls; carries the
+                                // last member's id so auto-scroll to the
+                                // newest row still lands.
+                                CodeToolGroupView(msgs: msgs, streaming: isStreaming)
+                                    .id(msgs.last?.id ?? UUID())
+                            }
                         }
                     }
                 }
@@ -309,6 +318,45 @@ struct CodePane: View {
                 }
             }
         }
+    }
+
+    /// One row of the transcript: a message, or a folded run of
+    /// consecutive tool calls.
+    private enum DisplayItem: Identifiable {
+        case single(CodeMessage)
+        case group([CodeMessage])
+        var id: UUID {
+            switch self {
+            case .single(let m): return m.id
+            case .group(let ms): return ms.last?.id ?? UUID()
+            }
+        }
+    }
+
+    /// Consecutive tool-call rows (three or more; todo_write stays out
+    /// because the checklist is the point) fold into one group, so a
+    /// long turn reads as "Ran 12 tools ›" instead of a wall of cards.
+    private var displayItems: [DisplayItem] {
+        var out: [DisplayItem] = []
+        var run: [CodeMessage] = []
+        func flush() {
+            if run.count >= 3 {
+                out.append(.group(run))
+            } else {
+                out.append(contentsOf: run.map { .single($0) })
+            }
+            run.removeAll()
+        }
+        for m in messages {
+            if m.role == .toolCall && m.toolName != "todo_write" {
+                run.append(m)
+            } else {
+                flush()
+                out.append(.single(m))
+            }
+        }
+        flush()
+        return out
     }
 
     /// Welcome card — mirrors the Chat/Cowork welcomeCard layout.
@@ -1358,5 +1406,36 @@ struct CodeMessage: Identifiable {
         self.toolID = toolID
         self.toolOutput = toolOutput
         self.attachmentCount = attachmentCount
+    }
+}
+
+
+// MARK: - Folded tool calls (Code)
+
+/// Code tab counterpart of ToolCallGroupView: a run of consecutive
+/// tool-call rows behind one "Ran N tools ›" header. The call in flight
+/// stays visible while streaming.
+private struct CodeToolGroupView: View {
+    let msgs: [CodeMessage]
+    let streaming: Bool
+
+    @State private var expanded = false
+
+    private var running: CodeMessage? {
+        streaming ? msgs.last(where: { $0.toolOutput == nil && $0.toolError == nil }) : nil
+    }
+    private var errors: Int { msgs.filter { $0.toolError != nil }.count }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ToolFoldHeader(count: msgs.count, runningName: running?.toolName,
+                           errors: errors, expanded: $expanded)
+            if expanded {
+                ForEach(msgs) { CodeToolInvocationView(msg: $0) }
+            } else if let cur = running {
+                CodeToolInvocationView(msg: cur)
+            }
+        }
+        .padding(.leading, 28)
     }
 }
