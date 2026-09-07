@@ -43,6 +43,11 @@ struct CodePane: View {
     /// Left folder pane (⇧⌘L): the repo tree + files touched this session.
     @AppStorage("kinclaw.code.sidebar") private var showCodeSidebar = true
     @State private var sidebarRefresh = 0
+    /// Set while the sidebar is opening a specific session in another
+    /// folder. `onChange(of: repoPath)` fires after that state settles
+    /// and would otherwise reset to the folder's NEWEST session,
+    /// silently discarding the one the user clicked.
+    @State private var openingSpecificSession = false
     @State private var streamTask: Task<Void, Never>?
     @State private var connectError: String?
 
@@ -120,20 +125,25 @@ struct CodePane: View {
             repoBar
             Divider().opacity(0.15)
             HStack(spacing: 0) {
-                if !repoPath.isEmpty {
-                    if showCodeSidebar {
-                        WorkspaceSidebar(workspace: repoPath,
-                                         touched: touchedFiles,
-                                         refreshToken: sidebarRefresh,
-                                         onPick: pickRepo,
-                                         onCollapse: { toggleCodeSidebar() })
-                            .frame(width: 210)
-                            .transition(.move(edge: .leading).combined(with: .opacity))
-                        Divider().opacity(0.15)
-                    } else {
-                        WorkspaceSidebarHandle { toggleCodeSidebar() }
-                            .transition(.opacity)
-                    }
+                if showCodeSidebar {
+                    CodeSidebar(activeRepo: repoPath,
+                                activeSessionID: sessionID,
+                                recents: recents,
+                                touched: touchedFiles,
+                                refreshToken: sidebarRefresh,
+                                onOpenSession: openSession,
+                                onNewSession: newSession(in:),
+                                onOpenFolder: applyRepo,
+                                onAddFolder: pickRepo,
+                                onRemoveFolder: removeFolder,
+                                onDeleteSession: deleteSession,
+                                onCollapse: { toggleCodeSidebar() })
+                        .frame(width: 210)
+                        .transition(.move(edge: .leading).combined(with: .opacity))
+                    Divider().opacity(0.15)
+                } else {
+                    WorkspaceSidebarHandle { toggleCodeSidebar() }
+                        .transition(.opacity)
                 }
                 messagesArea
             }
@@ -176,18 +186,25 @@ struct CodePane: View {
             saveSession()
         }
         .onChange(of: repoPath) { _, newPath in
-            // Repo changed → start a fresh session (or resume the
-            // existing one for this repo).
-            messages.removeAll()
-            sessionID = UUID()
-            sessionCreatedAt = Date()
-            loadSessionIfNeeded()
             // Re-sync to kincode whenever the repo state changes from
             // anywhere — applyRepo posts immediately on user click,
             // but onAppear-driven loads also need the sync.
             if !newPath.isEmpty {
                 Task { try? await client.setRepo(newPath) }
             }
+            // The sidebar picked an exact session (or an empty new one)
+            // and already populated the transcript; don't override it
+            // with this folder's newest session.
+            if openingSpecificSession {
+                openingSpecificSession = false
+                return
+            }
+            // Plain folder switch → resume that folder's last session.
+            messages.removeAll()
+            sessionID = UUID()
+            sessionCreatedAt = Date()
+            loadSessionIfNeeded()
+            sidebarRefresh += 1
         }
     }
 
@@ -819,6 +836,70 @@ struct CodePane: View {
         withAnimation(.easeOut(duration: 0.18)) { showCodeSidebar.toggle() }
     }
 
+    /// Open a stored conversation. Switching folder and switching
+    /// session are one action from the sidebar's point of view, so the
+    /// repo is applied first (which points kincode's cwd at it) and the
+    /// session loaded after — the onChange(of: repoPath) handler would
+    /// otherwise reset to that folder's newest session and undo this.
+    private func openSession(_ summary: CodeSessionStore.Summary) {
+        saveSession()
+        if summary.repoPath != repoPath {
+            openingSpecificSession = true
+            applyRepo(summary.repoPath)
+        }
+        guard let session = CodeSessionStore.load(repoPath: summary.repoPath, id: summary.id) else { return }
+        sessionID = session.id
+        sessionCreatedAt = session.createdAt
+        messages = session.messages.map { CodeMessage(
+            id: $0.id,
+            role: codeRoleFromPersisted($0.role),
+            text: $0.text,
+            toolName: $0.toolName,
+            toolError: $0.toolError
+        ) }
+        isStreaming = false
+        streamingMessageID = nil
+        // kincode keeps its own conversation; a session the UI restored
+        // is not in it, so start the kernel clean and let the restored
+        // transcript be what the user reads.
+        Task { try? await client.clearConversation() }
+        sidebarRefresh += 1
+    }
+
+    /// Start an empty session in a folder (its row's "New session").
+    private func newSession(in folder: String) {
+        saveSession()
+        if folder != repoPath {
+            openingSpecificSession = true
+            applyRepo(folder)
+        }
+        messages.removeAll()
+        sessionID = UUID()
+        sessionCreatedAt = Date()
+        isStreaming = false
+        streamingMessageID = nil
+        Task { try? await client.clearConversation() }
+        sidebarRefresh += 1
+        inputFocused = true
+    }
+
+    /// Drop a folder from the sidebar list. Sessions on disk are left
+    /// alone — removing a folder from a list should not delete work.
+    private func removeFolder(_ path: String) {
+        recentsRaw = recents.filter { $0 != path }.joined(separator: ",")
+        sidebarRefresh += 1
+    }
+
+    private func deleteSession(_ summary: CodeSessionStore.Summary) {
+        CodeSessionStore.delete(repoPath: summary.repoPath, id: summary.id)
+        if summary.id == sessionID {
+            messages.removeAll()
+            sessionID = UUID()
+            sessionCreatedAt = Date()
+        }
+        sidebarRefresh += 1
+    }
+
     private func pickRepo() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
@@ -832,10 +913,12 @@ struct CodePane: View {
 
     private func applyRepo(_ path: String) {
         repoPath = path
-        // Move to front of recents, dedup, cap at 5.
+        // Move to front of recents, dedup. The cap was 5 when this was
+        // only a dropdown of shortcuts; it is now the sidebar's folder
+        // list, so it holds what a person actually works across.
         var rs = recents.filter { $0 != path }
         rs.insert(path, at: 0)
-        if rs.count > 5 { rs = Array(rs.prefix(5)) }
+        if rs.count > 20 { rs = Array(rs.prefix(20)) }
         recentsRaw = rs.joined(separator: ",")
 
         // Inform kincode. Server-side this just os.Chdir's the
@@ -1195,6 +1278,7 @@ struct CodePane: View {
     /// turn_done, view disappear, error events.
     private func saveSession() {
         guard !repoPath.isEmpty, !messages.isEmpty else { return }
+        defer { sidebarRefresh += 1 }
         let persisted = messages.map { msg in
             PersistedCodeMessage(
                 id: msg.id,

@@ -24,6 +24,9 @@ struct WorkspaceSidebar: View {
     /// Hides the pane (the ‹ button in the header). ⇧⌘L and the toolbar
     /// icon do the same; this one is the discoverable one.
     var onCollapse: (() -> Void)? = nil
+    /// Code embeds this component below its own folder list, where a
+    /// second folder header would just repeat what is already on screen.
+    var showHeader = true
 
     struct FileEntry: Identifiable, Equatable {
         let path: String
@@ -40,8 +43,10 @@ struct WorkspaceSidebar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
-            Divider().opacity(0.15)
+            if showHeader {
+                header
+                Divider().opacity(0.15)
+            }
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
                     if !touched.isEmpty {

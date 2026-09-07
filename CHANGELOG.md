@@ -2,6 +2,34 @@
 
 All notable changes to KinClaw Mac.
 
+## [Unreleased] - 2026-09-06 — Code: folders with their sessions
+
+### Added — the Code sidebar lists folders, and sessions under them
+
+Code has always stored conversations per repo — one directory per repo,
+many session files inside — but the UI only ever resumed the newest one,
+so every earlier conversation about a folder was on disk and unreachable.
+On this machine that was 21 sessions across three repos, including a
+142-message one about kinclaw.
+
+The left pane now lists every folder you have worked in (those with
+stored sessions, plus ones you picked but have not talked to yet).
+Expanding a folder shows its conversations, titled by their first
+message with a relative timestamp, newest first; clicking one opens it,
+switching folders if needed. Each folder has its own **New session**
+row, so starting fresh somewhere else is one click and does not disturb
+the conversation you were in. Right-click a folder to open, start a
+session, reveal in Finder, or drop it from the list (sessions on disk
+are kept — removing a folder from a list should not delete work).
+Right-click a session to delete it.
+
+The active folder's files stay below in a collapsible **Files** section,
+the same tree Cowork shows, with the files touched in this conversation
+marked.
+
+The recents cap went from 5 to 20: it was a dropdown of shortcuts, and
+it is now the list of everywhere you work.
+
 ## [Unreleased] - 2026-09-05 (night) — folded tool calls, folder pane
 
 ### Changed — long tool-call runs fold into one row
