@@ -34,19 +34,26 @@ struct ChatSession: Codable, Identifiable, Equatable {
     let createdAt: Date
     var updatedAt: Date
     var messages: [PersistedMessage]
+    /// Cowork's working folder for this conversation, so the sidebar can
+    /// group sessions by where the work happened and restore the folder
+    /// along with the transcript. Optional: sessions written before the
+    /// workspace existed decode with nil and group under "No folder".
+    var workspace: String?
 
     init(id: UUID = UUID(),
          agentSlug: String,
          title: String = "New chat",
          createdAt: Date = Date(),
          updatedAt: Date = Date(),
-         messages: [PersistedMessage] = []) {
+         messages: [PersistedMessage] = [],
+         workspace: String? = nil) {
         self.id = id
         self.agentSlug = agentSlug
         self.title = title
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.messages = messages
+        self.workspace = workspace
     }
 
     /// Display title — falls back to "Untitled" + short timestamp

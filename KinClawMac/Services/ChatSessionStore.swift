@@ -75,6 +75,38 @@ enum ChatSessionStore {
         try? FileManager.default.removeItem(at: url)
     }
 
+    /// Every session across every agent, newest first. The Cowork
+    /// sidebar groups these by `workspace`; the agent slug rides along
+    /// on each session so opening one can switch agent as well as
+    /// folder.
+    static func allSessions() -> [ChatSession] {
+        guard let agentDirs = try? FileManager.default.contentsOfDirectory(
+            at: sessionsRoot, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
+        else { return [] }
+        var out: [ChatSession] = []
+        for dir in agentDirs where dir.hasDirectoryPath {
+            guard let files = try? FileManager.default.contentsOfDirectory(
+                at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
+            else { continue }
+            out.append(contentsOf: files.filter { $0.pathExtension == "json" }.compactMap(loadSession(from:)))
+        }
+        return out.sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    /// Sessions grouped by the folder they happened in, each group
+    /// newest-first, groups ordered by most recent activity. Sessions
+    /// from before the workspace field carry "" — the caller renders
+    /// that as "No folder" rather than hiding them.
+    static func byWorkspace() -> [(workspace: String, sessions: [ChatSession])] {
+        var groups: [String: [ChatSession]] = [:]
+        for s in allSessions() {
+            groups[s.workspace ?? "", default: []].append(s)
+        }
+        return groups
+            .map { (workspace: $0.key, sessions: $0.value.sorted { $0.updatedAt > $1.updatedAt }) }
+            .sorted { ($0.sessions.first?.updatedAt ?? .distantPast) > ($1.sessions.first?.updatedAt ?? .distantPast) }
+    }
+
     /// Total count across all agents — surfaced in About / Settings
     /// for power-user inspection.
     static func totalCount() -> Int {

@@ -327,11 +327,18 @@ struct SpotlightContentView: View {
                     HStack(spacing: 0) {
                         if mode == .cowork {
                             if showWorkspaceSidebar {
-                                WorkspaceSidebar(workspace: coworkWorkspace,
-                                                 touched: touchedFiles,
-                                                 refreshToken: sidebarRefresh,
-                                                 onPick: pickWorkspace,
-                                                 onCollapse: { toggleWorkspaceSidebar() })
+                                CoworkSidebar(activeWorkspace: coworkWorkspace,
+                                              activeSessionID: currentSessionID,
+                                              activeAgentSlug: selectedAgent?.slug ?? "",
+                                              localAgentSlugs: localSoulSlugs,
+                                              touched: touchedFiles,
+                                              refreshToken: sidebarRefresh,
+                                              onOpenSession: openCoworkSession,
+                                              onNewSession: newCoworkSession(in:),
+                                              onOpenFolder: applyWorkspace,
+                                              onPickFolder: pickWorkspace,
+                                              onDeleteSession: deleteCoworkSession,
+                                              onCollapse: { toggleWorkspaceSidebar() })
                                     .frame(width: 210)
                                     .transition(.move(edge: .leading).combined(with: .opacity))
                                 Divider().opacity(0.15)
@@ -2168,6 +2175,83 @@ struct SpotlightContentView: View {
         withAnimation(.easeOut(duration: 0.18)) { showWorkspaceSidebar.toggle() }
     }
 
+    /// Slugs of the KinClaw souls (public + private) — what separates a
+    /// Cowork conversation from a Chat one for sessions saved before the
+    /// workspace field existed.
+    private var localSoulSlugs: Set<String> {
+        Set(allAgents.filter { $0.isLocal }.map { $0.slug })
+    }
+
+    /// Open a stored Cowork conversation from the sidebar: restore its
+    /// folder, its agent, and its transcript, and clear the kernel's own
+    /// history so the model isn't answering from a conversation the user
+    /// just navigated away from.
+    private func openCoworkSession(_ session: ChatSession) {
+        saveCurrentSession()
+        if let ws = session.workspace, !ws.isEmpty, ws != coworkWorkspace {
+            applyWorkspace(ws)
+        }
+        if session.agentSlug != selectedAgent?.slug,
+           let agent = allAgents.first(where: { $0.slug == session.agentSlug }) {
+            selectedAgent = agent
+        }
+        currentSessionID = session.id
+        sessionTitle = session.title
+        messages = session.messages.map { $0.toMessage() }
+        isStreaming = false
+        pendingPermission = nil
+        pendingQuestion = nil
+        localStreamTask?.cancel()
+        Task { try? await KinClawAPIClient.default.resetSession() }
+        scrollTrigger += 1
+        sidebarRefresh += 1
+    }
+
+    /// Start an empty conversation in a folder (a folder row's "New
+    /// session"), switching the workspace if it isn't the active one.
+    private func newCoworkSession(in workspace: String) {
+        saveCurrentSession()
+        if !workspace.isEmpty && workspace != coworkWorkspace {
+            applyWorkspace(workspace)
+        }
+        messages = []
+        currentSessionID = UUID()
+        sessionTitle = "New chat"
+        pendingPermission = nil
+        pendingQuestion = nil
+        contextUsed = 0
+        isStreaming = false
+        localStreamTask?.cancel()
+        Task { try? await KinClawAPIClient.default.resetSession() }
+        sidebarRefresh += 1
+        inputFocused = true
+    }
+
+    private func deleteCoworkSession(_ session: ChatSession) {
+        ChatSessionStore.delete(id: session.id, agentSlug: session.agentSlug)
+        if session.id == currentSessionID {
+            messages = []
+            currentSessionID = UUID()
+            sessionTitle = "New chat"
+        }
+        sidebarRefresh += 1
+    }
+
+    /// Point the kernel at a folder without opening a picker — used by
+    /// the sidebar's folder rows.
+    private func applyWorkspace(_ path: String) {
+        Task {
+            do {
+                coworkWorkspace = try await KinClawAPIClient.default.setWorkspace(path: path)
+                sidebarRefresh += 1
+            } catch {
+                FileHandle.standardError.write(
+                    "kinclaw setWorkspace failed: \(error.localizedDescription)\n"
+                        .data(using: .utf8) ?? Data())
+            }
+        }
+    }
+
     /// Folder picker for the Cowork workspace → POST /api/workspace.
     private func pickWorkspace() {
         let panel = NSOpenPanel()
@@ -2344,10 +2428,14 @@ struct SpotlightContentView: View {
             title: title,
             createdAt: messages.first?.timestamp ?? now,
             updatedAt: now,
-            messages: messages.map(PersistedMessage.init(from:))
+            messages: messages.map(PersistedMessage.init(from:)),
+            // Only Cowork has a working folder; a Chat-tab conversation
+            // did not happen anywhere in particular.
+            workspace: mode == .cowork && !coworkWorkspace.isEmpty ? coworkWorkspace : nil
         )
         ChatSessionStore.save(session)
         sessionTitle = title
+        sidebarRefresh += 1
     }
 
     private func handleAgentChange() {

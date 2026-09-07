@@ -2,6 +2,31 @@
 
 All notable changes to KinClaw Mac.
 
+## [Unreleased] - 2026-09-07 — Cowork: folders with their sessions
+
+The same shape as Code's sidebar, one day later, for the tab where the
+folder is the workspace rather than a repo.
+
+Cowork sessions are stored per agent, so grouping by folder needed the
+folder recorded on the session: `ChatSession` gains an optional
+`workspace`, written on every save from now on. The left pane lists the
+folders Pilot has worked in, each expanding to its conversations
+(title, relative time, and the agent when it differs from the one you
+are talking to). Clicking one restores the folder, the agent and the
+transcript together, and resets the kernel's own history so the model
+is not answering from a conversation you just navigated away from.
+Each folder gets a **New session** row; right-click a folder to work
+there, start a session or reveal it, and a session to open or delete it.
+
+Conversations saved before the workspace field group under **No
+folder** — they are still yours, they just predate the folder. That
+group is filtered to the local KinClaw souls, since Chat-tab
+conversations with cloud agents did not happen in a folder at all, and
+every group shows its newest 15 with the rest one click away.
+
+The active folder's files stay below in the collapsible **Files**
+section.
+
 ## [Unreleased] - 2026-09-06 — Code: folders with their sessions
 
 ### Added — the Code sidebar lists folders, and sessions under them

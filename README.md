@@ -18,6 +18,8 @@ Same window, same agent picker shape, three different brains. Switch tabs to swi
 
 ## Status
 
+📚 **Unreleased** — Both Cowork and Code have a **folder pane** that lists the folders you work in, each expanding to the conversations you had there. Click one to restore the folder and the transcript together; each folder has its own New session.
+
 🗂 **Unreleased (night)** — Long tool-call runs fold into one "Ran N tools ›" row (Cowork and Code), and Cowork gains a **folder pane** on the left: the workspace, the files the agent touched this session, and the folder tree, all one click from Finder. ⇧⌘L toggles it.
 
 📁 **Unreleased (evening)** — Cowork gains a **workspace picker** (writes outside the folder ask first), a **question card** for the agent's `ask_user` questions, **diffs** on file edits, macOS **notifications** when the panel is hidden, an **Always** approval that persists, and a **Routines** settings tab for scheduled runs. Needs kinclaw ≥ 1.18 (evening build).
