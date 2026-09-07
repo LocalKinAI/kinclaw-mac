@@ -293,6 +293,9 @@ struct SpotlightContentView: View {
             }
         }
         .frame(minWidth: 320, minHeight: 380)
+        .onReceive(NotificationCenter.default.publisher(for: .kinclawEnterCompanion)) { _ in
+            if !companionMode { enterCompanionMode() }
+        }
     }
 
     /// The last assistant line, shown under the halo while it is fresh.
@@ -721,6 +724,20 @@ struct SpotlightContentView: View {
             // corner — the agent bar is about who and where, the
             // composer footer about what brain, as in Claude Desktop.)
 
+            // Companion mode — picture + voice, no text. Outside the
+            // Cowork-only block on purpose: a shortcut that exists only
+            // on one tab is a shortcut nobody remembers.
+            Button {
+                enterCompanionMode()
+            } label: {
+                Image(systemName: "moon.stars")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("陪伴模式：只有声音和一张图 (⇧⌘M)")
+            .keyboardShortcut("m", modifiers: [.command, .shift])
+
             // Session history (📚) — popover with all saved chats
             // for the active agent + "+ New chat" + delete.
             Button {
@@ -771,18 +788,6 @@ struct SpotlightContentView: View {
                           : Color.orange.opacity(0.7))
                     .frame(width: 6, height: 6)
                     .help(coworkConnectError ?? "kinclaw :5001 connected")
-
-                // Companion mode — picture + voice, no text (⇧⌘M).
-                Button {
-                    enterCompanionMode()
-                } label: {
-                    Image(systemName: "moon.stars")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("陪伴模式：只有声音和一张图 (⇧⌘M)")
-                .keyboardShortcut("m", modifiers: [.command, .shift])
 
                 // Search health — the last web_search's engines, and a
                 // probe on demand.

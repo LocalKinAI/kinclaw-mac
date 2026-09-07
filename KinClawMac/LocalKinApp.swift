@@ -83,6 +83,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 2. Wire the menubar (🦞) + its dropdown actions.
         menuBar = MenuBarController()
         menuBar.onShowHide      = { [weak self] in self?.spotlightWindow.toggle() }
+        // Companion mode from the menubar: show the panel first (it may
+        // be hidden — that is when a voice-only surface is most wanted),
+        // then let the SwiftUI tree switch itself over.
+        menuBar.onCompanion     = { [weak self] in
+            self?.spotlightWindow.show()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                NotificationCenter.default.post(name: .kinclawEnterCompanion, object: nil)
+            }
+        }
         menuBar.onOpenSettings  = { [weak self] in self?.openSettingsWindow() }
         menuBar.onQuit          = { NSApp.terminate(nil) }
         // The menubar's "Settings…" item triggers via NSApp.activate
@@ -319,4 +328,11 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
                                             didReceive response: UNNotificationResponse) async {
         await MainActor.run { self.spotlightWindow.show() }
     }
+}
+
+
+extension Notification.Name {
+    /// Posted by the menubar item so companion mode can be entered from
+    /// outside the SwiftUI tree that owns its state.
+    static let kinclawEnterCompanion = Notification.Name("kinclaw.enterCompanion")
 }

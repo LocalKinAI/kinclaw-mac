@@ -23,6 +23,7 @@ final class MenuBarController: NSObject {
     /// future test harness can drive the menu without instantiating
     /// the whole delegate.
     var onShowHide: (() -> Void)?
+    var onCompanion: (() -> Void)?
     var onOpenSettings: (() -> Void)?
     var onQuit: (() -> Void)?
 
@@ -63,6 +64,13 @@ final class MenuBarController: NSObject {
         toggle.target = self
         menu.addItem(toggle)
 
+        let companion = NSMenuItem(
+            title: "陪伴模式 · Companion",
+            action: #selector(companionTapped),
+            keyEquivalent: "")
+        companion.target = self
+        menu.addItem(companion)
+
         menu.addItem(.separator())
 
         let settings = NSMenuItem(
@@ -91,6 +99,7 @@ final class MenuBarController: NSObject {
     // MARK: - Menu actions
 
     @objc private func showHideTapped() { onShowHide?() }
+    @objc private func companionTapped() { onCompanion?() }
     @objc private func settingsTapped() { onOpenSettings?() }
     @objc private func quitTapped()     { onQuit?() }
 }
