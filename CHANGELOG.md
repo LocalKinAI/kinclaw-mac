@@ -2,6 +2,39 @@
 
 All notable changes to KinClaw Mac.
 
+## [Unreleased] - 2026-09-07 (later) — Companion mode
+
+### Added — ⇧⌘M: a picture and a voice
+
+The panel becomes a character and a halo. No transcript, no buttons, no
+typing: you speak, it listens, it answers out loud, and the ring around
+the middle says which of those is happening — breathing when idle,
+tracking your voice while the mic is open, spinning while it thinks,
+pulsing while it talks. The last reply shows small underneath, for when
+the room was too loud to catch it. Esc leaves and the window returns to
+exactly the size and place it had.
+
+Voice was already built (VoiceRecorder, SpeechSynthesizer, WakeWord,
+the kernel's /api/voice/*); this is a presentation of it, so entering
+turns the voice loop on rather than leaving the user to find a mic
+button in a view that has none.
+
+### Added — art that fetches itself
+
+Pictures live in `~/.kinclaw/companion/` (or a folder you pick in
+Settings → Backend → Companion mode). Drop anything in and it is used.
+Name files `idle`, `listening`, `thinking` or `speaking` and each state
+gets its own; everything else rotates.
+
+"Go get a few" searches for backgrounds without leaving the app:
+**Wikimedia Commons** by default, which needs no account, so this works
+on a machine that has never been configured; a free key from
+pexels.com/api in Settings swaps in a better-looking source with no
+attribution requirement. Results come back as a grid, one click keeps
+one, the credit line is written next to the file, and anything under
+900px wide is rejected because a thumbnail stretched to fill a window
+looks like a smear.
+
 ## [Unreleased] - 2026-09-07 — Cowork: folders with their sessions
 
 The same shape as Code's sidebar, one day later, for the tab where the

@@ -152,6 +152,37 @@ final class SpotlightWindow: NSPanel {
     ///
     /// Visual: 150ms fade-in. Pure pop felt jarring; the slide-up
     /// from Spotlight / Raycast / Alfred is what users expect.
+    /// Companion mode wants a picture-sized window, not a chat column.
+    /// The chat frame is remembered and restored on the way out, so
+    /// entering and leaving never costs the user their layout.
+    private var frameBeforeCompanion: NSRect?
+
+    func enterCompanion() {
+        guard frameBeforeCompanion == nil else { return }
+        frameBeforeCompanion = self.frame
+        let screen = self.screen ?? NSScreen.main
+        let vis = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        // Portrait-ish and generous, capped to what fits on this screen.
+        let h = min(vis.height * 0.82, 900)
+        let w = min(vis.width * 0.55, h * 0.78)
+        let target = NSRect(x: vis.midX - w / 2, y: vis.midY - h / 2, width: w, height: h)
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.22
+            ctx.allowsImplicitAnimation = true
+            self.animator().setFrame(target, display: true)
+        }
+    }
+
+    func exitCompanion() {
+        guard let back = frameBeforeCompanion else { return }
+        frameBeforeCompanion = nil
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.22
+            ctx.allowsImplicitAnimation = true
+            self.animator().setFrame(back, display: true)
+        }
+    }
+
     func show() {
         if Self.savedFrame == nil {
             self.setFrame(Self.centeredFrame(), display: true)

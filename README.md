@@ -18,6 +18,8 @@ Same window, same agent picker shape, three different brains. Switch tabs to swi
 
 ## Status
 
+🌙 **Unreleased** — **Companion mode** (⇧⌘M): the panel becomes a character and a halo, voice only, no text. Art comes from `~/.kinclaw/companion/` or is fetched in-app from Wikimedia Commons (no account) or Pexels (free key).
+
 📚 **Unreleased** — Both Cowork and Code have a **folder pane** that lists the folders you work in, each expanding to the conversations you had there. Click one to restore the folder and the transcript together; each folder has its own New session.
 
 🗂 **Unreleased (night)** — Long tool-call runs fold into one "Ran N tools ›" row (Cowork and Code), and Cowork gains a **folder pane** on the left: the workspace, the files the agent touched this session, and the folder tree, all one click from Finder. ⇧⌘L toggles it.

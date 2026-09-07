@@ -311,6 +311,8 @@ private struct BackendSettingsTab: View {
     /// Which Ollama the brain dropdowns list and Ollama brain switches
     /// target (Cowork and Code). Empty = this Mac's :11434.
     @AppStorage(OllamaCatalog.hostKey) private var ollamaHost = ""
+    @AppStorage(CompanionArt.folderKey) private var companionFolder = ""
+    @AppStorage(CompanionArt.pexelsKeyKey) private var pexelsKey = ""
 
     // Kincode (Code mode kernel — Stage 1 / 5).
     @AppStorage("kinclaw.kincode.autostart") private var kincodeAutostart = true
@@ -457,6 +459,38 @@ private struct BackendSettingsTab: View {
                     }
                 }
                 SettingsCaption("Coding agent on :5002. Default brain is what the supervisor spawns kincode with — switch live in the Code tab without touching this. Apply on relaunch.")
+            }
+
+            SettingsCard("Companion mode") {
+                SettingsRow(label: "Art folder") {
+                    HStack(spacing: 8) {
+                        Text(companionFolder.isEmpty ? "~/.kinclaw/companion" : companionFolder)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(.secondary)
+                            .lineLimit(1).truncationMode(.middle)
+                        Button("Choose…") {
+                            let panel = NSOpenPanel()
+                            panel.canChooseFiles = false
+                            panel.canChooseDirectories = true
+                            panel.message = "Pictures for companion mode"
+                            if panel.runModal() == .OK, let u = panel.url { companionFolder = u.path }
+                        }
+                        .buttonStyle(.plain).font(.system(size: 11)).foregroundColor(.green)
+                        Button("Reveal") {
+                            let url = URL(fileURLWithPath: companionFolder.isEmpty
+                                ? NSHomeDirectory() + "/.kinclaw/companion" : companionFolder)
+                            try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+                            NSWorkspace.shared.activateFileViewerSelecting([url])
+                        }
+                        .buttonStyle(.plain).font(.system(size: 11)).foregroundColor(.green)
+                    }
+                }
+                SettingsRow(label: "Pexels key") {
+                    SecureField("optional — better pictures", text: $pexelsKey)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 260)
+                }
+                SettingsCaption("⇧⌘M turns the panel into a picture and a voice. Pictures come from this folder; name files idle / listening / thinking / speaking to give each state its own, otherwise they rotate. \"Go get a few\" inside companion mode searches Wikimedia Commons, which needs no account; a free key from pexels.com/api swaps in a better-looking source.")
             }
 
             SettingsCard("Sidecars") {

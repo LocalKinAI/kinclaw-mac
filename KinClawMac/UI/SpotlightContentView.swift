@@ -106,6 +106,10 @@ struct SpotlightContentView: View {
     @State private var contextLength: Int = 0
     @State private var coworkWorkspace: String = ""
     @StateObject private var searchStatus = SearchStatusStore()
+    /// Companion mode: the panel becomes a picture and a voice.
+    @State private var companionMode = false
+    @State private var showingArtPicker = false
+    @StateObject private var companionArt = CompanionArt()
     /// Left folder pane in Cowork (⌘⇧L). Persisted; on by default.
     @AppStorage("kinclaw.cowork.sidebar") private var showWorkspaceSidebar = true
     /// Bumped after each turn / workspace change so the pane reloads.
@@ -273,8 +277,50 @@ struct SpotlightContentView: View {
         ZStack(alignment: .top) {
             mainStack
             titlebarHeaderOverlay
+            if companionMode {
+                CompanionView(art: companionArt,
+                              isListening: recorder.isRecording,
+                              isThinking: recorder.isTranscribing || isStreaming,
+                              isSpeaking: speaker.isSpeaking,
+                              audioLevel: recorder.audioLevel,
+                              caption: companionCaption,
+                              onExit: { exitCompanionMode() },
+                              onFetchArt: { showingArtPicker = true })
+                    .transition(.opacity)
+                    .popover(isPresented: $showingArtPicker, arrowEdge: .top) {
+                        CompanionArtPicker(art: companionArt) { showingArtPicker = false }
+                    }
+            }
         }
         .frame(minWidth: 320, minHeight: 380)
+    }
+
+    /// The last assistant line, shown under the halo while it is fresh.
+    /// Trimmed hard: this is a glance, not a transcript.
+    private var companionCaption: String {
+        guard let last = messages.last, !last.isUser else { return "" }
+        let t = last.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty ? "" : String(t.prefix(160))
+    }
+
+    /// Enter companion mode: grow the window, start the voice loop.
+    /// Voice is the whole point here, so it turns itself on rather than
+    /// leaving the user to find the mic button in a view that has none.
+    private func enterCompanionMode() {
+        companionArt.reload()
+        withAnimation(.easeOut(duration: 0.25)) { companionMode = true }
+        (NSApp.delegate as? AppDelegate)?.spotlightWindow.enterCompanion()
+        if !voiceMode { voiceMode = true }
+        if companionArt.isEmpty { showingArtPicker = true }
+    }
+
+    private func exitCompanionMode() {
+        withAnimation(.easeOut(duration: 0.2)) { companionMode = false }
+        showingArtPicker = false
+        (NSApp.delegate as? AppDelegate)?.spotlightWindow.exitCompanion()
+        voiceMode = false
+        if recorder.isRecording { recorder.cancelRecording() }
+        speaker.stop()
     }
 
     /// Main column. Layout hierarchy (top → bottom):
@@ -725,6 +771,18 @@ struct SpotlightContentView: View {
                           : Color.orange.opacity(0.7))
                     .frame(width: 6, height: 6)
                     .help(coworkConnectError ?? "kinclaw :5001 connected")
+
+                // Companion mode — picture + voice, no text (⇧⌘M).
+                Button {
+                    enterCompanionMode()
+                } label: {
+                    Image(systemName: "moon.stars")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("陪伴模式：只有声音和一张图 (⇧⌘M)")
+                .keyboardShortcut("m", modifiers: [.command, .shift])
 
                 // Search health — the last web_search's engines, and a
                 // probe on demand.
