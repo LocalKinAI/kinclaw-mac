@@ -20,6 +20,9 @@ struct CompanionView: View {
     /// Last thing said, shown small and briefly — useful when the room
     /// is loud enough that you missed it, invisible the rest of the time.
     let caption: String
+    /// Non-nil when something is stopping the voice loop; shown instead
+    /// of the state label, because "说话就好" over a dead mic is a lie.
+    let problem: String?
 
     let onExit: () -> Void
     let onFetchArt: () -> Void
@@ -37,6 +40,7 @@ struct CompanionView: View {
     }
 
     private var accent: Color {
+        if problem != nil { return .orange }
         switch state {
         case "listening": return .green
         case "thinking":  return .yellow
@@ -46,6 +50,7 @@ struct CompanionView: View {
     }
 
     private var stateLabel: String {
+        if let p = problem { return p }
         switch state {
         case "listening": return "在听"
         case "thinking":  return "在想"
@@ -68,7 +73,7 @@ struct CompanionView: View {
                 halo
                 Text(stateLabel)
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.white.opacity(0.75))
+                    .foregroundColor(problem == nil ? .white.opacity(0.75) : .orange)
                     .padding(.top, 14)
                 if !caption.isEmpty {
                     Text(caption)

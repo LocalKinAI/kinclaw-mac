@@ -284,6 +284,7 @@ struct SpotlightContentView: View {
                               isSpeaking: speaker.isSpeaking,
                               audioLevel: recorder.audioLevel,
                               caption: companionCaption,
+                              problem: companionProblem,
                               onExit: { exitCompanionMode() },
                               onFetchArt: { showingArtPicker = true })
                     .transition(.opacity)
@@ -296,6 +297,17 @@ struct SpotlightContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .kinclawEnterCompanion)) { _ in
             if !companionMode { enterCompanionMode() }
         }
+    }
+
+    /// What is stopping the voice loop, if anything. A silent halo with
+    /// no explanation is the worst failure mode for a view with no other
+    /// controls, so anything that would keep speech from working gets
+    /// said out loud here.
+    private var companionProblem: String? {
+        if let e = recorder.error, !e.isEmpty { return e }
+        if selectedAgent == nil { return "先在面板里选一个 agent" }
+        if !voiceMode { return "语音没打开" }
+        return nil
     }
 
     /// The last assistant line, shown under the halo while it is fresh.
@@ -313,6 +325,7 @@ struct SpotlightContentView: View {
         companionArt.reload()
         withAnimation(.easeOut(duration: 0.25)) { companionMode = true }
         (NSApp.delegate as? AppDelegate)?.spotlightWindow.enterCompanion()
+        extendWakeSession()
         if !voiceMode { voiceMode = true }
         if companionArt.isEmpty { showingArtPicker = true }
     }
@@ -464,7 +477,13 @@ struct SpotlightContentView: View {
             // the room has been quiet long enough for the session to lapse;
             // then the name is required again. Requiring it per-utterance
             // would make a five-turn exchange mean saying "小美" five times.
-            if voiceMode, !wakeWord.isEmpty {
+            // Companion mode is the wake. The word exists so background
+            // chatter can't trigger the agent while you are doing
+            // something else; when you have deliberately turned the
+            // panel into a face and are talking to it, demanding a name
+            // first just makes it look broken — which is exactly how it
+            // looked.
+            if voiceMode, !wakeWord.isEmpty, !companionMode {
                 if isWakeSessionOpen {
                     // Already conversing — take it as-is and push the lapse
                     // further out.

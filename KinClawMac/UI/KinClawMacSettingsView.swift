@@ -650,7 +650,6 @@ private struct VoiceSettingsTab: View {
     @AppStorage("kinclaw.voice.tts.speaker") private var speaker = "auto"
     @AppStorage("kinclaw.voice.tts.speed") private var speed: Double = 1.0
     @AppStorage("kinclaw.voice.silenceMarginDB") private var silenceMargin: Double = 5
-    @AppStorage("kinclaw.voice.autoContinue") private var autoContinue = false
     @AppStorage("kinclaw.voice.wakeWord") private var wakeWord = ""
     @AppStorage("kinclaw.voice.wakeSessionSeconds") private var wakeSessionSeconds: Double = 45
 
@@ -666,8 +665,6 @@ private struct VoiceSettingsTab: View {
                             .foregroundColor(.secondary)
                     }
                 }
-                Toggle("Voice-mode auto-continue (continuous conversation)",
-                       isOn: $autoContinue)
                 SettingsCaption("The mic measures your room's noise for 0.5s at the start of each recording; this sets how far above it a sound must be to count as speech. Raise it if recording keeps running after you stop talking, lower it if quiet speech gets cut off.")
             }
 

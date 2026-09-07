@@ -19,6 +19,25 @@ the kernel's /api/voice/*); this is a presentation of it, so entering
 turns the voice loop on rather than leaving the user to find a mic
 button in a view that has none.
 
+### Fixed — companion mode was waiting for a wake word it never mentioned
+
+With a wake word set (`小美` here), hands-free mode discards anything
+that does not contain it. Companion mode turned hands-free on and said
+"说话就好", so speaking did nothing and the halo just sat there
+breathing. The word exists so background chatter cannot trigger the
+agent while you are doing something else; deliberately turning the
+panel into a face and talking to it is not that case, so companion mode
+now bypasses it entirely — entering is the wake.
+
+The state label also stops lying: a denied microphone, no selected
+agent, or voice being off is printed under the halo in orange instead
+of "说话就好". A view with no other controls cannot afford a silent
+failure.
+
+Removed the "Voice-mode auto-continue" toggle from Settings: it was
+wired to nothing, and the behaviour it named already happens
+unconditionally.
+
 ### Added — art that fetches itself
 
 Pictures live in `~/.kinclaw/companion/` (or a folder you pick in
