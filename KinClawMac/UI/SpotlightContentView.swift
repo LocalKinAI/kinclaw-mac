@@ -2269,6 +2269,12 @@ struct SpotlightContentView: View {
     private func disarmBargeIn() { bargeIn.stop() }
 
     /// Feed one text delta to the speaker, draining whole sentences.
+    ///
+    /// Fenced code is held back rather than spoken. In one shot the whole
+    /// reply is cleaned before synthesis; sentence by sentence, a fence
+    /// opened in one sentence and closed three later means the cleaner
+    /// sees neither marker and the contents get read out — brackets,
+    /// semicolons and all.
     private func streamSpeech(_ delta: String) {
         guard speechWanted else { return }
         if !speaker.isStreamOpen && !speaker.isSpeaking {
@@ -2277,9 +2283,24 @@ struct SpotlightContentView: View {
             }
         }
         ttsPending += delta
+        // An unbalanced fence means a code block is open: hold everything
+        // until it closes, then drop the block and speak what follows.
+        if ttsPending.components(separatedBy: "```").count % 2 == 0 { return }
         while let s = Self.takeSentence(&ttsPending) {
-            speaker.stream(s)
+            speaker.stream(Self.dropFencedCode(s))
         }
+    }
+
+    /// Remove fenced blocks from a chunk about to be spoken. Whole
+    /// blocks only — an unbalanced fence never reaches here.
+    static func dropFencedCode(_ text: String) -> String {
+        guard text.contains("```") else { return text }
+        let parts = text.components(separatedBy: "```")
+        // Even indices are outside fences, odd indices inside.
+        return parts.enumerated()
+            .filter { $0.offset % 2 == 0 }
+            .map { $0.element }
+            .joined(separator: " ")
     }
 
     /// Close the streamed reply, speaking whatever tail is left.

@@ -60,6 +60,11 @@ Both transports stream: Cowork's `text_delta` events and the Chat tab's
 cloud tokens. A reply that arrives in one piece, or whose text came
 only from tools, still gets spoken whole.
 
+Fenced code is held back until the fence closes, then dropped. Cleaning
+happens per chunk now, and a block opened in one sentence and closed
+three later would otherwise have neither marker in view — the contents
+would be read out, brackets and semicolons included.
+
 ## [Unreleased] - 2026-09-07 (later) — Companion mode
 
 ### Added — ⇧⌘M: a picture and a voice
