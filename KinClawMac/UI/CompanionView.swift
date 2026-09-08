@@ -54,7 +54,7 @@ struct CompanionView: View {
         switch state {
         case "listening": return "在听"
         case "thinking":  return "在想"
-        case "speaking":  return "在说"
+        case "speaking":  return "在说 · 想插话就直接说"
         default:          return "说话就好"
         }
     }

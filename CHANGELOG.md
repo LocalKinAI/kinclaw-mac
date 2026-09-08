@@ -2,6 +2,37 @@
 
 All notable changes to KinClaw Mac.
 
+## [Unreleased] - 2026-09-07 (evening) — Streaming speech and barge-in
+
+### Added — you can interrupt it
+
+The mic stays open while the agent talks, and speaking cuts it off. The
+naive version of this hears the speakers and interrupts the agent with
+its own voice, so `BargeInMonitor` runs the input through
+`AVAudioEngine` with voice processing enabled — macOS's acoustic echo
+canceller subtracts what is playing from what is heard, and what
+remains is the room. A trigger still needs speech both above a measured
+noise floor and sustained for ~140ms, so a keyboard clack or a closing
+door does not stop the reply.
+
+Interrupting also cancels the turn when the model is still writing. Not
+only because you are redirecting it: the listener that reopens the mic
+refuses while a turn is in flight, so without that the interruption
+would silence the agent and then leave the mic shut.
+
+Armed off `isSpeaking` rather than at each call site, so streamed
+replies, whole replies and the system-voice fallback are covered by one
+rule. Hands-free surfaces only — with push-to-talk the mic is yours to
+open, and cutting a reply off because someone spoke nearby would be
+worse than waiting.
+
+### Fixed — companion mode could open with no agent to talk to
+
+Reached from the menubar, or from the Code tab which has no agent
+picker, companion mode opened on a character whose only message was
+"pick an agent first" — inside a view with no way to pick one. It now
+selects the Cowork default (Pilot) and switches the panel to match.
+
 ## [Unreleased] - 2026-09-07 (evening) — Streaming speech
 
 ### Changed — it starts talking while the model is still writing

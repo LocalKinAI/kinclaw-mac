@@ -109,6 +109,8 @@ struct SpotlightContentView: View {
     /// Text of the current reply not yet handed to the speaker. Streaming
     /// TTS drains complete sentences from here as the model writes them.
     @State private var ttsPending = ""
+    /// Hears you while the agent is talking, so you can cut in.
+    @StateObject private var bargeIn = BargeInMonitor()
     /// Companion mode: the panel becomes a picture and a voice.
     @State private var companionMode = false
     @State private var showingArtPicker = false
@@ -300,6 +302,13 @@ struct SpotlightContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .kinclawEnterCompanion)) { _ in
             if !companionMode { enterCompanionMode() }
         }
+        // The mic stays open while the agent talks so you can cut in.
+        // Armed off isSpeaking rather than at each call site, so every
+        // path that produces speech — streamed, whole-reply, fallback —
+        // is covered by one rule.
+        .onChange(of: speaker.isSpeaking) { _, speaking in
+            if speaking { armBargeIn() } else { disarmBargeIn() }
+        }
     }
 
     /// What is stopping the voice loop, if anything. A silent halo with
@@ -308,7 +317,11 @@ struct SpotlightContentView: View {
     /// said out loud here.
     private var companionProblem: String? {
         if let e = recorder.error, !e.isEmpty { return e }
-        if selectedAgent == nil { return "先在面板里选一个 agent" }
+        if selectedAgent == nil {
+            return kinClawSouls.isEmpty
+                ? "kinclaw 没在跑 — 面板里看连接状态"
+                : "没选中 agent，按 Esc 回面板选一个"
+        }
         if !voiceMode { return "语音没打开" }
         return nil
     }
@@ -325,6 +338,17 @@ struct SpotlightContentView: View {
     /// Voice is the whole point here, so it turns itself on rather than
     /// leaving the user to find the mic button in a view that has none.
     private func enterCompanionMode() {
+        // Companion mode is a conversation, so it needs someone to talk
+        // to. Reached from the menubar or from Code — which has no agent
+        // picker and therefore no selected agent — it used to open on a
+        // face that answered "先在面板里选一个 agent", inside a view with
+        // no way to select one. Pick the Cowork default instead.
+        if selectedAgent == nil || selectedAgent?.isLocal != true {
+            if let soul = pickDefaultAgent(for: .cowork) {
+                mode = .cowork
+                selectedAgent = soul
+            }
+        }
         companionArt.reload()
         withAnimation(.easeOut(duration: 0.25)) { companionMode = true }
         (NSApp.delegate as? AppDelegate)?.spotlightWindow.enterCompanion()
@@ -2217,6 +2241,32 @@ struct SpotlightContentView: View {
 
     /// Should this reply be spoken at all?
     private var speechWanted: Bool { voiceMode || ttsEnabled }
+
+    /// Start listening for an interruption while the agent talks. Only in
+    /// hands-free surfaces: with push-to-talk the mic is yours to open,
+    /// and cutting the reply off because someone spoke nearby would be
+    /// worse than making you wait.
+    private func armBargeIn() {
+        guard voiceMode || companionMode else { return }
+        bargeIn.onSpeech = {
+            // You started talking. Stop the reply and drop what is still
+            // queued — and if the model is still writing, cancel the turn
+            // too. Not only because you are redirecting it: the listener
+            // that reopens the mic refuses while a turn is in flight, so
+            // without this the interruption would silence the agent and
+            // then leave the mic shut.
+            ttsPending = ""
+            if isStreaming {
+                interruptTurn()
+            } else {
+                speaker.stop()
+            }
+            resumeListeningIfConversing(extendSession: false)
+        }
+        bargeIn.start()
+    }
+
+    private func disarmBargeIn() { bargeIn.stop() }
 
     /// Feed one text delta to the speaker, draining whole sentences.
     private func streamSpeech(_ delta: String) {
