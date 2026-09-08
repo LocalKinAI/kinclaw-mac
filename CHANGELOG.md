@@ -2,6 +2,33 @@
 
 All notable changes to KinClaw Mac.
 
+## [Unreleased] - 2026-09-07 (evening) — Streaming speech
+
+### Changed — it starts talking while the model is still writing
+
+The reply was spoken only after the whole turn finished: the model
+streamed tokens for several seconds, the speaker sat silent, and then
+synthesis and playback started from zero. That wait is most of the gap
+between this and a realtime voice assistant, and none of it was the TTS
+model being slow — Kokoro renders 6.75s of Chinese in 1.0s.
+
+Each sentence is now handed to the speaker as it completes, so the
+first words land about a second after the model starts writing.
+`SpeechSynthesizer` gains `beginStream` / `stream` / `endStream` around
+the play queue it already had; synthesis is serialized rather than
+parallel, because one worker at 6x realtime stays ahead of playback and
+serial order is the order the sentences are spoken in.
+
+Sentence boundaries are CJK and Latin terminal punctuation or a
+newline. A Latin period needs whitespace after it, so "3.5" and
+"kinclaw.dev" are not cut in half; a run with no punctuation at all is
+released at a comma, or after 160 characters, because the alternative
+is silence until the model happens to write a period.
+
+Both transports stream: Cowork's `text_delta` events and the Chat tab's
+cloud tokens. A reply that arrives in one piece, or whose text came
+only from tools, still gets spoken whole.
+
 ## [Unreleased] - 2026-09-07 (later) — Companion mode
 
 ### Added — ⇧⌘M: a picture and a voice

@@ -10,9 +10,109 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
     private var playQueue: [Data] = []
     @Published var isSpeaking = false
 
+    // MARK: Streaming state
+    //
+    // Waiting for a whole reply before saying a word is most of the gap
+    // between this and a realtime voice assistant: the model streams
+    // tokens for several seconds while the speaker sits silent, then
+    // synthesis and playback start from zero. Streaming mode speaks each
+    // sentence as it completes, so the first words land about a second
+    // after the model starts writing instead of after it stops.
+    //
+    // Synthesis is serialized rather than parallel. Kokoro renders a
+    // sentence in ~1s and a sentence takes ~3-6s to say, so one worker
+    // stays comfortably ahead of playback, and serial order is the order
+    // the sentences are spoken in — no reassembly, no clip arriving
+    // before the one it follows.
+    private var isStreamingReply = false
+    private var streamHostname = ""
+    private var pendingSentences: [String] = []
+    private var synthesizing = false
+
     override init() {
         super.init()
         synthesizer.delegate = self
+    }
+
+    /// Open a streaming reply: sentences enqueued with `stream(_:)` are
+    /// spoken as they arrive, and `endStream()` closes it. `onComplete`
+    /// fires once the last clip has played, matching `speak`.
+    func beginStream(hostname: String, onComplete: @escaping () -> Void) {
+        stop()
+        completion = onComplete
+        isStreamingReply = true
+        streamHostname = hostname
+        isSpeaking = true
+    }
+
+    /// Hand one finished sentence to the speaker; they queue in order.
+    func stream(_ sentence: String) {
+        let t = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isStreamingReply, !t.isEmpty else { return }
+        pendingSentences.append(t)
+        pumpStream()
+    }
+
+    /// No more sentences are coming. Completion fires when the queue
+    /// drains; if nothing was ever spoken it fires now.
+    func endStream() {
+        guard isStreamingReply else { return }
+        isStreamingReply = false
+        finishStreamIfDrained()
+    }
+
+    /// True while a streamed reply is still accepting sentences.
+    var isStreamOpen: Bool { isStreamingReply }
+
+    /// Synthesize the next sentence, one at a time, appending to the play
+    /// queue and starting playback if nothing is playing.
+    private func pumpStream() {
+        guard !synthesizing, !pendingSentences.isEmpty else { return }
+        synthesizing = true
+        let sentence = pendingSentences.removeFirst()
+        let hostname = streamHostname
+        Task { @MainActor in
+            defer {
+                self.synthesizing = false
+                self.pumpStream()
+                self.finishStreamIfDrained()
+            }
+            let isLocal = hostname == "localhost-kinclaw" || hostname.hasPrefix("localhost")
+            let pref = UserDefaults.standard.string(forKey: "kinclaw.voice.tts.speaker") ?? "auto"
+            let preferred = (pref == "auto" || pref.isEmpty) ? "" : pref
+            let segments: [TextSegmenter.Segment]
+            if isLocal {
+                segments = TextSegmenter.splitByLang(sentence, preferredVoice: preferred)
+            } else {
+                let cleaned = TextSegmenter.stripNonSpeakable(sentence)
+                segments = cleaned.isEmpty ? []
+                    : [TextSegmenter.Segment(text: cleaned, voice: self.pickServerVoice(forText: sentence))]
+            }
+            for seg in segments {
+                // A sentence dropped mid-flight (the user barged in, or the
+                // turn was cancelled) must not resurface as audio.
+                guard self.isSpeaking else { return }
+                if let data = await self.synthesizeSegment(seg, isLocal: isLocal, hostname: hostname) {
+                    self.playQueue.append(data)
+                    if self.audioPlayer?.isPlaying != true {
+                        _ = self.playNextClip()
+                    }
+                }
+            }
+        }
+    }
+
+    /// Completion fires only when the stream is closed AND nothing is left
+    /// to synthesize or play. An empty queue mid-generation just means the
+    /// model is still writing.
+    private func finishStreamIfDrained() {
+        guard !isStreamingReply, !synthesizing,
+              pendingSentences.isEmpty, playQueue.isEmpty,
+              audioPlayer?.isPlaying != true else { return }
+        isSpeaking = false
+        let done = completion
+        completion = nil
+        done?()
     }
 
     /// Speak text: try server TTS first, fallback to iOS native
@@ -232,6 +332,8 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         audioPlayer?.stop()
         audioPlayer = nil
         playQueue.removeAll()   // else a barged-in reply resumes mid-sentence
+        isStreamingReply = false
+        pendingSentences.removeAll()
         isSpeaking = false
         completion = nil
     }
@@ -318,6 +420,14 @@ extension SpeechSynthesizer: AVAudioPlayerDelegate {
             // after the last one, or voice mode would start listening again
             // while the English half is still queued.
             if !self.playQueue.isEmpty, self.playNextClip() { return }
+            self.audioPlayer = nil
+            // While a stream is open an empty queue means "the model is
+            // still writing", not "the reply is over". Reporting done here
+            // would reopen the mic in the middle of an answer.
+            if self.isStreamingReply || self.synthesizing || !self.pendingSentences.isEmpty {
+                self.finishStreamIfDrained()
+                return
+            }
             self.isSpeaking = false
             self.completion?()
             self.completion = nil

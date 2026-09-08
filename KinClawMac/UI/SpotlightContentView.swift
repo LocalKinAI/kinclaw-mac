@@ -106,6 +106,9 @@ struct SpotlightContentView: View {
     @State private var contextLength: Int = 0
     @State private var coworkWorkspace: String = ""
     @StateObject private var searchStatus = SearchStatusStore()
+    /// Text of the current reply not yet handed to the speaker. Streaming
+    /// TTS drains complete sentences from here as the model writes them.
+    @State private var ttsPending = ""
     /// Companion mode: the panel becomes a picture and a voice.
     @State private var companionMode = false
     @State private var showingArtPicker = false
@@ -2200,6 +2203,84 @@ struct SpotlightContentView: View {
         // turn dies; drop the cards now rather than waiting for the echo.
         pendingPermission = nil
         pendingQuestion = nil
+        ttsPending = ""
+        speaker.stop()
+    }
+
+    // MARK: - Streaming speech
+    //
+    // The model streams tokens for several seconds; waiting for the whole
+    // reply before saying a word is most of what makes this feel slow next
+    // to a realtime voice assistant. Each finished sentence is handed to
+    // the speaker as it lands, so the first words come about a second
+    // after the model starts writing.
+
+    /// Should this reply be spoken at all?
+    private var speechWanted: Bool { voiceMode || ttsEnabled }
+
+    /// Feed one text delta to the speaker, draining whole sentences.
+    private func streamSpeech(_ delta: String) {
+        guard speechWanted else { return }
+        if !speaker.isStreamOpen && !speaker.isSpeaking {
+            speaker.beginStream(hostname: hostname) {
+                resumeListeningIfConversing()
+            }
+        }
+        ttsPending += delta
+        while let s = Self.takeSentence(&ttsPending) {
+            speaker.stream(s)
+        }
+    }
+
+    /// Close the streamed reply, speaking whatever tail is left.
+    private func endStreamSpeech() {
+        let tail = ttsPending.trimmingCharacters(in: .whitespacesAndNewlines)
+        ttsPending = ""
+        guard speaker.isStreamOpen else { return }
+        if !tail.isEmpty { speaker.stream(tail) }
+        speaker.endStream()
+    }
+
+    /// Pull the first complete sentence off the buffer, or nil if none is
+    /// finished yet.
+    ///
+    /// A sentence ends at CJK or Latin terminal punctuation, or a newline.
+    /// Latin periods need a following space or end-of-buffer so "3.5" and
+    /// "kinclaw.dev" are not cut in half; CJK punctuation is unambiguous.
+    /// Very long runs without punctuation (a URL dump, a code block) are
+    /// released at a comma or after 160 characters, because the alternative
+    /// is silence until the model happens to write a period.
+    static func takeSentence(_ buffer: inout String) -> String? {
+        let hard: Set<Character> = ["。", "！", "？", "；", "\n", "…"]
+        let soft: Set<Character> = ["，", "、", ",", ":", "：", ";"]
+        let chars = Array(buffer)
+        var softIndex: Int? = nil
+        for (i, c) in chars.enumerated() {
+            if hard.contains(c) {
+                return cut(&buffer, upTo: i + 1)
+            }
+            if c == "." || c == "!" || c == "?" {
+                // Latin terminator: needs whitespace after it, or nothing.
+                if i + 1 >= chars.count { break }
+                if chars[i + 1].isWhitespace {
+                    return cut(&buffer, upTo: i + 2)
+                }
+            }
+            if soft.contains(c), i >= 24 { softIndex = i }
+            if i >= 160 {
+                return cut(&buffer, upTo: (softIndex ?? i) + 1)
+            }
+        }
+        return nil
+    }
+
+    private static func cut(_ buffer: inout String, upTo n: Int) -> String? {
+        let chars = Array(buffer)
+        let n = min(n, chars.count)
+        let head = String(chars[0..<n])
+        buffer = String(chars[n...])
+        let t = head.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty ? nil : head
     }
 
     /// Answer the agent's ask_user question. Optimistic: the card goes
@@ -2833,6 +2914,8 @@ struct SpotlightContentView: View {
             }
         }
 
+        // Any unspoken tail belongs to the reply that just ended.
+        ttsPending = ""
         var userMsg = ChatMessage.user(composed)
         userMsg.attachments = pendingAttachments
         let attachmentsToCarry = pendingAttachments
@@ -2873,6 +2956,7 @@ struct SpotlightContentView: View {
             guard messages.indices.contains(assistantIndex) else { return }
             messages[assistantIndex].content += token
             scrollTrigger += 1
+            streamSpeech(token)
         }
         client.onComplete = {
             isStreaming = false
@@ -2880,7 +2964,12 @@ struct SpotlightContentView: View {
             guard messages.indices.contains(assistantIndex) else { return }
             if !messages[assistantIndex].content.isEmpty {
                 appState.recordMessage()
-                if ttsEnabled {
+                if speaker.isStreamOpen {
+                    // Already speaking sentence by sentence; closing the
+                    // stream hands the turn back to the mic when it drains.
+                    endStreamSpeech()
+                } else if speechWanted {
+                    ttsPending = ""
                     speaker.speak(messages[assistantIndex].content,
                                   hostname: hostname) {
                         // Closing the loop: the reply has finished playing, so
@@ -2956,10 +3045,16 @@ struct SpotlightContentView: View {
                 }
             }
             ChatHistory.save(messages: messages, for: agent.slug)
-            if ttsEnabled,
-               messages.indices.contains(assistantIndex),
-               !messages[assistantIndex].content.isEmpty
-            {
+            if speaker.isStreamOpen {
+                // Sentences were spoken as they arrived; close the stream and
+                // let its completion hand the turn back to the microphone.
+                endStreamSpeech()
+            } else if speechWanted,
+                      messages.indices.contains(assistantIndex),
+                      !messages[assistantIndex].content.isEmpty {
+                // Nothing streamed — a reply that arrived in one delta, or a
+                // turn whose text came only from tools. Speak it whole.
+                ttsPending = ""
                 speaker.speak(messages[assistantIndex].content,
                               hostname: hostname) {
                     resumeListeningIfConversing()
@@ -2967,6 +3062,7 @@ struct SpotlightContentView: View {
             } else {
                 // TTS off (or an empty reply): there is nothing to wait for, so
                 // hand the turn straight back to the microphone.
+                ttsPending = ""
                 resumeListeningIfConversing()
             }
         }
@@ -3093,6 +3189,7 @@ struct SpotlightContentView: View {
             if let t = event.text, !t.isEmpty {
                 messages[assistantIndex].content += t
                 scrollTrigger += 1
+                streamSpeech(t)
             }
         case .toolCall:
             // Append a new ToolCall to the message — output stays
