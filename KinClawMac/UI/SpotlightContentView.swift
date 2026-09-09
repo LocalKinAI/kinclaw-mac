@@ -129,6 +129,14 @@ struct SpotlightContentView: View {
     @State private var replyHeadDecided = false
     /// How the last utterance sounded, for the kernel's eyes only.
     @State private var pendingVoiceCue: String?
+    /// Companion mode is answering a card by voice: the id of the
+    /// permission or question being spoken, so a stale answer arriving
+    /// after it resolved is ignored.
+    @State private var voiceApprovalID: String?
+    /// One re-ask per request when the answer was neither yes nor no.
+    @State private var voiceApprovalRetried = false
+    /// What the agent is doing right now, for the line under the halo.
+    @State private var companionActivity: String?
     @State private var showingArtPicker = false
     @StateObject private var companionArt = CompanionArt()
     /// Left folder pane in Cowork (⌘⇧L). Persisted; on by default.
@@ -307,6 +315,7 @@ struct SpotlightContentView: View {
                               caption: companionCaption,
                               problem: companionProblem,
                               mood: companionMood,
+                              activity: companionActivity,
                               canBargeIn: bargeInArmed,
                               onInterrupt: { interruptReply(hot: false) },
                               onExit: { exitCompanionMode() },
@@ -400,6 +409,8 @@ struct SpotlightContentView: View {
         showingArtPicker = false
         (NSApp.delegate as? AppDelegate)?.spotlightWindow.exitCompanion()
         voiceMode = false
+        companionActivity = nil
+        endVoiceApproval()
         if recorder.isRecording { recorder.cancelRecording() }
         speaker.stop()
         if let back = companionRestoreAgent {
@@ -544,6 +555,10 @@ struct SpotlightContentView: View {
         .onChange(of: recorder.transcript) { _, text in
             var spoken = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !spoken.isEmpty else { return }
+
+            // A card is waiting for a spoken yes/no: that answer is for
+            // the gate, not for the model, and must not become a turn.
+            if awaitingVoiceApproval, consumeVoiceApproval(spoken) { return }
 
             // How it sounded travels with what was said: a hedged line for
             // the model, and — in companion mode — an expression right
@@ -3122,6 +3137,95 @@ struct SpotlightContentView: View {
         }
     }
 
+    // MARK: - Approval by voice
+    //
+    // The panel parks a turn behind a card: "Pilot wants to run …" with
+    // Allow / Always / Deny, or an `ask_user` question with option
+    // chips. Companion mode has neither — it is a picture and a halo —
+    // so the same two things happen through the channel that is already
+    // open. It says what it wants, you answer, and the answer never
+    // reaches the model as a chat message.
+
+    /// True while a spoken card is waiting for an answer.
+    private var awaitingVoiceApproval: Bool { voiceApprovalID != nil }
+
+    /// Read a parked card out loud and open the microphone for the
+    /// answer. Whatever the agent was saying is cut off: the question
+    /// is the only thing that matters until it is answered.
+    private func askByVoice(id: String, text: String) {
+        voiceApprovalID = id
+        voiceApprovalRetried = false
+        companionActivity = nil
+        ttsPending = ""
+        speaker.stop()
+        speaker.speak(text, hostname: hostname) {
+            // The usual listener refuses while a turn is in flight, and
+            // a parked turn is in flight — this is the one case where
+            // the microphone has to open anyway.
+            openMicForApproval()
+        }
+    }
+
+    private func openMicForApproval() {
+        guard awaitingVoiceApproval, voiceMode, !recorder.isRecording else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            guard awaitingVoiceApproval, voiceMode,
+                  !recorder.isRecording, !speaker.isSpeaking else { return }
+            recorder.startRecording(hostname: hostname)
+        }
+    }
+
+    private func endVoiceApproval() {
+        voiceApprovalID = nil
+        voiceApprovalRetried = false
+    }
+
+    /// Take one spoken line as the answer to the card. Returns true when
+    /// it was consumed, so the caller does not also send it as a turn.
+    private func consumeVoiceApproval(_ spoken: String) -> Bool {
+        guard let id = voiceApprovalID else { return false }
+
+        // A question takes free text — anything said is the answer,
+        // except that an offered option is matched so "第二个" works.
+        if let q = pendingQuestion, q.id == id {
+            let answer = CompanionVoice.pick(spoken, from: q.options) ?? spoken
+            pendingQuestion = nil
+            endVoiceApproval()
+            answerQuestion(q, text: answer)
+            return true
+        }
+
+        guard let req = pendingPermission, req.id == id else { return false }
+        guard let decision = CompanionVoice.decision(from: spoken) else {
+            // Neither yes nor no. Ask once more, then give up and deny —
+            // parking the turn forever on a face with no buttons is the
+            // one outcome there is no way out of.
+            if voiceApprovalRetried {
+                pendingPermission = nil
+                endVoiceApproval()
+                respondPermission(req, decision: "deny")
+                speaker.speak("那我先不动它。", hostname: hostname) {
+                    resumeListeningIfConversing()
+                }
+            } else {
+                voiceApprovalRetried = true
+                speaker.speak("我没听清 —— 可以，还是不要？", hostname: hostname) {
+                    openMicForApproval()
+                }
+            }
+            return true
+        }
+        pendingPermission = nil
+        endVoiceApproval()
+        respondPermission(req, decision: decision)
+        if decision == "deny" {
+            speaker.speak("好，不动。", hostname: hostname) {
+                resumeListeningIfConversing()
+            }
+        }
+        return true
+    }
+
     // MARK: - Mood tag
     //
     // The companion soul opens every reply with a bracketed mood —
@@ -3289,8 +3393,10 @@ struct SpotlightContentView: View {
             }
             flushReplyHead(into: assistantIndex)
             isStreaming = false
+            companionActivity = nil
             pendingPermission = nil
             pendingQuestion = nil
+            endVoiceApproval()
             refreshCoworkState()
             sidebarRefresh += 1
             if messages.indices.contains(assistantIndex) {
@@ -3393,9 +3499,12 @@ struct SpotlightContentView: View {
             pendingPermission = req
             notifyIfHidden(title: "Pilot needs approval", body: req.summary)
             scrollTrigger += 1
+            // No card in companion mode — ask out loud instead.
+            if companionMode { askByVoice(id: req.id, text: CompanionVoice.spoken(req)) }
             return
         case .permissionResolved:
             if pendingPermission?.id == event.id { pendingPermission = nil }
+            if voiceApprovalID == event.id { endVoiceApproval() }
             return
         case .question:
             guard let id = event.id else { return }
@@ -3403,9 +3512,11 @@ struct SpotlightContentView: View {
             pendingQuestion = q
             notifyIfHidden(title: "Pilot asks", body: q.text)
             scrollTrigger += 1
+            if companionMode { askByVoice(id: q.id, text: CompanionVoice.spoken(q)) }
             return
         case .questionResolved:
             if pendingQuestion?.id == event.id { pendingQuestion = nil }
+            if voiceApprovalID == event.id { endVoiceApproval() }
             return
         case .workspace:
             if let w = event.workspace { coworkWorkspace = w }
@@ -3455,6 +3566,7 @@ struct SpotlightContentView: View {
             // nil until the matching tool_result lands. The
             // ToolCallView renders "running…" while output == nil.
             guard let name = event.name else { break }
+            if companionMode { companionActivity = CompanionVoice.activity(forSkill: name) }
             let id = event.id ?? UUID().uuidString
             messages[assistantIndex].toolCalls.append(ToolCall(
                 id: id,

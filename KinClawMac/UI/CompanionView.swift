@@ -26,6 +26,10 @@ struct CompanionView: View {
     /// How the companion feels — from the reply's opening tag, or from
     /// how the user sounded. Picks the art alongside `state`.
     let mood: CompanionMood?
+    /// What it is doing right now — "在看屏幕", "在跑命令". Companion
+    /// mode shows no tool calls, so without this a task that takes six
+    /// rounds is forty seconds of a face saying nothing.
+    let activity: String?
     /// True when talking over the agent will stop it (headphones, or
     /// forced on). Otherwise the halo is the way to cut in.
     let canBargeIn: Bool
@@ -75,6 +79,7 @@ struct CompanionView: View {
 
     private var stateLabel: String {
         if let p = problem { return p }
+        if let a = activity, isThinking { return a + "…" }
         switch state {
         case "listening": return "在听"
         case "thinking":  return "在想"
