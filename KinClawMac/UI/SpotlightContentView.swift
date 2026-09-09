@@ -120,6 +120,15 @@ struct SpotlightContentView: View {
     /// Zero means the first chunk is still being assembled, and that
     /// one gets cut early.
     @State private var ttsChunks = 0
+    /// The companion's current expression: set by the reply's opening
+    /// tag, and by how the user sounded while the reply is on its way.
+    @State private var companionMood: CompanionMood?
+    /// The first characters of a reply, held back until it is clear
+    /// whether they are a mood tag. See `absorbReplyHead`.
+    @State private var replyHead = ""
+    @State private var replyHeadDecided = false
+    /// How the last utterance sounded, for the kernel's eyes only.
+    @State private var pendingVoiceCue: String?
     @State private var showingArtPicker = false
     @StateObject private var companionArt = CompanionArt()
     /// Left folder pane in Cowork (⌘⇧L). Persisted; on by default.
@@ -297,6 +306,7 @@ struct SpotlightContentView: View {
                               audioLevel: recorder.audioLevel,
                               caption: companionCaption,
                               problem: companionProblem,
+                              mood: companionMood,
                               onExit: { exitCompanionMode() },
                               onFetchArt: { showingArtPicker = true },
                               onPreviewVoice: { previewVoice() })
@@ -371,6 +381,7 @@ struct SpotlightContentView: View {
             }
         }
         companionArt.reload()
+        companionMood = nil
         withAnimation(.easeOut(duration: 0.25)) { companionMode = true }
         (NSApp.delegate as? AppDelegate)?.spotlightWindow.enterCompanion()
         extendWakeSession()
@@ -531,6 +542,16 @@ struct SpotlightContentView: View {
         .onChange(of: recorder.transcript) { _, text in
             var spoken = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !spoken.isEmpty else { return }
+
+            // How it sounded travels with what was said: a hedged line for
+            // the model, and — in companion mode — an expression right
+            // away, so the face reacts to your tone before the reply does.
+            if let e = recorder.emotion {
+                pendingVoiceCue = CompanionMood.cue(forVoice: e)
+                if companionMode, let m = CompanionMood.fromVoice(e) { companionMood = m }
+            } else {
+                pendingVoiceCue = nil
+            }
 
             // Wake-word gating applies only to hands-free mode. Push-to-talk
             // is already an explicit act — demanding a wake word there would
@@ -3064,11 +3085,78 @@ struct SpotlightContentView: View {
         let text = composed
         _ = attachmentsToCarry  // explicitly reserved for future use
 
+        // The voice cue goes to the kernel only. It is not something the
+        // user said, so it has no place in their bubble or the saved
+        // session — but the model should know the sentence came in flat.
+        var forKernel = text
+        if voiceMode, let cue = pendingVoiceCue {
+            forKernel += "\n" + cue
+        }
+        pendingVoiceCue = nil
+        replyHead = ""
+        replyHeadDecided = false
+
         if agent.isLocal {
-            sendLocal(text: text, assistantIndex: assistantIndex)
+            sendLocal(text: forKernel, assistantIndex: assistantIndex)
         } else {
             sendCloud(text: text, agent: agent, assistantIndex: assistantIndex)
         }
+    }
+
+    // MARK: - Mood tag
+    //
+    // The companion soul opens every reply with a bracketed mood —
+    // `[开心]你是说那只橘猫吗？`. It is for the picture, not the ear: it
+    // must never be spoken or shown. Deltas arrive a few characters at a
+    // time, so the opening of a reply is held until it is clear whether
+    // it is a tag. Holding costs nothing audible: the speaker's first
+    // chunk waits for a comma anyway.
+
+    /// Take one delta of a reply; return what may be shown and spoken.
+    /// Empty while the head is still undecided.
+    private func absorbReplyHead(_ delta: String) -> String {
+        if replyHeadDecided { return delta }
+        replyHead += delta
+        let head = replyHead.drop(while: { $0.isWhitespace })
+        guard let first = head.first else { return "" }
+        guard first == "[" || first == "【" else {
+            replyHeadDecided = true
+            defer { replyHead = "" }
+            return replyHead
+        }
+        if let close = head.firstIndex(where: { $0 == "]" || $0 == "】" }) {
+            let tag = String(head[head.index(after: head.startIndex)..<close])
+            let rest = String(head[head.index(after: close)...].drop(while: { $0 == " " }))
+            replyHeadDecided = true
+            replyHead = ""
+            if let mood = CompanionMood.parse(tag) {
+                companionMood = mood
+                return rest
+            }
+            // Some other stage direction — "[笑]", "[叹气]" — is not a mood
+            // but is not something to read aloud either. Anything longer
+            // is content that happened to start with a bracket.
+            if tag.count <= 4, !tag.contains(where: { $0.isNumber }) { return rest }
+            return String(head)
+        }
+        if head.count > 12 {
+            replyHeadDecided = true
+            defer { replyHead = "" }
+            return replyHead
+        }
+        return ""
+    }
+
+    /// The reply ended with the head still undecided: it was text after
+    /// all. Show and speak it.
+    private func flushReplyHead(into index: Int) {
+        let held = replyHead
+        replyHead = ""
+        let undecided = !replyHeadDecided
+        replyHeadDecided = true
+        guard undecided, !held.isEmpty, messages.indices.contains(index) else { return }
+        messages[index].content += held
+        streamSpeech(held)
     }
 
     private func sendCloud(text: String, agent: Agent, assistantIndex: Int) {
@@ -3087,13 +3175,16 @@ struct SpotlightContentView: View {
         // SSE callback that touches messages[] guards bounds first.
         client.onToken = { token in
             guard messages.indices.contains(assistantIndex) else { return }
-            messages[assistantIndex].content += token
+            let shown = absorbReplyHead(token)
+            guard !shown.isEmpty else { return }
+            messages[assistantIndex].content += shown
             scrollTrigger += 1
-            streamSpeech(token)
+            streamSpeech(shown)
         }
         client.onComplete = {
             isStreaming = false
             sseClient = nil
+            flushReplyHead(into: assistantIndex)
             guard messages.indices.contains(assistantIndex) else { return }
             if !messages[assistantIndex].content.isEmpty {
                 appState.recordMessage()
@@ -3165,6 +3256,7 @@ struct SpotlightContentView: View {
                         "stream error: \(error.localizedDescription)"
                 }
             }
+            flushReplyHead(into: assistantIndex)
             isStreaming = false
             pendingPermission = nil
             pendingQuestion = nil
@@ -3320,9 +3412,12 @@ struct SpotlightContentView: View {
         switch event.kind {
         case .textDelta:
             if let t = event.text, !t.isEmpty {
-                messages[assistantIndex].content += t
-                scrollTrigger += 1
-                streamSpeech(t)
+                let shown = absorbReplyHead(t)
+                if !shown.isEmpty {
+                    messages[assistantIndex].content += shown
+                    scrollTrigger += 1
+                    streamSpeech(shown)
+                }
             }
         case .toolCall:
             // Append a new ToolCall to the message — output stays

@@ -490,7 +490,7 @@ private struct BackendSettingsTab: View {
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: 260)
                 }
-                SettingsCaption("⇧⌘M turns the panel into a picture and a voice. Pictures come from this folder; name files idle / listening / thinking / speaking to give each state its own, otherwise they rotate. \"Go get a few\" inside companion mode searches Wikimedia Commons, which needs no account; a free key from pexels.com/api swaps in a better-looking source.")
+                SettingsCaption("⇧⌘M turns the panel into a picture and a voice. Art comes from this folder: files at the top level rotate; subfolders named idle / listening / thinking / speaking, or 开心 / 温柔 / 好奇 / 困 / 担心, are used when the companion is in that state or mood (every reply carries one). Short mp4 / mov loops work anywhere a picture does. \"Go get a few\" inside companion mode searches Wikimedia Commons, which needs no account; a free key from pexels.com/api swaps in a better-looking source.")
             }
 
             SettingsCard("Sidecars") {

@@ -23,6 +23,9 @@ struct CompanionView: View {
     /// Non-nil when something is stopping the voice loop; shown instead
     /// of the state label, because "说话就好" over a dead mic is a lie.
     let problem: String?
+    /// How the companion feels — from the reply's opening tag, or from
+    /// how the user sounded. Picks the art alongside `state`.
+    let mood: CompanionMood?
 
     let onExit: () -> Void
     let onFetchArt: () -> Void
@@ -37,8 +40,16 @@ struct CompanionView: View {
 
     @State private var current: URL?
     @State private var previous: URL?
+    @State private var currentImage: NSImage?
+    @State private var previousImage: NSImage?
     @State private var showPrevious = false
     @State private var rotate: Timer?
+    /// A still gets a slow push-in and drift over its time on screen,
+    /// alternating direction picture to picture, so the background is
+    /// never quite static even before there are clips.
+    @State private var kenZoom: CGFloat = 1.03
+    @State private var kenShift: CGSize = .zero
+    @State private var kenSign: CGFloat = 1
 
     private var state: String {
         if isSpeaking { return "speaking" }
@@ -108,7 +119,10 @@ struct CompanionView: View {
         .onChange(of: state) { _, _ in
             // Per-state art swaps immediately; a pool-only setup keeps
             // the same picture and just changes the halo.
-            if !art.byState.isEmpty { pick() }
+            if art.hasGroups { pick() }
+        }
+        .onChange(of: mood) { _, _ in
+            if art.hasGroups { pick() }
         }
     }
 
@@ -118,15 +132,11 @@ struct CompanionView: View {
     private var background: some View {
         GeometryReader { geo in
             ZStack {
-                if let p = previous, showPrevious, let img = NSImage(contentsOf: p) {
-                    Image(nsImage: img).resizable().scaledToFill()
-                        .frame(width: geo.size.width, height: geo.size.height)
-                        .clipped()
+                if let p = previous, showPrevious {
+                    media(p, image: previousImage, size: geo.size, live: false)
                 }
-                if let c = current, let img = NSImage(contentsOf: c) {
-                    Image(nsImage: img).resizable().scaledToFill()
-                        .frame(width: geo.size.width, height: geo.size.height)
-                        .clipped()
+                if let c = current {
+                    media(c, image: currentImage, size: geo.size, live: true)
                         .transition(.opacity)
                         .id(c)
                 } else {
@@ -135,6 +145,27 @@ struct CompanionView: View {
             }
         }
         .ignoresSafeArea()
+    }
+
+    /// One piece of art filling the window: a looping clip as it is, a
+    /// still with the slow camera move and a breath that follows the
+    /// microphone while someone is talking.
+    @ViewBuilder
+    private func media(_ url: URL, image: NSImage?, size: CGSize, live: Bool) -> some View {
+        if CompanionArt.isVideo(url) {
+            LoopingVideoView(url: url)
+                .frame(width: size.width, height: size.height)
+                .clipped()
+        } else if let img = image {
+            let level = (isListening || isSpeaking) ? CGFloat(min(1, audioLevel * 1.4)) : 0
+            Image(nsImage: img).resizable().scaledToFill()
+                .frame(width: size.width, height: size.height)
+                .scaleEffect((live ? kenZoom : 1.03) + level * 0.02)
+                .offset(live ? kenShift : .zero)
+                .animation(.easeOut(duration: 0.15), value: level)
+                .frame(width: size.width, height: size.height)
+                .clipped()
+        }
     }
 
     private var emptyState: some View {
@@ -254,14 +285,29 @@ struct CompanionView: View {
     }
 
     private func pick() {
-        let next = art.art(for: state, fallback: art.pool.randomElement())
+        let next = art.art(for: state, mood: mood, fallback: art.pool.randomElement())
         guard next != current else { return }
         previous = current
+        previousImage = currentImage
         showPrevious = current != nil
+        // Decoded once here, not on every frame of the camera move.
+        currentImage = next.flatMap { CompanionArt.isVideo($0) ? nil : NSImage(contentsOf: $0) }
+        kenSign = -kenSign
+        kenZoom = 1.03
+        kenShift = .zero
         withAnimation(.easeInOut(duration: 0.8)) {
             current = next
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { showPrevious = false }
+        // Start the push-in after the crossfade has begun, so the new
+        // picture arrives already moving rather than snapping into motion.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            guard current == next else { return }
+            withAnimation(.linear(duration: 45)) {
+                kenZoom = 1.10
+                kenShift = CGSize(width: kenSign * 14, height: -10)
+            }
+        }
     }
 }
 
@@ -277,8 +323,19 @@ struct CompanionArtPicker: View {
     @State private var results: [CompanionArt.Candidate] = []
     @State private var searching = false
     @State private var kept: Set<UUID> = []
+    @State private var kind: CompanionArt.MediaKind = .photo
+    /// Which folder the next downloads land in: "" is the rotating
+    /// pool, otherwise a state or mood.
+    @State private var group = ""
+    @AppStorage(CompanionArt.pexelsKeyKey) private var pexelsKey = ""
 
     private let suggestions = ["柴犬 puppy", "kitten", "golden retriever", "portrait", "cat sleeping", "landscape"]
+
+    private var groupChoices: [(key: String, label: String)] {
+        [("", "轮换")]
+            + CompanionArt.stateKeys.map { ($0, $0) }
+            + CompanionMood.allCases.map { ($0.rawValue, $0.label) }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -288,12 +345,32 @@ struct CompanionArtPicker: View {
                 Button("完成") { onClose() }.controlSize(.small)
             }
             HStack(spacing: 6) {
+                Picker("", selection: $kind) {
+                    ForEach(CompanionArt.MediaKind.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 110)
                 TextField("小狗 / kitten / portrait…", text: $query)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { runSearch() }
                 Button(searching ? "搜索中…" : "搜索") { runSearch() }
                     .controlSize(.small)
                     .disabled(searching || query.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            HStack(spacing: 6) {
+                Text("存到").font(.system(size: 10)).foregroundColor(.secondary)
+                Picker("", selection: $group) {
+                    ForEach(groupChoices, id: \.key) { Text($0.label).tag($0.key) }
+                }
+                .labelsHidden()
+                .controlSize(.small)
+                .frame(width: 120)
+                Spacer()
+                if kind == .video && pexelsKey.isEmpty {
+                    Text("视频要 Pexels key（免费）— 设置 → 陪伴模式")
+                        .font(.system(size: 10)).foregroundColor(.orange)
+                }
             }
             HStack(spacing: 5) {
                 ForEach(suggestions, id: \.self) { s in
@@ -321,13 +398,13 @@ struct CompanionArtPicker: View {
 
             Divider().opacity(0.2)
             HStack {
-                Text("已有 \(art.pool.count + art.byState.count) 张")
+                Text("已有 \(art.count) 个")
                     .font(.system(size: 10)).foregroundColor(.secondary)
                 Spacer()
                 Button("打开文件夹") { art.revealFolder() }
                     .buttonStyle(.plain).font(.system(size: 11)).foregroundColor(.green)
             }
-            Text("把文件命名成 idle / listening / thinking / speaking，四种状态就会各用各的图；其余的按时间轮换。")
+            Text("子文件夹按状态或情绪取名：idle / listening / thinking / speaking，开心 / 温柔 / 好奇 / 困 / 担心。小美每句话带情绪，说话时就换成那个文件夹里的图或视频；顶层的按时间轮换。mp4 / mov 循环播放。")
                 .font(.system(size: 9)).foregroundColor(.secondary.opacity(0.8))
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -339,22 +416,32 @@ struct CompanionArtPicker: View {
     private func thumb(_ c: CompanionArt.Candidate) -> some View {
         Button {
             kept.insert(c.id)
-            Task { await art.download([c], theme: query) }
+            Task { await art.download([c], theme: query, group: group) }
         } label: {
             ZStack(alignment: .bottomTrailing) {
-                AsyncImage(url: c.url) { img in
+                AsyncImage(url: c.preview) { img in
                     img.resizable().scaledToFill()
                 } placeholder: {
                     Rectangle().fill(Color.secondary.opacity(0.15))
                 }
                 .frame(width: 92, height: 92)
                 .clipShape(RoundedRectangle(cornerRadius: 5))
+                if c.isVideo {
+                    Label("\(c.seconds ?? 0)s", systemImage: "play.fill")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 5).padding(.vertical, 2)
+                        .background(Capsule().fill(.black.opacity(0.55)))
+                        .padding(4)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                }
                 if kept.contains(c.id) {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundColor(.green)
                         .padding(4)
                 }
             }
+            .frame(width: 92, height: 92)
         }
         .buttonStyle(.plain)
         .help("\(c.title)\n\(c.credit)")
@@ -365,7 +452,7 @@ struct CompanionArtPicker: View {
         guard !q.isEmpty else { return }
         searching = true
         Task {
-            let r = await art.search(q)
+            let r = await art.search(q, kind: kind)
             await MainActor.run {
                 results = r
                 searching = false

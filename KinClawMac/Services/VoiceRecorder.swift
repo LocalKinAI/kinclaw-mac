@@ -6,6 +6,11 @@ class VoiceRecorder: NSObject, ObservableObject {
     @Published var isRecording = false
     @Published var isTranscribing = false
     @Published var transcript = ""
+    /// How the last utterance sounded, per SenseVoice: happy / sad /
+    /// angry / neutral / surprised / fearful, or nil when the server
+    /// did not say. Set before `transcript`, so whoever observes the
+    /// transcript can read the emotion that came with it.
+    @Published var emotion: String?
     @Published var error: String?
     /// Normalized audio level 0...1 — UI binds to this for the
     /// recording waveform / level bar. Updated at 10Hz from the
@@ -51,6 +56,7 @@ class VoiceRecorder: NSObject, ObservableObject {
     func startRecording(hostname: String = "", hot: Bool = false) {
         error = nil
         transcript = ""
+        emotion = nil
         storedHostname = hostname
         hotStart = hot
         hasSpeechStarted = hot
@@ -434,8 +440,18 @@ class VoiceRecorder: NSObject, ObservableObject {
                 return nil
             }
 
-            struct STTResponse: Codable { let text: String }
+            struct STTResponse: Codable {
+                let text: String
+                let emotion: String?
+                let audio_events: [String]?
+            }
             let sttResponse = try JSONDecoder().decode(STTResponse.self, from: data)
+            // Laughter is a mood of its own, whatever the label says.
+            if sttResponse.audio_events?.contains(where: { $0.lowercased().contains("laugh") }) == true {
+                emotion = "happy"
+            } else {
+                emotion = sttResponse.emotion
+            }
             return sttResponse.text
         } catch {
             return nil
