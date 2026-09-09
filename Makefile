@@ -277,12 +277,12 @@ print(",".join(parts).rstrip(","))' 2>/dev/null); \
 	  if [[ -f "$(CODER_SOUL)" ]]; then \
 	    ( KINCODE_SKILL_DIRS="$$KINCODE_DEV_SKILLS" \
 	      SEARXNG_ENDPOINT="$$SEARXNG_VAL" \
-	      "$(LOCALKIN_BIN)/kincode" -serve -port 5002 -yolo \
+	      "$(LOCALKIN_BIN)/kincode" -serve -port 5002 \
 	      -soul "$(CODER_SOUL)" >$(LOG_DIR)/kincode.log 2>&1 & ); \
 	  else \
 	    ( KINCODE_SKILL_DIRS="$$KINCODE_DEV_SKILLS" \
 	      SEARXNG_ENDPOINT="$$SEARXNG_VAL" \
-	      "$(LOCALKIN_BIN)/kincode" -serve -port 5002 -yolo \
+	      "$(LOCALKIN_BIN)/kincode" -serve -port 5002 \
 	      >$(LOG_DIR)/kincode.log 2>&1 & ); \
 	  fi; \
 	fi

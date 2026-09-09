@@ -565,6 +565,11 @@ extension KinClawAPIClient {
         let model: String?
         let provider: String?
         let message_count: Int?
+        let plan_mode: Bool?
+        /// "ask" or "auto" — what kincode's approval gate is doing, so
+        /// the footer shows the truth after a reconnect rather than its
+        /// own last guess.
+        let permission_mode: String?
     }
     func fetchState() async throws -> ServerState {
         let url = baseURL.appendingPathComponent("api/state")

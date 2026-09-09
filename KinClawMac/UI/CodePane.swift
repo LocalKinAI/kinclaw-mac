@@ -63,6 +63,12 @@ struct CodePane: View {
     /// broadcasts plan_mode events that update this state. Initial
     /// value comes from the /api/state probe on .task.
     @State private var planMode: Bool = false
+    /// kincode's approval gate, "ask" or "auto". It used to be neither:
+    /// server mode forced -yolo, so Code ran an agent that edited files
+    /// and ran commands without ever asking.
+    @State private var permissionMode: String = "ask"
+    /// A parked tool call waiting on the human.
+    @State private var pendingPermission: PermissionRequest?
 
     /// Currently-streaming assistant message ID — text_delta events
     /// append to this bubble. Reset on turn_done.
@@ -661,6 +667,19 @@ struct CodePane: View {
                 planModeBanner
             }
 
+            // The approval card. Same component Cowork uses — one
+            // shape of question, one shape of answer, wherever it comes
+            // from.
+            if let req = pendingPermission {
+                HStack(alignment: .top, spacing: 0) {
+                    PermissionCardView(request: req) { decision in
+                        respondPermission(req, decision: decision)
+                    }
+                    .frame(maxWidth: 480)
+                    Spacer(minLength: 0)
+                }
+            }
+
             // What kincode touched this session. Used to be a section
             // of the sidebar's file tree; the tree is gone and this is
             // the half that was worth keeping — it is the diff, and it
@@ -701,32 +720,12 @@ struct CodePane: View {
             // has no /api/permission_mode yet — so this is two states,
             // not Cowork's three, and says so.
             HStack(spacing: 10) {
-                Menu {
-                    Button {
-                        if planMode { togglePlanMode() }
-                    } label: {
-                        Label("干活", systemImage: planMode ? "hammer" : "checkmark")
-                    }
-                    Button {
-                        if !planMode { togglePlanMode() }
-                    } label: {
-                        Label("只看不动", systemImage: planMode ? "checkmark" : "list.clipboard")
-                    }
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: planMode ? "list.clipboard" : "hammer")
-                            .font(.system(size: 11))
-                        Text(planMode ? "只看不动" : "干活")
-                            .font(.system(size: 11))
-                    }
-                    .foregroundColor(planMode ? .orange : .secondary)
+                PermissionModePicker(
+                    mode: GateMode.from(permissionMode: permissionMode,
+                                        planMode: planMode)
+                ) { picked in
+                    applyGateMode(picked)
                 }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .help(planMode
-                      ? "只看不动 —— kincode 读代码、给方案，不写文件不跑命令 (⇧⌘P)"
-                      : "干活 —— kincode 会真的改文件、跑命令 (⇧⌘P 切到只看不动)")
 
                 Spacer()
                 brainMenu
@@ -1098,6 +1097,43 @@ struct CodePane: View {
     /// the SSE plan_mode event will reconcile if the server refused
     /// (e.g. mid-turn). On error we revert and surface a status
     /// message so the user sees the toggle didn't take.
+    /// Answer a parked call. Optimistic: the card goes away now, and a
+    /// 404 means it already resolved (the turn was cancelled).
+    private func respondPermission(_ req: PermissionRequest, decision: String) {
+        pendingPermission = nil
+        Task {
+            do {
+                try await KinClawAPIClient.kincode.respondPermission(id: req.id, decision: decision)
+            } catch {
+                FileHandle.standardError.write(
+                    "kincode respondPermission failed: \(error.localizedDescription)\n"
+                        .data(using: .utf8) ?? Data())
+            }
+        }
+    }
+
+    /// One of the three gate modes. Plan mode and the approval mode are
+    /// separate switches in the kernel, so leaving plan mode has to say
+    /// what to leave it *to*.
+    private func applyGateMode(_ picked: GateMode) {
+        let wantPlan = picked == .plan
+        let wantPerm = picked == .auto ? "auto" : "ask"
+        if picked != .plan { permissionMode = wantPerm }
+        Task {
+            do {
+                if picked != .plan {
+                    permissionMode = try await KinClawAPIClient.kincode
+                        .setPermissionMode(wantPerm)
+                }
+            } catch {
+                FileHandle.standardError.write(
+                    "kincode permission mode failed: \(error.localizedDescription)\n"
+                        .data(using: .utf8) ?? Data())
+            }
+        }
+        if wantPlan != planMode { togglePlanMode() }
+    }
+
     private func togglePlanMode() {
         let target = !planMode
         planMode = target  // optimistic
@@ -1165,6 +1201,21 @@ struct CodePane: View {
                 toolParams: event.params,
                 toolID: event.id
             ))
+        case .permissionRequest:
+            guard let id = event.id else { return }
+            pendingPermission = PermissionRequest(
+                id: id,
+                skill: event.name ?? "?",
+                summary: event.summary ?? (event.name ?? "?"),
+                reason: event.message ?? "",
+                params: event.params ?? [:])
+            return
+        case .permissionResolved:
+            if pendingPermission?.id == event.id { pendingPermission = nil }
+            return
+        case .permissionMode:
+            if let m = event.name, !m.isEmpty { permissionMode = m }
+            return
         case .toolResult:
             // Fold tool_result into the matching tool_call row's
             // toolOutput / toolError instead of appending a separate
@@ -1582,6 +1633,8 @@ struct CodePane: View {
             await MainActor.run {
                 activeProvider = state.provider ?? ""
                 activeModel = state.model ?? ""
+                if let p = state.plan_mode { planMode = p }
+                if let m = state.permission_mode, !m.isEmpty { permissionMode = m }
             }
         } catch {
             // ignore — kincode might still be booting
