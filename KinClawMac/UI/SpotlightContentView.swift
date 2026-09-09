@@ -318,6 +318,20 @@ struct SpotlightContentView: View {
                               activity: companionActivity,
                               canBargeIn: bargeInArmed,
                               onInterrupt: { interruptReply(hot: false) },
+                              prompt: companionPrompt,
+                              onPromptDecision: { decision in
+                                  guard let req = pendingPermission else { return }
+                                  endVoiceApproval()
+                                  speaker.stop()
+                                  respondPermission(req, decision: decision)
+                              },
+                              onPromptAnswer: { text in
+                                  guard let q = pendingQuestion else { return }
+                                  pendingQuestion = nil
+                                  endVoiceApproval()
+                                  speaker.stop()
+                                  answerQuestion(q, text: text)
+                              },
                               onExit: { exitCompanionMode() },
                               onFetchArt: { showingArtPicker = true },
                               onPreviewVoice: { previewVoice() })
@@ -352,6 +366,14 @@ struct SpotlightContentView: View {
                 : "没选中 agent，按 Esc 回面板选一个"
         }
         if !voiceMode { return "语音没打开" }
+        return nil
+    }
+
+    /// The parked card, if any — permission first, since the gate is
+    /// what actually blocks the turn.
+    private var companionPrompt: CompanionPromptView.Prompt? {
+        if let req = pendingPermission { return .permission(req) }
+        if let q = pendingQuestion { return .question(q) }
         return nil
     }
 

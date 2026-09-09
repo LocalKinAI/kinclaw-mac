@@ -35,6 +35,12 @@ struct CompanionView: View {
     let canBargeIn: Bool
     /// Stop the reply and open the microphone.
     let onInterrupt: () -> Void
+    /// A parked turn waiting on the human — the permission gate or an
+    /// `ask_user` question. Read out loud AND shown here: the voice is
+    /// the fast path, the card is what you come back to.
+    let prompt: CompanionPromptView.Prompt?
+    let onPromptDecision: (String) -> Void
+    let onPromptAnswer: (String) -> Void
 
     let onExit: () -> Void
     let onFetchArt: () -> Void
@@ -109,7 +115,7 @@ struct CompanionView: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(problem == nil ? .white.opacity(0.75) : .orange)
                     .padding(.top, 14)
-                if !caption.isEmpty {
+                if !caption.isEmpty, prompt == nil {
                     Text(caption)
                         .font(.system(size: 13))
                         .foregroundColor(.white.opacity(0.85))
@@ -120,7 +126,15 @@ struct CompanionView: View {
                         .transition(.opacity)
                 }
                 Spacer()
+                if let p = prompt {
+                    CompanionPromptView(prompt: p,
+                                        onDecision: onPromptDecision,
+                                        onAnswer: onPromptAnswer)
+                        .padding(.horizontal, 18)
+                        .padding(.bottom, 18)
+                }
             }
+            .animation(.easeOut(duration: 0.2), value: prompt)
         }
         .background(Color.black)
         .onAppear {
