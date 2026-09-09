@@ -31,6 +31,13 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
     private var streamHostname = ""
     private var pendingSentences: [String] = []
     private var synthesizing = false
+    /// Bumped by every `stop()`, `speak()` and `beginStream()`. Synthesis
+    /// awaits a network round-trip, and a reply can be stopped and a new
+    /// one started while that is in flight; a result that comes back
+    /// for an older generation is dropped rather than played into the
+    /// reply that replaced it — which is how two answers ended up
+    /// interleaved on the speaker.
+    private var generation = 0
 
     override init() {
         super.init()
@@ -46,6 +53,7 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         isStreamingReply = true
         streamHostname = hostname
         isSpeaking = true
+        generation += 1
     }
 
     /// Hand one finished sentence to the speaker; they queue in order.
@@ -74,6 +82,7 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         synthesizing = true
         let sentence = pendingSentences.removeFirst()
         let hostname = streamHostname
+        let gen = generation
         Task { @MainActor in
             defer {
                 self.synthesizing = false
@@ -93,9 +102,12 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
             }
             for seg in segments {
                 // A sentence dropped mid-flight (the user barged in, or the
-                // turn was cancelled) must not resurface as audio.
-                guard self.isSpeaking else { return }
+                // turn was cancelled) must not resurface as audio — not
+                // even inside the next reply, which is what checking
+                // `isSpeaking` alone allowed.
+                guard self.isSpeaking, self.generation == gen else { return }
                 if let data = await self.synthesizeSegment(seg, isLocal: isLocal, hostname: hostname),
+                   self.generation == gen,
                    let player = self.preparedPlayer(data) {
                     self.playQueue.append(player)
                     if self.audioPlayer?.isPlaying != true {
@@ -124,6 +136,7 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         stop()
         completion = onComplete
         isSpeaking = true
+        generation += 1
 
         // Configure audio session (iOS only — macOS routes audio without it)
         #if os(iOS)
@@ -133,8 +146,11 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
 
         // Try server TTS first if hostname available
         if !hostname.isEmpty {
+            let gen = generation
             Task { @MainActor in
-                let success = await self.serverTTS(text: text, hostname: hostname)
+                let success = await self.serverTTS(text: text, hostname: hostname, gen: gen)
+                // Stopped while synthesizing: nothing to fall back to.
+                guard self.generation == gen else { return }
                 if !success {
                     self.localTTS(text: text)
                 }
@@ -150,7 +166,7 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
     /// kinclaw web UI uses (kinclaw kernel's /api/voice/tts just
     /// forwards to TTS_ENDPOINT/synthesize anyway). Direct = one
     /// fewer hop, simpler config.
-    private func serverTTS(text: String, hostname: String) async -> Bool {
+    private func serverTTS(text: String, hostname: String, gen: Int) async -> Bool {
         let isLocal = hostname == "localhost-kinclaw"
             || hostname.hasPrefix("localhost")
 
@@ -184,6 +200,11 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
             }
             for await (i, data) in group { clips[i] = data }
         }
+
+        // Stopped while the clips were being made: they belong to a reply
+        // nobody wants any more. Report success so the caller does not
+        // read it out with the system voice instead.
+        guard generation == gen, isSpeaking else { return true }
 
         // All-or-nothing: a half-spoken reply is worse than falling back to
         // the system voice, which at least reads the whole thing.
@@ -373,6 +394,7 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         pendingSentences.removeAll()
         isSpeaking = false
         completion = nil
+        generation += 1
     }
 
     // MARK: - AVSpeechSynthesizerDelegate

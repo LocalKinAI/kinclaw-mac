@@ -26,6 +26,11 @@ struct CompanionView: View {
     /// How the companion feels — from the reply's opening tag, or from
     /// how the user sounded. Picks the art alongside `state`.
     let mood: CompanionMood?
+    /// True when talking over the agent will stop it (headphones, or
+    /// forced on). Otherwise the halo is the way to cut in.
+    let canBargeIn: Bool
+    /// Stop the reply and open the microphone.
+    let onInterrupt: () -> Void
 
     let onExit: () -> Void
     let onFetchArt: () -> Void
@@ -73,7 +78,7 @@ struct CompanionView: View {
         switch state {
         case "listening": return "在听"
         case "thinking":  return "在想"
-        case "speaking":  return "在说 · 想插话就直接说"
+        case "speaking":  return canBargeIn ? "在说 · 想插话就直接说" : "在说 · 点一下光晕打断"
         default:          return "说话就好"
         }
     }
@@ -90,6 +95,11 @@ struct CompanionView: View {
                 topBar
                 Spacer()
                 halo
+                    .contentShape(Circle().scale(1.3))
+                    .onTapGesture {
+                        if isSpeaking || isThinking { onInterrupt() }
+                    }
+                    .help(isSpeaking ? "打断" : "")
                 Text(stateLabel)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(problem == nil ? .white.opacity(0.75) : .orange)

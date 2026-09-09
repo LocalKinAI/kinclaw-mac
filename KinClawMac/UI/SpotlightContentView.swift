@@ -307,6 +307,8 @@ struct SpotlightContentView: View {
                               caption: companionCaption,
                               problem: companionProblem,
                               mood: companionMood,
+                              canBargeIn: bargeInArmed,
+                              onInterrupt: { interruptReply(hot: false) },
                               onExit: { exitCompanionMode() },
                               onFetchArt: { showingArtPicker = true },
                               onPreviewVoice: { previewVoice() })
@@ -2307,25 +2309,39 @@ struct SpotlightContentView: View {
     /// worse than making you wait.
     private func armBargeIn() {
         guard voiceMode || companionMode else { return }
-        bargeIn.onSpeech = {
-            // You started talking. Stop the reply and drop what is still
-            // queued — and if the model is still writing, cancel the turn
-            // too. Not only because you are redirecting it: the listener
-            // that reopens the mic refuses while a turn is in flight, so
-            // without this the interruption would silence the agent and
-            // then leave the mic shut.
-            ttsPending = ""
-            if isStreaming {
-                interruptTurn()
-            } else {
-                speaker.stop()
-            }
-            // Hot: you are already mid-sentence. The usual beat of
-            // silence and 0.5s of room calibration would cost you the
-            // first word and measure your voice as the floor.
-            resumeListeningIfConversing(extendSession: false, hot: true)
-        }
+        // Through the built-in speakers the mic hears the agent louder
+        // than it hears you (measured: -14…-4 dBFS with voice processing
+        // on), and the trigger fires on the agent's own first sentence.
+        // Auto means: only when the output route cannot echo — headphones,
+        // AirPods, a headset. Settings → Voice can force it either way.
+        guard AudioRoute.bargeInAllowed() else { return }
+        bargeIn.onSpeech = { interruptReply(hot: true) }
         bargeIn.start()
+    }
+
+    /// Whether talking over the agent will interrupt it right now.
+    private var bargeInArmed: Bool { bargeIn.isMonitoring }
+
+    /// Cut the reply off and hand the floor to the user — from the
+    /// barge-in monitor, or from a tap on the companion's halo when
+    /// barge-in is off because the speakers would echo.
+    private func interruptReply(hot: Bool) {
+        // Stop the reply and drop what is still queued — and if the
+        // model is still writing, cancel the turn too. Not only because
+        // you are redirecting it: the listener that reopens the mic
+        // refuses while a turn is in flight, so without this the
+        // interruption would silence the agent and then leave the mic
+        // shut.
+        ttsPending = ""
+        if isStreaming {
+            interruptTurn()
+        } else {
+            speaker.stop()
+        }
+        // Hot: you are already mid-sentence. The usual beat of silence
+        // and 0.5s of room calibration would cost you the first word and
+        // measure your voice as the floor.
+        resumeListeningIfConversing(extendSession: false, hot: hot)
     }
 
     private func disarmBargeIn() { bargeIn.stop() }
@@ -3020,7 +3036,10 @@ struct SpotlightContentView: View {
         // must not, or background chatter would hold the session open forever
         // and the wake word would stop meaning anything.
         if extendSession { extendWakeSession() }
-        guard voiceMode, !isStreaming, !recorder.isRecording else { return }
+        // Never over the speaker: a recording made while the agent talks
+        // transcribes the agent. The speaker's own completion is what
+        // calls here when it is done.
+        guard voiceMode, !isStreaming, !recorder.isRecording, !speaker.isSpeaking else { return }
         // A beat of silence between the reply ending and the mic opening, so the
         // tail of the spoken audio never bleeds into the next recording. The
         // clips are trimmed to ~160ms of tail now, so the beat is short. None
@@ -3028,7 +3047,7 @@ struct SpotlightContentView: View {
         // is already talking.
         let beat = hot ? 0 : 0.3
         DispatchQueue.main.asyncAfter(deadline: .now() + beat) {
-            guard voiceMode, !isStreaming, !recorder.isRecording else { return }
+            guard voiceMode, !isStreaming, !recorder.isRecording, !speaker.isSpeaking else { return }
             recorder.startRecording(hostname: hostname, hot: hot)
         }
     }
@@ -3255,6 +3274,18 @@ struct SpotlightContentView: View {
                     messages[assistantIndex].content =
                         "stream error: \(error.localizedDescription)"
                 }
+            }
+            // Interrupted (barge-in, Stop, a new send): the reply that was
+            // cut off must stay cut off. This code used to run on, find the
+            // speech stream closed by the interruption, and read the partial
+            // reply out whole from the top — into a microphone the barge-in
+            // had already opened, which transcribed the agent's own words as
+            // the user's next message. Two replies then mixed on the speaker
+            // and the model was asked to answer itself.
+            if Task.isCancelled {
+                replyHead = ""
+                replyHeadDecided = true
+                return
             }
             flushReplyHead(into: assistantIndex)
             isStreaming = false

@@ -51,15 +51,17 @@ class VoiceRecorder: NSObject, ObservableObject {
 
     /// Start recording audio
     /// `hot`: the user is mid-sentence already (a barge-in). Skips the
-    /// 0.5s calibration, whose sample would be their voice, and treats
-    /// the recording as speech from the first tick.
+    /// 0.5s calibration, whose sample would be their voice. It does not
+    /// assume speech: a trigger can be wrong, and a recording that never
+    /// crosses the line must end as silence, not go to the transcriber
+    /// to come back as an invented "Yeah." that starts a turn.
     func startRecording(hostname: String = "", hot: Bool = false) {
         error = nil
         transcript = ""
         emotion = nil
         storedHostname = hostname
         hotStart = hot
-        hasSpeechStarted = hot
+        hasSpeechStarted = false
 
         #if os(iOS)
         AVAudioSession.sharedInstance().requestRecordPermission { [weak self] granted in

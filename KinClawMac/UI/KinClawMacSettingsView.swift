@@ -652,9 +652,23 @@ private struct VoiceSettingsTab: View {
     @AppStorage("kinclaw.voice.silenceMarginDB") private var silenceMargin: Double = 5
     @AppStorage("kinclaw.voice.wakeWord") private var wakeWord = ""
     @AppStorage("kinclaw.voice.wakeSessionSeconds") private var wakeSessionSeconds: Double = 45
+    @AppStorage(AudioRoute.bargeInKey) private var bargeIn = "auto"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
+            SettingsCard("Interrupting (hands-free and companion mode)") {
+                SettingsRow(label: "Talk over it") {
+                    Picker("", selection: $bargeIn) {
+                        Text("Auto — only with headphones").tag("auto")
+                        Text("Always").tag("on")
+                        Text("Never").tag("off")
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 280)
+                }
+                SettingsCaption("With headphones, speaking while the agent talks stops it and takes your words. Through the Mac's speakers the microphone hears the agent louder than it hears you, so Auto keeps the mic closed until the reply ends — tap the companion's halo to cut in instead. \"Always\" is for external speakers far from the mic.")
+            }
+
             SettingsCard("Speech-to-Text (microphone)") {
                 SettingsRow(label: "Speech margin") {
                     HStack {
