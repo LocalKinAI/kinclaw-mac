@@ -852,6 +852,48 @@ struct SpotlightContentView: View {
         .ignoresSafeArea(.container, edges: .top)
     }
 
+    /// Everything the top bar used to show as its own icon.
+    ///
+    /// Eleven controls in one row meant the two that matter mid-turn —
+    /// stop, and where the agent is working — were the same size and
+    /// weight as "speech on". Stop moved to the composer, where a hand
+    /// already is; the rest of the rarely-pressed ones live behind one
+    /// ⋯, named in words instead of guessed from a glyph. Every
+    /// shortcut still works with the menu closed.
+    private var overflowMenu: some View {
+        Menu {
+            Button { enterCompanionMode() } label: {
+                Label("陪伴模式", systemImage: "moon.stars")
+            }
+            Button { showingHistoryPopover = true } label: {
+                Label("会话历史", systemImage: "clock.arrow.circlepath")
+            }
+            Divider()
+            Toggle(isOn: Binding(
+                get: { ttsEnabled },
+                set: { on in
+                    ttsEnabled = on
+                    UserDefaults.standard.set(on, forKey: "tts_enabled")
+                }
+            )) {
+                Label("朗读回复", systemImage: ttsEnabled ? "speaker.wave.2.fill" : "speaker.slash")
+            }
+            Divider()
+            Button(role: .destructive) { clearChat() } label: {
+                Label("清空这个对话", systemImage: "trash")
+            }
+            .disabled(messages.isEmpty)
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("更多：陪伴模式 · 会话历史 · 朗读 · 清空")
+    }
+
     /// Secondary row (Chat/Cowork only): mode-scoped agent picker on
     /// the left, utility buttons (history / clear / tts) on the right.
     /// Code mode skips this — CodePane's own repoBar is the secondary
@@ -871,33 +913,32 @@ struct SpotlightContentView: View {
             // corner — the agent bar is about who and where, the
             // composer footer about what brain, as in Claude Desktop.)
 
-            // Companion mode — picture + voice, no text. Outside the
-            // Cowork-only block on purpose: a shortcut that exists only
-            // on one tab is a shortcut nobody remembers.
-            Button {
-                enterCompanionMode()
-            } label: {
-                Image(systemName: "moon.stars")
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
-            }
-            .buttonStyle(.plain)
-            .help("陪伴模式：只有声音和一张图 (⇧⌘M)")
-            .keyboardShortcut("m", modifiers: [.command, .shift])
+            // Companion mode and session history moved into the
+            // overflow menu; their shortcuts stay bound here so ⇧⌘M and
+            // ⌘H keep working without the menu being open. The history
+            // popover anchors on this (zero-sized) view.
+            Button("") { enterCompanionMode() }
+                .buttonStyle(.plain)
+                .frame(width: 0, height: 0)
+                .opacity(0)
+                .keyboardShortcut("m", modifiers: [.command, .shift])
+                .accessibilityHidden(true)
 
-            // Session history (📚) — popover with all saved chats
-            // for the active agent + "+ New chat" + delete.
-            Button {
-                showingHistoryPopover.toggle()
-            } label: {
-                Image(systemName: "clock.arrow.circlepath")
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
-            }
-            .buttonStyle(.plain)
-            .help("Session history (\u{2318}H)")
-            .keyboardShortcut("h", modifiers: .command)
-            .popover(isPresented: $showingHistoryPopover,
+            Button("") { clearChat() }
+                .buttonStyle(.plain)
+                .frame(width: 0, height: 0)
+                .opacity(0)
+                .disabled(messages.isEmpty)
+                .keyboardShortcut(.delete, modifiers: .command)
+                .accessibilityHidden(true)
+
+            Button("") { showingHistoryPopover.toggle() }
+                .buttonStyle(.plain)
+                .frame(width: 0, height: 0)
+                .opacity(0)
+                .keyboardShortcut("h", modifiers: .command)
+                .accessibilityHidden(true)
+                .popover(isPresented: $showingHistoryPopover,
                      arrowEdge: .top) {
                 if let agent = selectedAgent {
                     SessionHistoryPopover(
@@ -981,26 +1022,6 @@ struct SpotlightContentView: View {
                 .help("Workspace: \(coworkWorkspace.isEmpty ? "(not set)" : coworkWorkspace)\nRelative paths and shell commands live here; writing elsewhere asks first. Click to change.")
             }
 
-            // Stop button — interrupts the in-flight turn via
-            // DELETE /api/chat (kinclaw) or task cancel (cloud SSE
-            // through SSEClient). Only visible while a turn is
-            // streaming. Mirrors Code mode's Stop in CodePane —
-            // same icon, same Cmd+. shortcut. Critical for Cowork:
-            // a misbehaving Pilot trying 5-7 GUI clicks needs an
-            // emergency stop, not "wait for the next AX timeout".
-            if isStreaming {
-                Button {
-                    interruptTurn()
-                } label: {
-                    Image(systemName: "stop.circle")
-                        .font(.system(size: 13))
-                        .foregroundColor(.red.opacity(0.8))
-                }
-                .buttonStyle(.plain)
-                .help("Stop the agent (\u{2318}.)")
-                .keyboardShortcut(".", modifiers: .command)
-            }
-
             // New session — saves current to disk + starts a fresh
             // session id. For Cowork, this also re-loads the active
             // soul on the server side so kinclaw's history buffer
@@ -1020,30 +1041,7 @@ struct SpotlightContentView: View {
             .disabled(messages.isEmpty)
             .help("New session (saves current + clears agent memory)")
 
-            if !messages.isEmpty {
-                Button {
-                    clearChat()
-                } label: {
-                    Image(systemName: "trash")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("Clear chat (\u{2318}\u{232B})")
-                .keyboardShortcut(.delete, modifiers: .command)
-            }
-
-            Button {
-                ttsEnabled.toggle()
-                UserDefaults.standard.set(ttsEnabled, forKey: "tts_enabled")
-            } label: {
-                Image(systemName: ttsEnabled ? "speaker.wave.2.fill"
-                                              : "speaker.slash")
-                    .font(.system(size: 12))
-                    .foregroundColor(ttsEnabled ? .green : .secondary)
-            }
-            .buttonStyle(.plain)
-            .help(ttsEnabled ? "Speech on" : "Speech off")
+            overflowMenu
         }
         .padding(.horizontal, 12)
         .padding(.top, 2)
@@ -2255,16 +2253,35 @@ struct SpotlightContentView: View {
             if mode == .cowork {
                 coworkBrainMenu
             }
+            // Send, and Stop while a turn is running. One button in
+            // one place: the stop used to be a 13pt icon in the top bar
+            // among ten others, appearing only mid-turn — findable if
+            // you knew it was there, which is not the state of mind of
+            // someone who wants to stop the agent. Now it is where your
+            // hand already is, and it is the biggest thing in the row.
             Button {
-                send()
+                if isStreaming { interruptTurn() } else { send() }
             } label: {
-                Image(systemName: "arrow.up.circle.fill")
+                Image(systemName: isStreaming ? "stop.circle.fill" : "arrow.up.circle.fill")
                     .font(.system(size: 22))
-                    .foregroundColor(canSend ? .green : .secondary.opacity(0.4))
+                    .foregroundColor(isStreaming
+                                     ? .red
+                                     : (canSend ? .green : .secondary.opacity(0.4)))
             }
             .buttonStyle(.plain)
-            .disabled(!canSend)
+            .disabled(!isStreaming && !canSend)
             .keyboardShortcut(.return, modifiers: .command)
+            .help(isStreaming ? "停下 (\u{2318}.)" : "发送 (\u{2318}\u{21A9})")
+
+            // ⌘. keeps working, and keeps working while the composer is
+            // empty — the shortcut people hit when something is going
+            // wrong should never depend on what they have typed.
+            Button("") { if isStreaming { interruptTurn() } }
+                .buttonStyle(.plain)
+                .frame(width: 0, height: 0)
+                .opacity(0)
+                .keyboardShortcut(".", modifiers: .command)
+                .accessibilityHidden(true)
         }
         }
         .padding(.horizontal, 12)
