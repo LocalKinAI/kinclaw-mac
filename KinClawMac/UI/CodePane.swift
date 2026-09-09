@@ -264,16 +264,12 @@ struct CodePane: View {
 
             // Folder pane toggle (⇧⌘L). The brain picker lives in the
             // composer's bottom-right corner now.
-            Button {
-                toggleCodeSidebar()
-            } label: {
-                Image(systemName: showCodeSidebar ? "sidebar.left" : "sidebar.leading")
-                    .font(.system(size: 12))
-                    .foregroundColor(showCodeSidebar ? .green : .secondary)
-            }
-            .buttonStyle(.plain)
-            .help(showCodeSidebar ? "Hide the folder pane (⇧⌘L)" : "Show the folder pane (⇧⌘L)")
-            .keyboardShortcut("l", modifiers: [.command, .shift])
+            Button("") { toggleCodeSidebar() }
+                .buttonStyle(.plain)
+                .frame(width: 0, height: 0)
+                .opacity(0)
+                .keyboardShortcut("l", modifiers: [.command, .shift])
+                .accessibilityHidden(true)
 
             Spacer(minLength: 0)
 
@@ -288,22 +284,15 @@ struct CodePane: View {
                 .frame(width: 6, height: 6)
                 .help(connectError ?? "kincode :5002 connected")
 
-            // Stop button — interrupts the in-flight turn via
-            // DELETE /api/chat. Only visible while streaming, so the
-            // repoBar visual mass fluctuates with turn state but
-            // never shows a useless dimmed icon.
-            if isStreaming {
-                Button {
-                    interruptTurn()
-                } label: {
-                    Image(systemName: "stop.circle")
-                        .font(.system(size: 13))
-                        .foregroundColor(.red.opacity(0.8))
-                }
+            // Stop moved onto the send button in the composer, where
+            // the hand already is. ⌘. keeps working from here, and
+            // keeps working while the composer is empty.
+            Button("") { if isStreaming { interruptTurn() } }
                 .buttonStyle(.plain)
-                .help("Stop the agent (\u{2318}.)")
+                .frame(width: 0, height: 0)
+                .opacity(0)
                 .keyboardShortcut(".", modifiers: .command)
-            }
+                .accessibilityHidden(true)
 
             // Fresh session — saves current + starts new id + clears
             // kincode server-side memory (so a stuck error doesn't
@@ -320,10 +309,46 @@ struct CodePane: View {
             .buttonStyle(.plain)
             .disabled(messages.isEmpty)
             .help("New session (saves current + clears kincode memory)")
+
+            overflowMenu
         }
         .padding(.horizontal, 12)
         .padding(.top, 2)
         .padding(.bottom, 4)
+    }
+
+    /// The same ⋯ Cowork has. Code's top bar was drifting into the
+    /// state Cowork's was in — one more icon each time something was
+    /// added — so the rarely-pressed things get names in a menu instead
+    /// of a glyph in a row. Shortcuts work with the menu closed.
+    private var overflowMenu: some View {
+        Menu {
+            Button { toggleCodeSidebar() } label: {
+                Label(showCodeSidebar ? "隐藏文件夹面板" : "显示文件夹面板",
+                      systemImage: "sidebar.leading")
+            }
+            Button { pickRepo() } label: {
+                Label("换一个仓库…", systemImage: "folder.badge.plus")
+            }
+            Divider()
+            Button { togglePlanMode() } label: {
+                Label(planMode ? "开始干活" : "切到只看不动",
+                      systemImage: planMode ? "hammer" : "list.clipboard")
+            }
+            Divider()
+            Button(role: .destructive) { startNewSession() } label: {
+                Label("清空这个对话", systemImage: "trash")
+            }
+            .disabled(messages.isEmpty)
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("更多：文件夹面板 · 换仓库 · 只看不动")
     }
 
     // MARK: - Messages
@@ -660,20 +685,6 @@ struct CodePane: View {
                 .buttonStyle(.plain)
                 .help("Attach images (PNG, JPG, GIF, WEBP)")
 
-                Button {
-                    togglePlanMode()
-                } label: {
-                    Image(systemName: planMode
-                          ? "list.bullet.rectangle.fill"
-                          : "list.bullet.rectangle")
-                        .font(.system(size: 14))
-                        .foregroundColor(planMode ? .orange : .secondary)
-                }
-                .buttonStyle(.plain)
-                .help(planMode
-                      ? "Plan mode is ON — kincode will plan, not execute. Click to disable."
-                      : "Enable plan mode — kincode plans only, no file writes or shell.")
-
                 TextField("Message kincode…",
                           text: $inputText,
                           axis: .vertical)
@@ -684,22 +695,58 @@ struct CodePane: View {
                     .onSubmit { send() }
             }
 
-            // Composer footer — model picker bottom-right, next to send
-            // (live switch via POST /api/brain; the default lives in
-            // Settings → Backend → Kincode).
+            // Composer footer, laid out like Cowork's: what it is
+            // allowed to do on the left, what brain and send on the
+            // right. kincode only has the read-only switch — its kernel
+            // has no /api/permission_mode yet — so this is two states,
+            // not Cowork's three, and says so.
             HStack(spacing: 10) {
+                Menu {
+                    Button {
+                        if planMode { togglePlanMode() }
+                    } label: {
+                        Label("干活", systemImage: planMode ? "hammer" : "checkmark")
+                    }
+                    Button {
+                        if !planMode { togglePlanMode() }
+                    } label: {
+                        Label("只看不动", systemImage: planMode ? "checkmark" : "list.clipboard")
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: planMode ? "list.clipboard" : "hammer")
+                            .font(.system(size: 11))
+                        Text(planMode ? "只看不动" : "干活")
+                            .font(.system(size: 11))
+                    }
+                    .foregroundColor(planMode ? .orange : .secondary)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help(planMode
+                      ? "只看不动 —— kincode 读代码、给方案，不写文件不跑命令 (⇧⌘P)"
+                      : "干活 —— kincode 会真的改文件、跑命令 (⇧⌘P 切到只看不动)")
+
                 Spacer()
                 brainMenu
+
+                // Send, and Stop while a turn runs — one button, where
+                // the hand already is. The old stop was a 13pt icon in
+                // the top bar that only appeared mid-turn.
                 Button {
-                    send()
+                    if isStreaming { interruptTurn() } else { send() }
                 } label: {
-                    Image(systemName: "arrow.up.circle.fill")
+                    Image(systemName: isStreaming ? "stop.circle.fill" : "arrow.up.circle.fill")
                         .font(.system(size: 22))
-                        .foregroundColor(canSend ? .green : .secondary.opacity(0.4))
+                        .foregroundColor(isStreaming
+                                         ? .red
+                                         : (canSend ? .green : .secondary.opacity(0.4)))
                 }
                 .buttonStyle(.plain)
-                .disabled(!canSend)
+                .disabled(!isStreaming && !canSend)
                 .keyboardShortcut(.return, modifiers: .command)
+                .help(isStreaming ? "停下 (\u{2318}.)" : "发送 (\u{2318}\u{21A9})")
             }
         }
         .padding(.horizontal, 12)
