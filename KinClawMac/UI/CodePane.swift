@@ -69,6 +69,10 @@ struct CodePane: View {
     @State private var permissionMode: String = "ask"
     /// A parked tool call waiting on the human.
     @State private var pendingPermission: PermissionRequest?
+    /// What taking back the last turn would restore. Empty means there
+    /// is nothing to undo — the last turn only read, or only talked.
+    @State private var undoableFiles: [String] = []
+    @State private var undoablePrompt: String = ""
 
     /// Currently-streaming assistant message ID — text_delta events
     /// append to this bubble. Reset on turn_done.
@@ -179,6 +183,7 @@ struct CodePane: View {
             // (in streamLoop's success path) since kincode might
             // still be booting on first onAppear.
             Task { await refreshState() }
+            refreshUndo()
             // Load the user's actual Ollama models for the brain
             // dropdown. Cached for the rest of the session;
             // "Reload from Ollama" in the menu refreshes manually.
@@ -698,7 +703,27 @@ struct CodePane: View {
             // of the sidebar's file tree; the tree is gone and this is
             // the half that was worth keeping — it is the diff, and it
             // belongs where you look when a turn ends.
-            TouchedFilesBar(files: touchedFiles)
+            HStack(spacing: 8) {
+                TouchedFilesBar(files: touchedFiles)
+                Spacer(minLength: 0)
+                // Undo is only useful if it is where you are looking
+                // when you decide you want it — which is at the list of
+                // what just changed, a second after reading it.
+                if !undoableFiles.isEmpty, !isStreaming {
+                    Button {
+                        undoLastTurn()
+                    } label: {
+                        Label("撤销这轮", systemImage: "arrow.uturn.backward")
+                            .font(.system(size: 11))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.orange)
+                    .help("把这轮改过的 \(undoableFiles.count) 个文件恢复原样"
+                          + (undoablePrompt.isEmpty ? "" : "\n\n这轮是：\(undoablePrompt)")
+                          + "\n\n只动 agent 改过的文件，你自己没提交的活不受影响。")
+                    .padding(.trailing, 12)
+                }
+            }
 
             // Pending-image chip strip. Hidden when no images attached.
             // Each chip shows a 32pt thumbnail + filename suffix + ×
@@ -1111,6 +1136,46 @@ struct CodePane: View {
     /// the SSE plan_mode event will reconcile if the server refused
     /// (e.g. mid-turn). On error we revert and surface a status
     /// message so the user sees the toggle didn't take.
+    /// Ask kincode what it could take back. Called after every turn:
+    /// the answer changes only when a turn ends.
+    private func refreshUndo() {
+        Task {
+            guard let r = try? await KinClawAPIClient.kincode.peekUndo() else {
+                await MainActor.run { undoableFiles = [] }
+                return
+            }
+            await MainActor.run {
+                undoableFiles = r.available ? r.files : []
+                undoablePrompt = r.prompt
+            }
+        }
+    }
+
+    /// Put back the files the last turn changed, and say what happened
+    /// in the transcript — an undo you cannot see is indistinguishable
+    /// from a button that did nothing.
+    private func undoLastTurn() {
+        Task {
+            do {
+                let restored = try await KinClawAPIClient.kincode.undoLastTurn()
+                await MainActor.run {
+                    let names = restored.map { URL(fileURLWithPath: $0).lastPathComponent }
+                    messages.append(CodeMessage(
+                        role: .system,
+                        text: "↩︎ 撤销了这轮的改动，恢复了 \(restored.count) 个文件："
+                            + names.joined(separator: "、")))
+                    undoableFiles = []
+                    undoablePrompt = ""
+                    sidebarRefresh += 1
+                }
+            } catch {
+                await MainActor.run {
+                    appendError("撤销失败：\(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
     /// Answer a parked call. Optimistic: the card goes away now, and a
     /// 404 means it already resolved (the turn was cancelled).
     private func respondPermission(_ req: PermissionRequest, decision: String) {
@@ -1291,6 +1356,7 @@ struct CodePane: View {
             isStreaming = false
             streamingMessageID = nil
             sidebarRefresh += 1
+            refreshUndo()
             // Persist after each completed turn — survives app
             // quit, hotkey-driven panel close, repo switch.
             saveSession()

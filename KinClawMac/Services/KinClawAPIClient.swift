@@ -548,6 +548,38 @@ extension KinClawAPIClient {
         baseURL: URL(string: "http://localhost:5002")!
     )
 
+    /// `GET /api/undo` — what taking back the last turn would restore,
+    /// without doing it, so the button can be labelled and disabled
+    /// honestly.
+    func peekUndo() async throws -> (prompt: String, files: [String], available: Bool) {
+        let url = baseURL.appendingPathComponent("api/undo")
+        let (data, response) = try await sessionData(from: url)
+        try checkOK(response as? HTTPURLResponse, body: data)
+        struct Reply: Decodable {
+            let available: Bool
+            let prompt: String?
+            let files: [String]?
+        }
+        let r = try JSONDecoder().decode(Reply.self, from: data)
+        return (r.prompt ?? "", r.files ?? [], r.available)
+    }
+
+    /// `POST /api/undo` — put back the files the last turn changed.
+    /// Returns the paths restored.
+    func undoLastTurn() async throws -> [String] {
+        let url = baseURL.appendingPathComponent("api/undo")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        let (data, response) = try await sessionDataFor(request: request)
+        try checkOK(response as? HTTPURLResponse, body: data)
+        struct Reply: Decodable { let restored: [String]?; let error: String? }
+        let r = try JSONDecoder().decode(Reply.self, from: data)
+        if let e = r.error, (r.restored ?? []).isEmpty {
+            throw KinClawAPIError.server(status: 409, body: e)
+        }
+        return r.restored ?? []
+    }
+
     /// `POST /api/repo {"path": "..."}` — chdir the kincode subprocess
     /// into the user's chosen repo. All subsequent bash / file_* tool
     /// calls operate relative to this dir.
