@@ -3779,7 +3779,7 @@ struct SpotlightContentView: View {
             // is unreachable but kept exhaustive for the compiler.
             break
         case .userMessage, .turnDone, .planMode,
-             .permissionRequest, .permissionResolved, .permissionMode,
+             .permissionRequest, .permissionResolved, .permissionMode, .verified,
              .usage, .compacted,
              .question, .questionResolved, .workspace, .none:
             // plan_mode / permission / question / usage / compacted /

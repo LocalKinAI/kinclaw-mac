@@ -87,6 +87,9 @@ extension KinClawEvent {
         /// Someone answered (or the wait was cancelled) — drop the card.
         case permissionResolved = "permission_resolved"
         case permissionMode     = "permission_mode"
+        /// kincode built the project after an edit. `summary` is
+        /// "ok" or "failed"; `output` carries the compiler's complaint.
+        case verified           = "verified"
         /// Token accounting after each model call.
         case usage
         /// Older turns were folded into a summary.

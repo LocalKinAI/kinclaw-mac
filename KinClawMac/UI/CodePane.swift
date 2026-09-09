@@ -630,6 +630,20 @@ struct CodePane: View {
                     .textSelection(.enabled)
             }
             .padding(.leading, 28)
+        case .system:
+            let failed = msg.text.hasPrefix("❌")
+            HStack(alignment: .top, spacing: 6) {
+                Image(systemName: failed ? "hammer.circle" : "checkmark.circle")
+                    .font(.system(size: 11))
+                    .foregroundColor(failed ? .orange : .green.opacity(0.8))
+                Text(msg.text)
+                    .font(.system(size: 11, design: failed ? .monospaced : .default))
+                    .foregroundColor(failed ? .orange : .secondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+            .padding(.leading, 28)
         case .error:
             HStack(alignment: .top, spacing: 6) {
                 Image(systemName: "exclamationmark.octagon")
@@ -1216,6 +1230,19 @@ struct CodePane: View {
         case .permissionMode:
             if let m = event.name, !m.isEmpty { permissionMode = m }
             return
+        case .verified:
+            // The build ran after an edit. A pass is a one-line note; a
+            // failure gets the compiler's text, because that is the
+            // moment the user most wants to see what happened rather
+            // than trust that the agent noticed.
+            let ok = event.summary == "ok"
+            let checker = event.name ?? "build"
+            var text = ok ? "✅ \(checker) 通过" : "❌ \(checker) 没过"
+            if !ok, let out = event.output, !out.isEmpty {
+                text += "\n```\n" + out + "\n```"
+            }
+            messages.append(CodeMessage(role: .system, text: text))
+            return
         case .toolResult:
             // Fold tool_result into the matching tool_call row's
             // toolOutput / toolError instead of appending a separate
@@ -1409,6 +1436,10 @@ struct CodePane: View {
         case .toolCall:   return .toolCall
         case .toolResult: return .toolResult
         case .error:      return .error
+        // Sessions on disk have a fixed set of roles, and a build
+        // result is about a moment rather than the conversation, so it
+        // saves as a tool result instead of growing the stored shape.
+        case .system: return .toolResult
         }
     }
 
@@ -1655,6 +1686,9 @@ struct CodeMessage: Identifiable {
         case toolCall
         case toolResult
         case error
+        /// The harness speaking rather than the model — right now, the
+        /// build it ran after an edit.
+        case system
     }
 
     let id: UUID

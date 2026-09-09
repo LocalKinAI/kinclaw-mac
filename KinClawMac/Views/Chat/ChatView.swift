@@ -597,7 +597,7 @@ struct ChatView: View {
         case .hello, .userMessage, .turnDone,
              .screenFrame, .recordDone, .soulSwitched, .brainSwitched,
              .sessionReset, .spawnDone, .planMode,
-             .permissionRequest, .permissionResolved, .permissionMode,
+             .permissionRequest, .permissionResolved, .permissionMode, .verified,
              .usage, .compacted,
              .question, .questionResolved, .workspace, .none:
             // brain_switched / session_reset / spawn_done / permission
