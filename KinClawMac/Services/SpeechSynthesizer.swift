@@ -7,10 +7,13 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
     private var audioPlayer: AVAudioPlayer?
     private var completion: (() -> Void)?
     /// Remaining clips for a multi-language reply, played back to back.
-    /// Players rather than bytes: each is decoded and `prepareToPlay`ed
-    /// the moment its audio arrives, so the handoff between two
-    /// sentences is a `play()` call, not a decode.
-    private var playQueue: [AVAudioPlayer] = []
+    /// Decoded and `prepareToPlay`ed the moment the audio arrives, so
+    /// the handoff between two sentences is a `play()` call rather than
+    /// a decode — and paired with the bytes they came from, because the
+    /// lip sync needs the waveform at the moment playback starts, not
+    /// at the moment synthesis finished. A clip can wait seconds in
+    /// this queue behind the one before it.
+    private var playQueue: [(player: AVAudioPlayer, clip: Data)] = []
     @Published var isSpeaking = false
 
     // MARK: Streaming state
@@ -38,6 +41,16 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
     /// reply that replaced it — which is how two answers ended up
     /// interleaved on the speaker.
     private var generation = 0
+
+    /// Handed every clip just before it plays, for anything that needs
+    /// the audio itself rather than the fact of it — the digital
+    /// human's lip sync reads the waveform to know what the mouth is
+    /// doing. Called on the main actor with the same bytes that go to
+    /// the speaker, at the same moment, so the two stay in step.
+    var onClip: ((Data) -> Void)?
+    /// Called when speech is cut off, so a mouth does not finish a
+    /// sentence nobody is hearing.
+    var onStopped: (() -> Void)?
 
     override init() {
         super.init()
@@ -109,7 +122,7 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
                 if let data = await self.synthesizeSegment(seg, isLocal: isLocal, hostname: hostname),
                    self.generation == gen,
                    let player = self.preparedPlayer(data) {
-                    self.playQueue.append(player)
+                    self.playQueue.append((player, data))
                     if self.audioPlayer?.isPlaying != true {
                         _ = self.playNextClip()
                     }
@@ -211,9 +224,12 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         let ordered = clips.compactMap { $0 }
         guard ordered.count == segments.count else { return false }
 
-        let players = ordered.compactMap { preparedPlayer($0) }
-        guard players.count == ordered.count else { return false }
-        playQueue = players
+        let prepared = ordered.compactMap { data -> (AVAudioPlayer, Data)? in
+            guard let p = preparedPlayer(data) else { return nil }
+            return (p, data)
+        }
+        guard prepared.count == ordered.count else { return false }
+        playQueue = prepared
         return playNextClip()
     }
 
@@ -353,9 +369,11 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
     @discardableResult
     private func playNextClip() -> Bool {
         guard !playQueue.isEmpty else { return false }
-        let player = playQueue.removeFirst()
+        let (player, clip) = playQueue.removeFirst()
         player.delegate = self
         audioPlayer = player
+        // The mouth is told at the same instant the speaker starts.
+        onClip?(clip)
         guard player.play() else {
             playQueue.removeAll()
             return false
@@ -390,6 +408,7 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         audioPlayer?.stop()
         audioPlayer = nil
         playQueue.removeAll()   // else a barged-in reply resumes mid-sentence
+        onStopped?()
         isStreamingReply = false
         pendingSentences.removeAll()
         isSpeaking = false

@@ -49,6 +49,15 @@ struct CompanionView: View {
     let onFetchArt: () -> Void
     /// Speak the sample line in the voice just chosen.
     let onPreviewVoice: () -> Void
+    /// Where the avatar's local server is serving from, or nil when the
+    /// digital human is off or unavailable — then it is a picture and a
+    /// halo, as before.
+    let avatarBase: URL?
+    /// Turn the digital human on or off, and pick who it is.
+    let onAvatarToggle: (Bool) -> Void
+    let onAvatarCharacter: (AvatarStage.Character) -> Void
+    /// Handed the web view once it exists, so audio can reach it.
+    let onAvatarReady: (AvatarWebView) -> Void
 
     // The voice is a global preference, not a companion one: the panel's
     // voice mode uses the same speaker. It is offered here because this
@@ -107,15 +116,39 @@ struct CompanionView: View {
             LinearGradient(colors: [.black.opacity(0.15), .black.opacity(0.55)],
                            startPoint: .top, endPoint: .bottom)
                 .ignoresSafeArea()
+
+            // The living face, between the background and the controls.
+            // Its own background is chroma-keyed away, so what shows
+            // behind it is the picture that follows the conversation.
+            if let base = avatarBase {
+                AvatarView(base: base, onReady: onAvatarReady)
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
             VStack {
                 topBar
                 Spacer()
-                halo
-                    .contentShape(Circle().scale(1.3))
-                    .onTapGesture {
-                        if isSpeaking || isThinking { onInterrupt() }
-                    }
-                    .help(isSpeaking ? "打断" : "")
+                // With a face on screen the halo becomes a second
+                // thing claiming to be the agent. Tap-to-interrupt
+                // moves onto the face itself, which is where anyone
+                // would reach for it anyway.
+                if avatarBase == nil {
+                    halo
+                        .contentShape(Circle().scale(1.3))
+                        .onTapGesture {
+                            if isSpeaking || isThinking { onInterrupt() }
+                        }
+                        .help(isSpeaking ? "打断" : "")
+                } else {
+                    Color.clear
+                        .frame(height: 200)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            if isSpeaking || isThinking { onInterrupt() }
+                        }
+                        .help(isSpeaking ? "打断" : "")
+                }
                 Text(stateLabel)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(problem == nil ? .white.opacity(0.75) : .orange)
@@ -230,6 +263,7 @@ struct CompanionView: View {
         HStack(spacing: 8) {
             voiceMenu
             themeMenu
+            avatarMenu
             Spacer()
             Button(action: onExit) {
                 Image(systemName: "xmark")
@@ -291,6 +325,51 @@ struct CompanionView: View {
     /// Which set of pictures is behind you: the default folder or any
     /// `companion-<name>` sibling. Switching re-reads the folder and
     /// swaps the picture on the spot.
+    /// The digital human, when the avatar service is on disk. Off by
+    /// default: it is a web view running a WASM model, which is a lot
+    /// to start for someone who wanted a picture and a voice.
+    @ViewBuilder
+    private var avatarMenu: some View {
+        if AvatarStage.source != nil {
+            Menu {
+                Toggle(isOn: Binding(
+                    get: { avatarBase != nil },
+                    set: { onAvatarToggle($0) }
+                )) {
+                    Label("会说话的人", systemImage: "person.wave.2")
+                }
+                if avatarBase != nil {
+                    Divider()
+                    ForEach(AvatarStage.characters) { c in
+                        Button {
+                            onAvatarCharacter(c)
+                        } label: {
+                            if c.dir == AvatarStage.chosen.dir {
+                                Label(c.name, systemImage: "checkmark")
+                            } else {
+                                Text(c.name)
+                            }
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: avatarBase != nil ? "person.wave.2.fill" : "person.wave.2")
+                    Text(avatarBase != nil ? AvatarStage.chosen.name : "数字人")
+                }
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(avatarBase != nil ? .cyan.opacity(0.9) : .white.opacity(0.6))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Capsule().fill(.black.opacity(0.35)))
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("嘴型跟着 Kokoro 的声音动。背景还是上面那套，人站在前面。")
+        }
+    }
+
     private var themeMenu: some View {
         Menu {
             ForEach(CompanionArt.themes()) { th in

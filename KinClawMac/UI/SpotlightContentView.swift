@@ -146,6 +146,12 @@ struct SpotlightContentView: View {
     @State private var voiceApprovalRetried = false
     /// What the agent is doing right now, for the line under the halo.
     @State private var companionActivity: String?
+    /// The digital human: a local server for its web assets, and the
+    /// view once it exists. nil when the feature is off or the avatar
+    /// service is not checked out — then companion mode is the picture
+    /// and the halo it has always been.
+    @StateObject private var avatarServer = AvatarServerBox()
+    @State private var avatarWeb: AvatarWebView?
     /// The kernel's approval gate: "ask" or "auto". Comes from the soul
     /// at load and from /api/state after; the footer picker changes it.
     @State private var coworkPermissionMode = "ask"
@@ -355,7 +361,29 @@ struct SpotlightContentView: View {
                               },
                               onExit: { exitCompanionMode() },
                               onFetchArt: { showingArtPicker = true },
-                              onPreviewVoice: { previewVoice() })
+                              onPreviewVoice: { previewVoice() },
+                              avatarBase: avatarServer.base,
+                              onAvatarToggle: { on in
+                                  UserDefaults.standard.set(on, forKey: AvatarStage.enabledKey)
+                                  if on {
+                                      avatarServer.startIfWanted()
+                                  } else {
+                                      speaker.onClip = nil
+                                      speaker.onStopped = nil
+                                      avatarWeb = nil
+                                      avatarServer.stop()
+                                  }
+                              },
+                              onAvatarCharacter: { c in
+                                  avatarServer.switchCharacter(c)
+                              },
+                              onAvatarReady: { web in
+                                  avatarWeb = web
+                                  // Every clip drives the mouth; a
+                                  // barge-in stops it mid-sentence.
+                                  speaker.onClip = { [weak web] data in web?.speak(data) }
+                                  speaker.onStopped = { [weak web] in web?.stopSpeaking() }
+                              })
                     .transition(.opacity)
                     .popover(isPresented: $showingArtPicker, arrowEdge: .top) {
                         CompanionArtPicker(art: companionArt) { showingArtPicker = false }
@@ -437,6 +465,7 @@ struct SpotlightContentView: View {
         companionArt.reload()
         companionMood = nil
         companionSubject = ""
+        avatarServer.startIfWanted()
         withAnimation(.easeOut(duration: 0.25)) { companionMode = true }
         (NSApp.delegate as? AppDelegate)?.spotlightWindow.enterCompanion()
         extendWakeSession()
@@ -454,6 +483,13 @@ struct SpotlightContentView: View {
         (NSApp.delegate as? AppDelegate)?.spotlightWindow.exitCompanion()
         voiceMode = false
         companionActivity = nil
+        // The face goes away with the mode; leaving a web view and a
+        // listening socket alive behind a closed panel is a leak nobody
+        // would ever see.
+        speaker.onClip = nil
+        speaker.onStopped = nil
+        avatarWeb = nil
+        avatarServer.stop()
         endVoiceApproval()
         if recorder.isRecording { recorder.cancelRecording() }
         speaker.stop()
