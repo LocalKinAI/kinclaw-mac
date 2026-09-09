@@ -948,28 +948,6 @@ struct SpotlightContentView: View {
                     ContextMeterView(used: contextUsed, total: contextLength)
                 }
 
-                // What the agent is allowed to do, named and clickable.
-                // Plan mode and the approval gate are one control here:
-                // they are the same question — how much rope — and an
-                // unlabelled clipboard icon answered it for neither.
-                PermissionModePicker(
-                    mode: GateMode.from(permissionMode: coworkPermissionMode,
-                                        planMode: coworkPlanMode)
-                ) { picked in
-                    applyGateMode(picked)
-                }
-
-                // ⇧⌘P still toggles plan mode, the shortcut people have
-                // in their fingers.
-                Button("") {
-                    applyGateMode(coworkPlanMode ? .ask : .plan)
-                }
-                .buttonStyle(.plain)
-                .frame(width: 0, height: 0)
-                .opacity(0)
-                .keyboardShortcut("p", modifiers: [.command, .shift])
-                .accessibilityHidden(true)
-
                 // Folder pane toggle (⌘⇧L).
                 Button {
                     toggleWorkspaceSidebar()
@@ -2246,9 +2224,33 @@ struct SpotlightContentView: View {
             .disabled(selectedAgent == nil)
         }
 
-        // Composer footer — the model picker sits bottom-right next to
-        // send, where Claude Desktop keeps it.
+        // Composer footer — what the agent is allowed to do on the
+        // left, the model picker and send on the right. Claude Code
+        // puts the mode in the composer's bottom-left corner and the
+        // reason is good: it is the one thing you want to check before
+        // pressing return, so it belongs where the sentence you just
+        // typed ends, not in a toolbar at the other end of the window.
         HStack(spacing: 10) {
+            if mode == .cowork {
+                PermissionModePicker(
+                    mode: GateMode.from(permissionMode: coworkPermissionMode,
+                                        planMode: coworkPlanMode)
+                ) { picked in
+                    applyGateMode(picked)
+                }
+
+                // ⇧⌘P still toggles plan mode, the shortcut people have
+                // in their fingers.
+                Button("") {
+                    applyGateMode(coworkPlanMode ? .ask : .plan)
+                }
+                .buttonStyle(.plain)
+                .frame(width: 0, height: 0)
+                .opacity(0)
+                .keyboardShortcut("p", modifiers: [.command, .shift])
+                .accessibilityHidden(true)
+            }
+
             Spacer()
             if mode == .cowork {
                 coworkBrainMenu
