@@ -113,6 +113,13 @@ struct SpotlightContentView: View {
     @StateObject private var bargeIn = BargeInMonitor()
     /// Companion mode: the panel becomes a picture and a voice.
     @State private var companionMode = false
+    /// Whoever was selected before companion mode swapped in its own
+    /// soul; put back on exit.
+    @State private var companionRestoreAgent: Agent?
+    /// Sentences handed to the speaker in the current streamed reply.
+    /// Zero means the first chunk is still being assembled, and that
+    /// one gets cut early.
+    @State private var ttsChunks = 0
     @State private var showingArtPicker = false
     @StateObject private var companionArt = CompanionArt()
     /// Left folder pane in Cowork (⌘⇧L). Persisted; on by default.
@@ -291,7 +298,8 @@ struct SpotlightContentView: View {
                               caption: companionCaption,
                               problem: companionProblem,
                               onExit: { exitCompanionMode() },
-                              onFetchArt: { showingArtPicker = true })
+                              onFetchArt: { showingArtPicker = true },
+                              onPreviewVoice: { previewVoice() })
                     .transition(.opacity)
                     .popover(isPresented: $showingArtPicker, arrowEdge: .top) {
                         CompanionArtPicker(art: companionArt) { showingArtPicker = false }
@@ -339,11 +347,24 @@ struct SpotlightContentView: View {
     /// leaving the user to find the mic button in a view that has none.
     private func enterCompanionMode() {
         // Companion mode is a conversation, so it needs someone to talk
-        // to. Reached from the menubar or from Code — which has no agent
-        // picker and therefore no selected agent — it used to open on a
-        // face that answered "先在面板里选一个 agent", inside a view with
-        // no way to select one. Pick the Cowork default instead.
-        if selectedAgent == nil || selectedAgent?.isLocal != true {
+        // to — and the right someone. The kernel's companion soul is a
+        // different animal from Pilot: a twentieth of the prompt (first
+        // word in ~2s from cold instead of ~20s), thinking switched off,
+        // a spoken register, and no skill that could raise an approval
+        // card this view has nowhere to show. Swap to it when the kernel
+        // has one and put the previous agent back on exit.
+        //
+        // Without it, fall back to the Cowork default: reached from the
+        // menubar or from Code — which has no agent picker — this used
+        // to open on a face that answered "先在面板里选一个 agent",
+        // inside a view with no way to select one.
+        if let companion = kinClawSouls.first(where: { $0.name == "KinClaw Companion" }) {
+            if selectedAgent?.slug != companion.slug {
+                companionRestoreAgent = selectedAgent
+                mode = .cowork
+                selectedAgent = companion
+            }
+        } else if selectedAgent == nil || selectedAgent?.isLocal != true {
             if let soul = pickDefaultAgent(for: .cowork) {
                 mode = .cowork
                 selectedAgent = soul
@@ -354,6 +375,10 @@ struct SpotlightContentView: View {
         (NSApp.delegate as? AppDelegate)?.spotlightWindow.enterCompanion()
         extendWakeSession()
         if !voiceMode { voiceMode = true }
+        // Voice mode's own onChange prewarms too, but only on the
+        // transition; entering with it already on still wants the
+        // first sentence to come out at full speed.
+        speaker.prewarm(hostname: hostname)
         if companionArt.isEmpty { showingArtPicker = true }
     }
 
@@ -364,6 +389,18 @@ struct SpotlightContentView: View {
         voiceMode = false
         if recorder.isRecording { recorder.cancelRecording() }
         speaker.stop()
+        if let back = companionRestoreAgent {
+            companionRestoreAgent = nil
+            selectedAgent = back
+        }
+    }
+
+    /// Say the sample line in whatever voice and speed are now set, so
+    /// picking a voice is done by ear rather than by name.
+    private func previewVoice() {
+        let pref = UserDefaults.standard.string(forKey: "kinclaw.voice.tts.speaker") ?? "auto"
+        let lang = (pref == "auto" || pref.isEmpty) ? "zh" : TextSegmenter.language(forVoice: pref)
+        speaker.speak(KokoroVoice.sample(for: lang), hostname: hostname) {}
     }
 
     /// Main column. Layout hierarchy (top → bottom):
@@ -557,6 +594,7 @@ struct SpotlightContentView: View {
             if on {
                 // Hearing the reply is half of a conversation.
                 ttsEnabled = true
+                speaker.prewarm(hostname: hostname)
                 // Entering voice mode starts *armed*, not conversing: the
                 // wake word is what opens the session. Clearing here matters
                 // because the expiry survives leaving voice mode otherwise,
@@ -2261,7 +2299,10 @@ struct SpotlightContentView: View {
             } else {
                 speaker.stop()
             }
-            resumeListeningIfConversing(extendSession: false)
+            // Hot: you are already mid-sentence. The usual beat of
+            // silence and 0.5s of room calibration would cost you the
+            // first word and measure your voice as the floor.
+            resumeListeningIfConversing(extendSession: false, hot: true)
         }
         bargeIn.start()
     }
@@ -2281,12 +2322,19 @@ struct SpotlightContentView: View {
             speaker.beginStream(hostname: hostname) {
                 resumeListeningIfConversing()
             }
+            ttsChunks = 0
         }
         ttsPending += delta
         // An unbalanced fence means a code block is open: hold everything
         // until it closes, then drop the block and speak what follows.
         if ttsPending.components(separatedBy: "```").count % 2 == 0 { return }
-        while let s = Self.takeSentence(&ttsPending) {
+        // The first chunk is released at the first comma past a few
+        // characters instead of waiting for a full stop: synthesis costs
+        // ~0.5s whatever the length, so "好呀，" is on the speaker while
+        // the rest of the sentence is still being written. After that,
+        // whole sentences — the joins sound better.
+        while let s = Self.takeSentence(&ttsPending, eagerAfter: ttsChunks == 0 ? 8 : nil) {
+            ttsChunks += 1
             speaker.stream(Self.dropFencedCode(s))
         }
     }
@@ -2321,13 +2369,20 @@ struct SpotlightContentView: View {
     /// Very long runs without punctuation (a URL dump, a code block) are
     /// released at a comma or after 160 characters, because the alternative
     /// is silence until the model happens to write a period.
-    static func takeSentence(_ buffer: inout String) -> String? {
+    ///
+    /// `eagerAfter`: also cut at the first soft boundary (comma, colon)
+    /// at or past this many characters — for the opening chunk of a
+    /// reply, where getting sound out matters more than a clean join.
+    static func takeSentence(_ buffer: inout String, eagerAfter: Int? = nil) -> String? {
         let hard: Set<Character> = ["。", "！", "？", "；", "\n", "…"]
         let soft: Set<Character> = ["，", "、", ",", ":", "：", ";"]
         let chars = Array(buffer)
         var softIndex: Int? = nil
         for (i, c) in chars.enumerated() {
             if hard.contains(c) {
+                return cut(&buffer, upTo: i + 1)
+            }
+            if let eager = eagerAfter, soft.contains(c), i + 1 >= eager {
                 return cut(&buffer, upTo: i + 1)
             }
             if c == "." || c == "!" || c == "?" {
@@ -2850,6 +2905,9 @@ struct SpotlightContentView: View {
     /// survives a relaunch + restoration on next mode switch.
     private func persistAgentForCurrentMode(slug: String?) {
         guard let s = slug else { return }
+        // The companion soul is chosen by the face, not by the user, and
+        // must not become the Cowork default for the next launch.
+        guard !companionMode else { return }
         switch mode {
         case .chat:   chatLastAgentSlug = s
         case .cowork: coworkLastSoulSlug = s
@@ -2936,17 +2994,21 @@ struct SpotlightContentView: View {
         wakeSessionExpiry = nil
     }
 
-    private func resumeListeningIfConversing(extendSession: Bool = true) {
+    private func resumeListeningIfConversing(extendSession: Bool = true, hot: Bool = false) {
         // A finished reply keeps the conversation alive; a discarded utterance
         // must not, or background chatter would hold the session open forever
         // and the wake word would stop meaning anything.
         if extendSession { extendWakeSession() }
         guard voiceMode, !isStreaming, !recorder.isRecording else { return }
         // A beat of silence between the reply ending and the mic opening, so the
-        // tail of the spoken audio never bleeds into the next recording.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+        // tail of the spoken audio never bleeds into the next recording. The
+        // clips are trimmed to ~160ms of tail now, so the beat is short. None
+        // at all on a barge-in: the speaker is already stopped and the user
+        // is already talking.
+        let beat = hot ? 0 : 0.3
+        DispatchQueue.main.asyncAfter(deadline: .now() + beat) {
             guard voiceMode, !isStreaming, !recorder.isRecording else { return }
-            recorder.startRecording(hostname: hostname)
+            recorder.startRecording(hostname: hostname, hot: hot)
         }
     }
 

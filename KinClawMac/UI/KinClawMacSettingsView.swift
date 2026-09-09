@@ -690,12 +690,12 @@ private struct VoiceSettingsTab: View {
                 SettingsRow(label: "Voice") {
                     Picker("", selection: $speaker) {
                         Text("Auto (zh: xiaoxiao · en: af_bella)").tag("auto")
-                        Text("zf_xiaoxiao (中文女声)").tag("zf_xiaoxiao")
-                        Text("zf_xiaobei (中文女声)").tag("zf_xiaobei")
-                        Text("zm_yunjian (中文男声)").tag("zm_yunjian")
-                        Text("af_bella (English F · default)").tag("af_bella")
-                        Text("af_heart (English F)").tag("af_heart")
-                        Text("am_michael (English M)").tag("am_michael")
+                        Section("中文") {
+                            ForEach(KokoroVoice.chinese) { v in Text("\(v.id) · \(v.label)").tag(v.id) }
+                        }
+                        Section("English") {
+                            ForEach(KokoroVoice.english) { v in Text("\(v.id) · \(v.label)").tag(v.id) }
+                        }
                     }
                     .labelsHidden()
                     .frame(maxWidth: 280)
@@ -709,6 +709,7 @@ private struct VoiceSettingsTab: View {
                             .foregroundColor(.secondary)
                     }
                 }
+                SettingsCaption("Companion mode has the same voice and speed in its top-left menu, and speaks a sample line on every change.")
             }
         }
     }

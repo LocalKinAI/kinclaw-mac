@@ -26,6 +26,14 @@ struct CompanionView: View {
 
     let onExit: () -> Void
     let onFetchArt: () -> Void
+    /// Speak the sample line in the voice just chosen.
+    let onPreviewVoice: () -> Void
+
+    // The voice is a global preference, not a companion one: the panel's
+    // voice mode uses the same speaker. It is offered here because this
+    // is the one view where you are listening to it.
+    @AppStorage("kinclaw.voice.tts.speaker") private var voice = "auto"
+    @AppStorage("kinclaw.voice.tts.speed") private var speed: Double = 1.0
 
     @State private var current: URL?
     @State private var previous: URL?
@@ -148,6 +156,7 @@ struct CompanionView: View {
 
     private var topBar: some View {
         HStack {
+            voiceMenu
             Spacer()
             Button(action: onExit) {
                 Image(systemName: "xmark")
@@ -161,6 +170,55 @@ struct CompanionView: View {
             .help("离开陪伴模式 (Esc)")
         }
         .padding(12)
+    }
+
+    /// Pick a voice by ear: every change speaks the sample line, so
+    /// finding the one you like is a few clicks, not a trip to Settings
+    /// and back for each candidate.
+    private var voiceMenu: some View {
+        Menu {
+            Picker("声音", selection: $voice) {
+                Text("自动（中文晓晓 · 英文 Bella）").tag("auto")
+                Section("中文") {
+                    ForEach(KokoroVoice.chinese) { v in Text(v.label).tag(v.id) }
+                }
+                Section("English") {
+                    ForEach(KokoroVoice.english) { v in Text(v.label).tag(v.id) }
+                }
+            }
+            .pickerStyle(.inline)
+            Divider()
+            Picker("语速", selection: $speed) {
+                ForEach(KokoroVoice.speeds, id: \.self) { sp in
+                    Text(String(format: "%.1fx", sp)).tag(sp)
+                }
+            }
+            .pickerStyle(.inline)
+            Divider()
+            Button("再听一遍") { onPreviewVoice() }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "waveform")
+                Text(voiceLabel)
+            }
+            .font(.system(size: 11, weight: .medium))
+            .foregroundColor(.white.opacity(0.75))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Capsule().fill(.black.opacity(0.35)))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("换个声音 · 每次换都会念一句给你听")
+        .onChange(of: voice) { _, _ in onPreviewVoice() }
+        .onChange(of: speed) { _, _ in onPreviewVoice() }
+    }
+
+    private var voiceLabel: String {
+        let name = KokoroVoice.all.first { $0.id == voice }?.label ?? "自动"
+        let rate = abs(speed - 1.0) < 0.01 ? "" : String(format: " · %.1fx", speed)
+        return name + rate
     }
 
     /// The one moving thing: a ring that breathes on idle and tracks

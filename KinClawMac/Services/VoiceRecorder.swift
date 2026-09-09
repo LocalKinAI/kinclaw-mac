@@ -19,6 +19,13 @@ class VoiceRecorder: NSObject, ObservableObject {
     private var maxTimer: Timer?
     private var storedHostname: String = ""
     private var hasSpeechStarted = false
+    /// A hot start is one where the user is already talking — they
+    /// interrupted the agent. There is nothing to calibrate against
+    /// and no question of whether there is speech.
+    private var hotStart = false
+    /// Room floor from the last calibrated recording, for a hot start
+    /// to reuse: the room has not changed in the seconds since.
+    private var lastFloor: Float?
 
     var onTranscript: ((String) -> Void)?
     var onNoSpeech: (() -> Void)?  // Called when no speech detected, for voice mode loop
@@ -38,11 +45,15 @@ class VoiceRecorder: NSObject, ObservableObject {
     var onSilentRecording: (() -> Void)?
 
     /// Start recording audio
-    func startRecording(hostname: String = "") {
+    /// `hot`: the user is mid-sentence already (a barge-in). Skips the
+    /// 0.5s calibration, whose sample would be their voice, and treats
+    /// the recording as speech from the first tick.
+    func startRecording(hostname: String = "", hot: Bool = false) {
         error = nil
         transcript = ""
         storedHostname = hostname
-        hasSpeechStarted = false
+        hotStart = hot
+        hasSpeechStarted = hot
 
         #if os(iOS)
         AVAudioSession.sharedInstance().requestRecordPermission { [weak self] granted in
@@ -228,7 +239,7 @@ class VoiceRecorder: NSObject, ObservableObject {
         //      stray peak can't undo half a second of accumulated silence.
         var calibration: [Float] = []
         var speechThreshold: Float = -35
-        let calibrationTicks = 5
+        let calibrationTicks = hotStart ? 0 : 5
 
         // Settings → Voice exposes this as a slider. It used to write to
         // `kinclaw.voice.silenceThresholdDB`, which nothing ever read — the
@@ -251,6 +262,11 @@ class VoiceRecorder: NSObject, ObservableObject {
         // -30.5 — under the quiet end of speech, still clear of the peaks.
         let marginPref = UserDefaults.standard.double(forKey: "kinclaw.voice.silenceMarginDB")
         let margin = Float(marginPref > 0 ? marginPref : 5)
+        // No calibration on a hot start: the floor is whatever the last
+        // recording measured, or the typical room if there was none.
+        if hotStart {
+            speechThreshold = min(-30, max(-45, (lastFloor ?? -36) + margin))
+        }
 
         // 3 ticks = 300ms above the threshold before this counts as speech.
         // Short enough not to clip a real word, long enough that a keystroke
@@ -302,6 +318,7 @@ class VoiceRecorder: NSObject, ObservableObject {
                     // of "deaf for the rest of the recording" — measured
                     // speech runs down to -30, so the line must never sit
                     // above it.
+                    self.lastFloor = floor
                     speechThreshold = min(-30, max(-45, floor + margin))
                 }
                 return

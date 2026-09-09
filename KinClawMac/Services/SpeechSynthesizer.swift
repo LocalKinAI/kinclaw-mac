@@ -7,7 +7,10 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
     private var audioPlayer: AVAudioPlayer?
     private var completion: (() -> Void)?
     /// Remaining clips for a multi-language reply, played back to back.
-    private var playQueue: [Data] = []
+    /// Players rather than bytes: each is decoded and `prepareToPlay`ed
+    /// the moment its audio arrives, so the handoff between two
+    /// sentences is a `play()` call, not a decode.
+    private var playQueue: [AVAudioPlayer] = []
     @Published var isSpeaking = false
 
     // MARK: Streaming state
@@ -92,8 +95,9 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
                 // A sentence dropped mid-flight (the user barged in, or the
                 // turn was cancelled) must not resurface as audio.
                 guard self.isSpeaking else { return }
-                if let data = await self.synthesizeSegment(seg, isLocal: isLocal, hostname: hostname) {
-                    self.playQueue.append(data)
+                if let data = await self.synthesizeSegment(seg, isLocal: isLocal, hostname: hostname),
+                   let player = self.preparedPlayer(data) {
+                    self.playQueue.append(player)
                     if self.audioPlayer?.isPlaying != true {
                         _ = self.playNextClip()
                     }
@@ -186,8 +190,39 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         let ordered = clips.compactMap { $0 }
         guard ordered.count == segments.count else { return false }
 
-        playQueue = ordered
+        let players = ordered.compactMap { preparedPlayer($0) }
+        guard players.count == ordered.count else { return false }
+        playQueue = players
         return playNextClip()
+    }
+
+    /// Decode one clip and get it ready to start on the next `play()`.
+    private func preparedPlayer(_ data: Data) -> AVAudioPlayer? {
+        guard let player = try? AVAudioPlayer(data: data) else { return nil }
+        player.prepareToPlay()
+        return player
+    }
+
+    /// Warm the synthesis path before the first reply needs it.
+    ///
+    /// Kokoro loads each language's G2P and each voice's embedding on
+    /// first use: measured here, the first Chinese sentence after idle
+    /// took 3.4s and the first English one 2.4s, against 0.5s once warm.
+    /// In a conversation that is the opening line arriving late, every
+    /// time. Two tiny throwaway requests on entering voice mode move
+    /// that cost to before anyone is waiting on it.
+    func prewarm(hostname: String) {
+        let isLocal = hostname == "localhost-kinclaw" || hostname.hasPrefix("localhost")
+        guard isLocal, !isSpeaking else { return }
+        let pref = UserDefaults.standard.string(forKey: "kinclaw.voice.tts.speaker") ?? "auto"
+        let preferred = (pref == "auto" || pref.isEmpty) ? "" : pref
+        let zh = TextSegmenter.splitByLang("嗯。", preferredVoice: preferred)
+        let en = TextSegmenter.splitByLang("Hi.", preferredVoice: preferred)
+        for seg in zh + en {
+            Task.detached(priority: .utility) {
+                _ = await self.synthesizeSegment(seg, isLocal: true, hostname: hostname)
+            }
+        }
     }
 
     /// One segment → one WAV. Returns nil on any failure so the caller can
@@ -246,6 +281,7 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
                 let text: String
                 let speaker: String
                 let language: String
+                let speed: Double
             }
             struct GatewayTTSRequest: Codable {
                 let text: String
@@ -266,7 +302,8 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
                 request.httpBody = try JSONEncoder().encode(KokoroRequest(
                     text: segment.text,
                     speaker: voice,
-                    language: TextSegmenter.language(forVoice: voice)
+                    language: TextSegmenter.language(forVoice: voice),
+                    speed: speed > 0 ? speed : 1.0
                 ))
             } else {
                 request.httpBody = try JSONEncoder().encode(GatewayTTSRequest(
@@ -282,7 +319,9 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
                   data.count > 44 else {  // WAV header is 44 bytes minimum
                 return nil
             }
-            return data
+            // Kokoro pads ~0.4s in front and ~0.7s behind every clip.
+            // Between streamed sentences that is a hole, not a pause.
+            return WAVTrim.trim(data)
         } catch {
             return nil
         }
@@ -293,16 +332,14 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
     @discardableResult
     private func playNextClip() -> Bool {
         guard !playQueue.isEmpty else { return false }
-        let data = playQueue.removeFirst()
-        do {
-            audioPlayer = try AVAudioPlayer(data: data)
-            audioPlayer?.delegate = self
-            audioPlayer?.play()
-            return true
-        } catch {
+        let player = playQueue.removeFirst()
+        player.delegate = self
+        audioPlayer = player
+        guard player.play() else {
             playQueue.removeAll()
             return false
         }
+        return true
     }
 
     /// Local iOS TTS fallback
