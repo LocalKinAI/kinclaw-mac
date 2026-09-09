@@ -597,7 +597,8 @@ struct ChatView: View {
         case .hello, .userMessage, .turnDone,
              .screenFrame, .recordDone, .soulSwitched, .brainSwitched,
              .sessionReset, .spawnDone, .planMode,
-             .permissionRequest, .permissionResolved, .usage, .compacted,
+             .permissionRequest, .permissionResolved, .permissionMode,
+             .usage, .compacted,
              .question, .questionResolved, .workspace, .none:
             // brain_switched / session_reset / spawn_done / permission
             // / usage / compacted: Cowork-mode-only; Chat ignores.

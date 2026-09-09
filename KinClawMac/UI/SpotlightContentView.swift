@@ -137,6 +137,9 @@ struct SpotlightContentView: View {
     @State private var voiceApprovalRetried = false
     /// What the agent is doing right now, for the line under the halo.
     @State private var companionActivity: String?
+    /// The kernel's approval gate: "ask" or "auto". Comes from the soul
+    /// at load and from /api/state after; the footer picker changes it.
+    @State private var coworkPermissionMode = "ask"
     @State private var showingArtPicker = false
     @StateObject private var companionArt = CompanionArt()
     /// Left folder pane in Cowork (⌘⇧L). Persisted; on by default.
@@ -945,22 +948,27 @@ struct SpotlightContentView: View {
                     ContextMeterView(used: contextUsed, total: contextLength)
                 }
 
-                // Plan mode — read-only gate on the kernel. The agent
-                // investigates and proposes; clicks / typing / shell /
-                // writes are refused until the user flips it back.
-                Button {
-                    toggleCoworkPlanMode()
-                } label: {
-                    Image(systemName: coworkPlanMode
-                          ? "list.clipboard.fill" : "list.clipboard")
-                        .font(.system(size: 12))
-                        .foregroundColor(coworkPlanMode ? .orange : .secondary)
+                // What the agent is allowed to do, named and clickable.
+                // Plan mode and the approval gate are one control here:
+                // they are the same question — how much rope — and an
+                // unlabelled clipboard icon answered it for neither.
+                PermissionModePicker(
+                    mode: GateMode.from(permissionMode: coworkPermissionMode,
+                                        planMode: coworkPlanMode)
+                ) { picked in
+                    applyGateMode(picked)
+                }
+
+                // ⇧⌘P still toggles plan mode, the shortcut people have
+                // in their fingers.
+                Button("") {
+                    applyGateMode(coworkPlanMode ? .ask : .plan)
                 }
                 .buttonStyle(.plain)
-                .help(coworkPlanMode
-                      ? "Plan mode ON — the agent can look but not act (⇧⌘P to exit)"
-                      : "Plan mode — investigate and propose before acting (⇧⌘P)")
+                .frame(width: 0, height: 0)
+                .opacity(0)
                 .keyboardShortcut("p", modifiers: [.command, .shift])
+                .accessibilityHidden(true)
 
                 // Folder pane toggle (⌘⇧L).
                 Button {
@@ -2669,6 +2677,34 @@ struct SpotlightContentView: View {
         }
     }
 
+    /// Put the kernel into one of the three gate modes. Plan mode and
+    /// the approval mode are separate switches down there, so leaving
+    /// plan mode has to say what to leave it *to*.
+    private func applyGateMode(_ picked: GateMode) {
+        let wantPlan = picked == .plan
+        let wantPerm = picked == .auto ? "auto" : "ask"
+        // Optimistic: the footer changes on click, and /api/state
+        // reconciles after the turn if the kernel disagreed.
+        coworkPlanMode = wantPlan
+        if picked != .plan { coworkPermissionMode = wantPerm }
+        Task {
+            do {
+                // Order matters leaving plan mode: set the gate the calls
+                // will be judged by before letting them through.
+                if picked != .plan {
+                    coworkPermissionMode = try await KinClawAPIClient.default
+                        .setPermissionMode(wantPerm)
+                }
+                coworkPlanMode = try await KinClawAPIClient.default.setPlanMode(wantPlan)
+            } catch {
+                FileHandle.standardError.write(
+                    "kinclaw gate mode failed: \(error.localizedDescription)\n"
+                        .data(using: .utf8) ?? Data())
+                refreshCoworkState()
+            }
+        }
+    }
+
     /// Flip the kernel's plan-mode gate. Optimistic, reconciled by the
     /// server's reply (it may refuse) and by later plan_mode events.
     private func toggleCoworkPlanMode() {
@@ -2695,6 +2731,7 @@ struct SpotlightContentView: View {
             if let n = st.input_tokens { contextUsed = n }
             if let c = st.context_length, c > 0 { contextLength = c }
             if let p = st.plan_mode { coworkPlanMode = p }
+            if let m = st.permission_mode, !m.isEmpty { coworkPermissionMode = m }
             if let w = st.workspace { coworkWorkspace = w }
         }
     }
@@ -3528,6 +3565,9 @@ struct SpotlightContentView: View {
             if pendingPermission?.id == event.id { pendingPermission = nil }
             if voiceApprovalID == event.id { endVoiceApproval() }
             return
+        case .permissionMode:
+            if let m = event.name, !m.isEmpty { coworkPermissionMode = m }
+            return
         case .question:
             guard let id = event.id else { return }
             let q = PendingQuestion(id: id, text: event.message ?? "?", options: event.options ?? [])
@@ -3691,7 +3731,8 @@ struct SpotlightContentView: View {
             // is unreachable but kept exhaustive for the compiler.
             break
         case .userMessage, .turnDone, .planMode,
-             .permissionRequest, .permissionResolved, .usage, .compacted,
+             .permissionRequest, .permissionResolved, .permissionMode,
+             .usage, .compacted,
              .question, .questionResolved, .workspace, .none:
             // plan_mode / permission / question / usage / compacted /
             // workspace are handled above the stale-index guard.

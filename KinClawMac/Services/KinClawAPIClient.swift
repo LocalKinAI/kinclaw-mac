@@ -86,6 +86,7 @@ extension KinClawEvent {
         case permissionRequest  = "permission_request"
         /// Someone answered (or the wait was cancelled) — drop the card.
         case permissionResolved = "permission_resolved"
+        case permissionMode     = "permission_mode"
         /// Token accounting after each model call.
         case usage
         /// Older turns were folded into a summary.
@@ -269,6 +270,21 @@ final class KinClawAPIClient {
     /// prepends a directive teaching the model to emit a markdown
     /// plan instead. Returns the post-toggle state (server may
     /// refuse e.g. mid-turn).
+    /// `POST /api/permission_mode {mode}` — switch the approval gate
+    /// between "ask" and "auto" mid-session. Returns the mode actually
+    /// in force, which is not always the one requested.
+    func setPermissionMode(_ mode: String) async throws -> String {
+        let url = baseURL.appendingPathComponent("api/permission_mode")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(["mode": mode])
+        let (data, response) = try await sessionDataFor(request: request)
+        try checkOK(response as? HTTPURLResponse, body: data)
+        struct Reply: Decodable { let mode: String }
+        return try JSONDecoder().decode(Reply.self, from: data).mode
+    }
+
     func setPlanMode(_ enabled: Bool) async throws -> Bool {
         let url = baseURL.appendingPathComponent("api/plan_mode")
         var request = URLRequest(url: url)
