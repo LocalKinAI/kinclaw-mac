@@ -143,7 +143,13 @@ struct SpotlightContentView: View {
     @State private var showingArtPicker = false
     @StateObject private var companionArt = CompanionArt()
     /// Left folder pane in Cowork (⌘⇧L). Persisted; on by default.
-    @AppStorage("kinclaw.cowork.sidebar") private var showWorkspaceSidebar = true
+    // Closed by default now. With the file tree gone the Cowork pane is
+    // a folder-grouped session list, and ⌘H already lists sessions —
+    // 210pt of permanent width for a second way to do the same thing is
+    // not a trade a 380pt panel can afford. ⇧⌘L and the ⋯ menu open it.
+    // Code keeps its pane open: moving between repos is that surface's
+    // spine, not a convenience.
+    @AppStorage("kinclaw.cowork.sidebar") private var showWorkspaceSidebar = false
     /// Bumped after each turn / workspace change so the pane reloads.
     @State private var sidebarRefresh = 0
 
@@ -2153,6 +2159,11 @@ struct SpotlightContentView: View {
 
     private var inputBar: some View {
         VStack(spacing: 6) {
+        // What the agent touched this session — the diff, not a
+        // browser. Nothing at all until it touches something.
+        if mode == .cowork {
+            TouchedFilesBar(files: touchedFiles)
+        }
         HStack(spacing: 8) {
             // Paperclip — opens file picker. Same destination as
             // drag-drop (pendingAttachments). Visible affordance so

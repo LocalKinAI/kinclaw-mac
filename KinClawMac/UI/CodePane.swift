@@ -636,6 +636,12 @@ struct CodePane: View {
                 planModeBanner
             }
 
+            // What kincode touched this session. Used to be a section
+            // of the sidebar's file tree; the tree is gone and this is
+            // the half that was worth keeping — it is the diff, and it
+            // belongs where you look when a turn ends.
+            TouchedFilesBar(files: touchedFiles)
+
             // Pending-image chip strip. Hidden when no images attached.
             // Each chip shows a 32pt thumbnail + filename suffix + ×
             // button. Click × to remove without losing the rest.

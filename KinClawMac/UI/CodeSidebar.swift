@@ -29,7 +29,6 @@ struct CodeSidebar: View {
 
     @State private var folders: [FolderRow] = []
     @State private var expanded: Set<String> = []
-    @State private var showFiles = true
 
     struct FolderRow: Identifiable, Equatable {
         let path: String
@@ -53,10 +52,11 @@ struct CodeSidebar: View {
                             newSessionRow(folder)
                         }
                     }
-                    if !activeRepo.isEmpty {
-                        Divider().opacity(0.12).padding(.vertical, 6)
-                        filesSection
-                    }
+                    // The file tree used to hang here. Removed: this
+                    // panel is for moving between repos and the
+                    // conversations you had in them, and a browser next
+                    // to that is IDE furniture in a window whose whole
+                    // point is that something else reads the files.
                 }
                 .padding(.vertical, 6)
             }
@@ -197,41 +197,6 @@ struct CodeSidebar: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-    }
-
-    // MARK: Files of the active folder
-
-    @ViewBuilder
-    private var filesSection: some View {
-        Button {
-            withAnimation(.easeOut(duration: 0.12)) { showFiles.toggle() }
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: showFiles ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 8, weight: .semibold))
-                    .foregroundColor(.secondary)
-                Text("FILES")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(.secondary.opacity(0.7))
-                Spacer()
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 2)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-
-        if showFiles {
-            // The tree and the touched-file list already exist as one
-            // component; reuse it headerless so Code shows the same
-            // thing Cowork does under its own folder list.
-            WorkspaceSidebar(workspace: activeRepo,
-                             touched: touched,
-                             refreshToken: refreshToken,
-                             onPick: {},
-                             showHeader: false)
-                .frame(maxHeight: 400)
-        }
     }
 
     // MARK: Behaviour

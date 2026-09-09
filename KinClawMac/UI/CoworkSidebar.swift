@@ -29,7 +29,6 @@ struct CoworkSidebar: View {
 
     @State private var groups: [Group] = []
     @State private var expanded: Set<String> = []
-    @State private var showFiles = true
     /// Groups the user asked to see in full. A folder worked in for
     /// months has hundreds of conversations; the pane shows the newest
     /// `pageSize` and offers the rest behind one row.
@@ -69,10 +68,11 @@ struct CoworkSidebar: View {
                             }
                         }
                     }
-                    if !activeWorkspace.isEmpty {
-                        Divider().opacity(0.12).padding(.vertical, 6)
-                        filesSection
-                    }
+                    // The file tree used to hang here. It was IDE
+                    // furniture in a window where you talk to something
+                    // that reads files for you, and Finder does it
+                    // better. What the agent touched moved to a line
+                    // above the composer, where it is read.
                 }
                 .padding(.vertical, 6)
             }
@@ -233,36 +233,6 @@ struct CoworkSidebar: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-    }
-
-    @ViewBuilder
-    private var filesSection: some View {
-        Button {
-            withAnimation(.easeOut(duration: 0.12)) { showFiles.toggle() }
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: showFiles ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 8, weight: .semibold))
-                    .foregroundColor(.secondary)
-                Text("FILES")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(.secondary.opacity(0.7))
-                Spacer()
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 2)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-
-        if showFiles {
-            WorkspaceSidebar(workspace: activeWorkspace,
-                             touched: touched,
-                             refreshToken: refreshToken,
-                             onPick: {},
-                             showHeader: false)
-                .frame(maxHeight: 400)
-        }
     }
 
     private func toggle(_ key: String) {
