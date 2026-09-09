@@ -16,6 +16,17 @@ struct Agent: Codable, Identifiable, Hashable {
     /// JSON parses unchanged.
     let localSoulPath: String?
 
+    /// For a bridged local soul: its `role:` — "primary" (a door),
+    /// "worker" (dispatched by another agent), "bench", "platform".
+    /// nil for cloud agents and for kernels that predate the field,
+    /// both of which mean "a door".
+    var soulRole: String? = nil
+
+    /// Whether this belongs in a picker. Cloud agents always do — Chat's
+    /// list is people and domains, which is a choice the user has an
+    /// opinion about. Local souls answer with their role.
+    var isPrimarySoul: Bool { (soulRole ?? "primary") == "primary" }
+
     /// Identity for SwiftUI ForEach + Identifiable. Uses
     /// `domain:slug` so the same slug surfaced under multiple
     /// groups (e.g. `guyon` appears as both a Core entry and a

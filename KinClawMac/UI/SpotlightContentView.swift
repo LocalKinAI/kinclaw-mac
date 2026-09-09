@@ -220,30 +220,32 @@ struct SpotlightContentView: View {
     private var localAgents: [Agent] { allAgents.filter { $0.isLocal } }
     private var cloudAgents: [Agent] { allAgents.filter { !$0.isLocal } }
 
-    /// Souls that exist in the kinclaw repo but have no business being offered
-    /// in a macOS picker.
+    /// Souls that have no business being offered in a picker.
     ///
-    /// The prefix test alone is too loose: kinclaw ships every soul it owns,
-    /// including a benchmark harness and the pilots for other operating
-    /// systems. Picking `KinClaw Linux Pilot` on a Mac produces an agent that
-    /// reaches for tools this machine does not have, and `KinClaw macbench` is
-    /// a 369-slot test rig — neither is something a person means to summon with
-    /// ⌘⌥K.
+    /// This used to be a hardcoded slug list here — macbench and the
+    /// Linux / Windows pilots — which was right about those three and
+    /// blind to the bigger half: five of the eleven souls kinclaw ships
+    /// are hands the pilot dispatches with `spawn`, not doors.
+    /// `KinClaw Eye` can look at a screenshot and answer; it has no
+    /// keyboard, no shell, no memory. Offering it as a choice asks the
+    /// user to pick a capability boundary, which is not a question
+    /// anyone has a basis to answer — and picking wrong gets you an
+    /// assistant that mysteriously cannot do anything.
     ///
-    /// Matched on the soul slug rather than the display name, because display
-    /// names get reworded and slugs do not.
-    private static let hiddenSoulSlugs: Set<String> = [
-        "macbench",        // benchmark harness (`make bench`), not an assistant
-        "pilot_linux",     // wrong OS — its tools do not exist here
-        "pilot_windows",   // wrong OS
-    ]
-
+    /// The kernel says now: each soul declares `role:` and /api/souls
+    /// reports it, so the answer lives next to the soul instead of in a
+    /// list over here that has to be remembered whenever one is added.
+    /// Absent = primary, so a soul that says nothing still shows up.
     private var kinClawSouls: [Agent] {
         // Names emitted by kinclaw's soul list start with "KinClaw ".
-        localAgents.filter {
-            $0.name.hasPrefix("KinClaw")
-                && !Self.hiddenSoulSlugs.contains($0.slug)
-        }
+        localAgents.filter { $0.name.hasPrefix("KinClaw") && $0.isPrimarySoul }
+    }
+
+    /// The rest — workers, benchmarks, other platforms. Not offered by
+    /// default, but reachable: they are real, and once in a while you
+    /// want to open one directly to see what it does on its own.
+    private var kinClawOtherSouls: [Agent] {
+        localAgents.filter { $0.name.hasPrefix("KinClaw") && !$0.isPrimarySoul }
     }
     private var localKinSouls: [Agent] {
         // The rest — souls under ~/.localkin/souls/ that aren't
@@ -1056,6 +1058,14 @@ struct SpotlightContentView: View {
                 if !kinClawSouls.isEmpty {
                     Menu("🦞  KinClaw  (\(kinClawSouls.count))") {
                         ForEach(kinClawSouls) { agentMenuRow($0) }
+                        if !kinClawOtherSouls.isEmpty {
+                            Divider()
+                            Menu("零件 · 平时用不到") {
+                                Text("Pilot 派出去干活的手，以及别的系统和跑分用的魂。单独打开只会得到一个缺胳膊少腿的 agent。")
+                                Divider()
+                                ForEach(kinClawOtherSouls) { agentMenuRow($0) }
+                            }
+                        }
                     }
                 } else if !isLoadingAgents {
                     Text("🦞  No KinClaw souls — is kinclaw running on :5001?")
