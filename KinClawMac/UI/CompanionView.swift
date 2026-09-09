@@ -26,6 +26,9 @@ struct CompanionView: View {
     /// How the companion feels — from the reply's opening tag, or from
     /// how the user sounded. Picks the art alongside `state`.
     let mood: CompanionMood?
+    /// What the current reply is about, in one English keyword, or "".
+    /// Matched against the art's own filenames and credits.
+    let subject: String
     /// What it is doing right now — "在看屏幕", "在跑命令". Companion
     /// mode shows no tool calls, so without this a task that takes six
     /// rounds is forty seconds of a face saying nothing.
@@ -59,6 +62,8 @@ struct CompanionView: View {
     @State private var previousImage: NSImage?
     @State private var showPrevious = false
     @State private var rotate: Timer?
+    /// When the picture last changed — the floor under how often it can.
+    @State private var lastPick: Date?
     /// A still gets a slow push-in and drift over its time on screen,
     /// alternating direction picture to picture, so the background is
     /// never quite static even before there are clips.
@@ -152,6 +157,13 @@ struct CompanionView: View {
         }
         .onChange(of: mood) { _, _ in
             if art.hasGroups { pick() }
+        }
+        // The subject changing is the strongest reason to change the
+        // picture — and the only one that makes the background about
+        // the conversation rather than about the voice.
+        .onChange(of: subject) { _, new in
+            guard !new.isEmpty else { return }
+            pick()
         }
     }
 
@@ -352,8 +364,16 @@ struct CompanionView: View {
     }
 
     private func pick() {
-        let next = art.art(for: state, mood: mood, fallback: art.pool.randomElement())
+        // Hold a picture for a few seconds whatever happens. Mood,
+        // state and subject can all move within one reply, and a
+        // background that crossfades three times in five seconds is a
+        // slideshow, which is the failure mode this whole feature is
+        // one step away from.
+        if let last = lastPick, Date().timeIntervalSince(last) < 4 { return }
+        let next = art.art(for: state, mood: mood, subject: subject,
+                           fallback: art.pool.randomElement())
         guard next != current else { return }
+        lastPick = Date()
         previous = current
         previousImage = currentImage
         showPrevious = current != nil

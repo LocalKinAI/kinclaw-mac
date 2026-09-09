@@ -123,6 +123,15 @@ struct SpotlightContentView: View {
     /// The companion's current expression: set by the reply's opening
     /// tag, and by how the user sounded while the reply is on its way.
     @State private var companionMood: CompanionMood?
+    /// What the current reply is about, one English keyword from its
+    /// opening tag. Drives the background: the mood alone made the
+    /// picture react to how it was talking, which after a few minutes
+    /// reads as a video playing behind a voice.
+    @State private var companionSubject = ""
+    /// Subjects seen this session and how often. A subject earns a
+    /// background fetch by coming back — most pass through once, and
+    /// fetching for each would be a download per sentence.
+    @State private var subjectSeen: [String: Int] = [:]
     /// The first characters of a reply, held back until it is clear
     /// whether they are a mood tag. See `absorbReplyHead`.
     @State private var replyHead = ""
@@ -326,6 +335,7 @@ struct SpotlightContentView: View {
                               caption: companionCaption,
                               problem: companionProblem,
                               mood: companionMood,
+                              subject: companionSubject,
                               activity: companionActivity,
                               canBargeIn: bargeInArmed,
                               onInterrupt: { interruptReply(hot: false) },
@@ -426,6 +436,7 @@ struct SpotlightContentView: View {
         }
         companionArt.reload()
         companionMood = nil
+        companionSubject = ""
         withAnimation(.easeOut(duration: 0.25)) { companionMode = true }
         (NSApp.delegate as? AppDelegate)?.spotlightWindow.enterCompanion()
         extendWakeSession()
@@ -3359,8 +3370,9 @@ struct SpotlightContentView: View {
             let rest = String(head[head.index(after: close)...].drop(while: { $0 == " " }))
             replyHeadDecided = true
             replyHead = ""
-            if let mood = CompanionMood.parse(tag) {
-                companionMood = mood
+            if let parsed = CompanionMood.parseTag(tag) {
+                companionMood = parsed.mood
+                noteSubject(parsed.subject)
                 return rest
             }
             // Some other stage direction — "[笑]", "[叹气]" — is not a mood
@@ -3375,6 +3387,31 @@ struct SpotlightContentView: View {
             return replyHead
         }
         return ""
+    }
+
+    /// Take the subject the reply named, and decide whether it is worth
+    /// going to find art for.
+    ///
+    /// A subject with nothing on disk changes nothing now — a wrong
+    /// picture claimed with confidence is worse than the one already
+    /// there — but the second time it comes up, art for it is fetched
+    /// in the background so the third time there is something. That is
+    /// what makes the room fill in over days instead of needing to be
+    /// stocked in advance.
+    private func noteSubject(_ subject: String) {
+        guard companionMode, !subject.isEmpty else {
+            companionSubject = ""
+            return
+        }
+        companionSubject = subject
+        let n = (subjectSeen[subject] ?? 0) + 1
+        subjectSeen[subject] = n
+        if n >= 2 {
+            // Video for a theme that is already video, so a fetched
+            // still does not sit oddly among moving neighbours.
+            companionArt.prefetch(subject: subject,
+                                  wantVideo: companionArt.mostlyVideo)
+        }
     }
 
     /// The reply ended with the head still undecided: it was text after

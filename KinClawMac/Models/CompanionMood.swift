@@ -22,6 +22,38 @@ enum CompanionMood: String, CaseIterable {
         }
     }
 
+    /// What the reply's opening tag said, split into a mood and an
+    /// optional subject.
+    ///
+    /// The mood alone makes the picture react to *how* it is talking,
+    /// which after a few minutes reads as a video playing behind a
+    /// voice: five buckets cannot tell talking about your dog from
+    /// talking about work. The subject is the other half — one English
+    /// keyword naming what the sentence is about, matched against the
+    /// art's own filenames and credits, which are in English because
+    /// that is the language image search speaks. It is never spoken, so
+    /// its language costs the user nothing.
+    struct Tag: Equatable {
+        let mood: CompanionMood
+        /// "beach", "dog", "snow" — or "" when the reply did not name one.
+        let subject: String
+    }
+
+    /// Parse `开心·beach` / `开心` / `happy|beach` out of a tag body.
+    /// A missing or unparseable mood is not an error: the tag is a hint
+    /// about a picture, and guessing 温柔 is better than dropping the
+    /// reply's first characters looking for a perfect one.
+    static func parseTag(_ raw: String) -> Tag? {
+        let parts = raw.split(whereSeparator: { "·|,/、".contains($0) })
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        guard let first = parts.first, let mood = parse(first) else { return nil }
+        var subject = parts.count > 1 ? parts[1] : ""
+        // Only a bare keyword is useful for matching; a phrase means the
+        // model wrote prose into the slot.
+        if subject.contains(" ") || subject.count > 24 { subject = "" }
+        return Tag(mood: mood, subject: subject.lowercased())
+    }
+
     /// Accepts the tag word, the folder name, and the near-synonyms a
     /// model reaches for when it does not copy the list exactly.
     static func parse(_ raw: String) -> CompanionMood? {

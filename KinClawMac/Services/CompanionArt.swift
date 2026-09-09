@@ -35,6 +35,14 @@ final class CompanionArt: ObservableObject {
     static let stateKeys = ["idle", "listening", "thinking", "speaking"]
 
     @Published private(set) var pool: [URL] = []
+    /// Every file's keywords, for matching against what is being
+    /// talked about. Built from the filename and the credit line, both
+    /// of which already describe the picture: art arrives named for the
+    /// search that found it — `corgi-dog-enjoying-the-beach-25174.mp4`,
+    /// `kitten-walking-alone-26370.mp4` — and the sidecar .txt carries
+    /// the source's own title. Nothing had to be added to the format;
+    /// the description was there all along, unread.
+    private var keywords: [URL: Set<String>] = [:]
     /// State or mood key → files in its folder.
     @Published private(set) var groups: [String: [URL]] = [:]
     @Published private(set) var fetching = false
@@ -152,7 +160,47 @@ final class CompanionArt: ObservableObject {
         }
         groups = found
         pool = general
+        indexKeywords()
     }
+
+    /// Words that describe each file. Split on the separators filenames
+    /// use, drop the noise (ids, dimensions, one-letter fragments) and
+    /// the words every file shares, which carry no signal.
+    private func indexKeywords() {
+        var idx: [URL: Set<String>] = [:]
+        var all: [URL] = pool
+        for (_, urls) in groups { all += urls }
+        for url in all {
+            var words = Set<String>()
+            let name = url.deletingPathExtension().lastPathComponent
+            var text = name
+            // The credit line names the picture in the source's words:
+            // "Wikimedia Commons · Shiba inu puppy and adult.jpg · CC0".
+            if let credit = try? String(contentsOf: url.appendingPathExtension("txt"),
+                                        encoding: .utf8) {
+                text += " " + credit
+            }
+            for raw in text.lowercased().split(whereSeparator: { !$0.isLetter }) {
+                let w = String(raw)
+                if w.count < 3 || Self.stopWords.contains(w) { continue }
+                words.insert(w)
+            }
+            idx[url] = words
+        }
+        keywords = idx
+    }
+
+    /// Words that appear in nearly every file's name or credit, and so
+    /// separate nothing. Without this, "commons" matches everything
+    /// from Wikimedia and the subject stops meaning anything.
+    private static let stopWords: Set<String> = [
+        "jpg", "jpeg", "png", "mp4", "mov", "webp", "heic",
+        "wikimedia", "commons", "pexels", "mixkit", "unknown",
+        "free", "license", "attribution", "required", "photo", "video",
+        "the", "and", "with", "her", "his", "its", "for", "from",
+        "idle", "listening", "thinking", "speaking",
+        "happy", "gentle", "curious", "sleepy", "worried",
+    ]
 
     /// True when any group has art beyond the rotating pool — the view
     /// then swaps on every state and mood change rather than on a timer.
@@ -163,15 +211,70 @@ final class CompanionArt: ObservableObject {
     /// wins, since "listening" is about you, not about how it feels.
     /// Then the caller's current picture, then the pool.
     func art(for state: String, mood: CompanionMood?, fallback: URL?) -> URL? {
+        art(for: state, mood: mood, subject: "", fallback: fallback)
+    }
+
+    /// The art for a moment.
+    ///
+    /// Subject first when the reply named one and something on disk
+    /// matches it: a picture of what you are talking about beats a
+    /// picture of how it feels about it. Then mood while it speaks, then
+    /// state — "listening" is about you, not about the subject — then
+    /// whatever is already showing, then the pool.
+    ///
+    /// A subject with no match on disk changes nothing rather than
+    /// picking at random: a wrong picture claimed with confidence is
+    /// worse than the one already there.
+    func art(for state: String, mood: CompanionMood?, subject: String, fallback: URL?) -> URL? {
+        if let m = bestMatch(for: subject, mood: mood) { return m }
         let stateArt = groups[state]?.randomElement()
         let moodArt = mood.flatMap { groups[$0.rawValue]?.randomElement() }
         let preferred = state == "speaking" ? (moodArt ?? stateArt) : (stateArt ?? moodArt)
         return preferred ?? fallback ?? pool.randomElement() ?? groups.values.first?.first
     }
 
+    /// The file whose keywords best fit the subject, or nil when
+    /// nothing does. Scored rather than filtered so "beach" prefers a
+    /// beach in the current mood's folder over a beach anywhere, and
+    /// exactness beats prefix so "cat" does not lose to "caterpillar".
+    func bestMatch(for subject: String, mood: CompanionMood?) -> URL? {
+        let s = subject.trimmingCharacters(in: .whitespaces).lowercased()
+        guard s.count >= 3 else { return nil }
+        let moodFolder = mood.map { groups[$0.rawValue] ?? [] } ?? []
+        var best: (url: URL, score: Int)?
+        for (url, words) in keywords {
+            var score = 0
+            if words.contains(s) {
+                score = 3
+            } else if words.contains(where: { $0.hasPrefix(s) || s.hasPrefix($0) }) {
+                score = 1
+            }
+            guard score > 0 else { continue }
+            if moodFolder.contains(url) { score += 1 }
+            if best == nil || score > best!.score { best = (url, score) }
+        }
+        return best?.url
+    }
+
+    /// True when nothing on disk is about this subject — the caller
+    /// uses it to decide whether going to fetch one is worth it.
+    func hasNothingAbout(_ subject: String) -> Bool {
+        bestMatch(for: subject, mood: nil) == nil
+    }
+
     var isEmpty: Bool { pool.isEmpty && groups.isEmpty }
 
     var count: Int { pool.count + groups.values.reduce(0) { $0 + $1.count } }
+
+    /// True when this theme is mostly moving pictures, so anything
+    /// fetched to join it should move too.
+    var mostlyVideo: Bool {
+        var all = pool
+        for (_, urls) in groups { all += urls }
+        guard !all.isEmpty else { return false }
+        let videos = all.filter { Self.isVideo($0) }.count
+        return videos * 2 > all.count
+    }
 
     // MARK: - Fetching
 
@@ -231,6 +334,38 @@ final class CompanionArt: ObservableObject {
             }
         }
     }
+
+    /// Go and find art for a subject nothing on disk covers, so the
+    /// next time it comes up there is something.
+    ///
+    /// Not on the first mention: most subjects pass through a
+    /// conversation once and fetching for each would be a download per
+    /// sentence. A subject earns a fetch by coming back — which is also
+    /// what makes it worth having a picture of.
+    ///
+    /// Silent either way. It is for later, and a spinner over someone's
+    /// dog to announce a background download is worse than the download.
+    func prefetch(subject: String, wantVideo: Bool) {
+        let s = subject.trimmingCharacters(in: .whitespaces).lowercased()
+        guard s.count >= 3, !prefetched.contains(s), hasNothingAbout(s) else { return }
+        prefetched.insert(s)
+        Task { [weak self] in
+            guard let self else { return }
+            let kind: MediaKind = wantVideo ? .video : .photo
+            var found = await self.search(s, kind: kind, limit: 4)
+            if found.isEmpty, kind == .video {
+                // Video needs a Pexels key; a photo does not. Better the
+                // right subject as a still than the wrong one moving.
+                found = await self.search(s, kind: .photo, limit: 4)
+            }
+            guard !found.isEmpty else { return }
+            await self.download(Array(found.prefix(2)), theme: s)
+        }
+    }
+
+    /// Subjects already looked for this session, so a topic that keeps
+    /// coming up is not fetched again every time it does.
+    private var prefetched: Set<String> = []
 
     func revealFolder() {
         try? FileManager.default.createDirectory(at: Self.folder, withIntermediateDirectories: true)
