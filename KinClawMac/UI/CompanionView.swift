@@ -186,8 +186,9 @@ struct CompanionView: View {
     }
 
     private var topBar: some View {
-        HStack {
+        HStack(spacing: 8) {
             voiceMenu
+            themeMenu
             Spacer()
             Button(action: onExit) {
                 Image(systemName: "xmark")
@@ -244,6 +245,43 @@ struct CompanionView: View {
         .help("换个声音 · 每次换都会念一句给你听")
         .onChange(of: voice) { _, _ in onPreviewVoice() }
         .onChange(of: speed) { _, _ in onPreviewVoice() }
+    }
+
+    /// Which set of pictures is behind you: the default folder or any
+    /// `companion-<name>` sibling. Switching re-reads the folder and
+    /// swaps the picture on the spot.
+    private var themeMenu: some View {
+        Menu {
+            ForEach(CompanionArt.themes()) { th in
+                Button {
+                    art.useTheme(th)
+                    pick()
+                } label: {
+                    if th.url.path == CompanionArt.folder.path {
+                        Label(th.name, systemImage: "checkmark")
+                    } else {
+                        Text(th.name)
+                    }
+                }
+            }
+            Divider()
+            Button("去取几张…") { onFetchArt() }
+            Button("打开文件夹") { art.revealFolder() }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "photo.on.rectangle")
+                Text(CompanionArt.themes().first { $0.url.path == CompanionArt.folder.path }?.name ?? "背景")
+            }
+            .font(.system(size: 11, weight: .medium))
+            .foregroundColor(.white.opacity(0.75))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Capsule().fill(.black.opacity(0.35)))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("换一套背景：~/.kinclaw/companion-<名字>/ 都是一套")
     }
 
     private var voiceLabel: String {

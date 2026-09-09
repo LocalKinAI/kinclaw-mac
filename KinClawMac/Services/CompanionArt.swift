@@ -53,6 +53,52 @@ final class CompanionArt: ObservableObject {
             .appendingPathComponent(".kinclaw/companion")
     }
 
+    /// A theme is a sibling folder: `~/.kinclaw/companion` (the default)
+    /// and any `~/.kinclaw/companion-<name>/` next to it, so a shiba set,
+    /// a kitten set and a portrait set can live side by side and be
+    /// switched from the companion view rather than by retyping a path.
+    struct Theme: Identifiable, Hashable {
+        let name: String
+        let url: URL
+        var id: String { url.path }
+    }
+
+    static var defaultFolder: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".kinclaw/companion")
+    }
+
+    static func themes() -> [Theme] {
+        let base = defaultFolder.deletingLastPathComponent()
+        var out = [Theme(name: "默认", url: defaultFolder)]
+        if let names = try? FileManager.default.contentsOfDirectory(atPath: base.path) {
+            for n in names.sorted() where n.hasPrefix("companion-") {
+                let u = base.appendingPathComponent(n)
+                var isDir: ObjCBool = false
+                if FileManager.default.fileExists(atPath: u.path, isDirectory: &isDir), isDir.boolValue {
+                    out.append(Theme(name: String(n.dropFirst("companion-".count)), url: u))
+                }
+            }
+        }
+        // A custom folder set in Settings that is none of the above still
+        // deserves a name in the menu.
+        let current = folder
+        if !out.contains(where: { $0.url.path == current.path }) {
+            out.append(Theme(name: current.lastPathComponent, url: current))
+        }
+        return out
+    }
+
+    /// Switch the active folder and re-read it. The default clears the
+    /// override rather than pinning its path, so moving home keeps working.
+    func useTheme(_ theme: Theme) {
+        if theme.url.path == Self.defaultFolder.path {
+            UserDefaults.standard.removeObject(forKey: Self.folderKey)
+        } else {
+            UserDefaults.standard.set(theme.url.path, forKey: Self.folderKey)
+        }
+        reload()
+    }
+
     private static let imageExtensions: Set<String> =
         ["png", "jpg", "jpeg", "heic", "heif", "webp", "gif", "tiff", "bmp"]
     private static let videoExtensions: Set<String> = ["mp4", "mov", "m4v"]
