@@ -868,6 +868,12 @@ struct SpotlightContentView: View {
             Button { showingHistoryPopover = true } label: {
                 Label("会话历史", systemImage: "clock.arrow.circlepath")
             }
+            if mode == .cowork {
+                Button { toggleWorkspaceSidebar() } label: {
+                    Label(showWorkspaceSidebar ? "隐藏文件夹面板" : "显示文件夹面板",
+                          systemImage: "sidebar.leading")
+                }
+            }
             Divider()
             Toggle(isOn: Binding(
                 get: { ttsEnabled },
@@ -981,46 +987,18 @@ struct SpotlightContentView: View {
                 // probe on demand.
                 SearchStatusButton(store: searchStatus)
 
-                // Context meter — how full the model's window is, from
-                // the kernel's `usage` events. Same information Claude
-                // Code shows as "% of context"; here it also explains
-                // the automatic compaction dividers in the transcript.
-                if contextLength > 0 {
-                    ContextMeterView(used: contextUsed, total: contextLength)
-                }
-
-                // Folder pane toggle (⌘⇧L).
-                Button {
-                    toggleWorkspaceSidebar()
-                } label: {
-                    Image(systemName: showWorkspaceSidebar ? "sidebar.left" : "sidebar.leading")
-                        .font(.system(size: 12))
-                        .foregroundColor(showWorkspaceSidebar ? .green : .secondary)
-                }
-                .buttonStyle(.plain)
-                .help(showWorkspaceSidebar ? "Hide the folder pane (⇧⌘L)" : "Show the folder pane (⇧⌘L)")
-                .keyboardShortcut("l", modifiers: [.command, .shift])
-
-                // Workspace — the folder relative paths and shell commands
-                // live in; writes outside it ask first. Cowork's version
-                // of Claude Desktop's "working folder".
-                Button {
-                    pickWorkspace()
-                } label: {
-                    HStack(spacing: 3) {
-                        Image(systemName: "folder")
-                            .font(.system(size: 12))
-                        if !coworkWorkspace.isEmpty {
-                            Text(URL(fileURLWithPath: coworkWorkspace).lastPathComponent)
-                                .font(.system(size: 10))
-                                .lineLimit(1)
-                        }
-                    }
-                    .foregroundColor(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("Workspace: \(coworkWorkspace.isEmpty ? "(not set)" : coworkWorkspace)\nRelative paths and shell commands live here; writing elsewhere asks first. Click to change.")
+                // The context meter moved to the composer's bottom-right
+                // (it belongs with the model), the workspace to the
+                // bottom-left (it belongs with the gate), and the folder
+                // pane into the ⋯ menu. ⇧⌘L is bound below.
             }
+
+            Button("") { toggleWorkspaceSidebar() }
+                .buttonStyle(.plain)
+                .frame(width: 0, height: 0)
+                .opacity(0)
+                .keyboardShortcut("l", modifiers: [.command, .shift])
+                .accessibilityHidden(true)
 
             // New session — saves current to disk + starts a fresh
             // session id. For Cowork, this also re-loads the active
@@ -2237,6 +2215,28 @@ struct SpotlightContentView: View {
                     applyGateMode(picked)
                 }
 
+                // Where it will do it. Paired with the gate on purpose:
+                // "what is it allowed to do" and "which folder does it
+                // do it in" are the two things worth a glance before
+                // pressing return, and a workspace hidden in a menu is
+                // a workspace nobody checks.
+                Button {
+                    pickWorkspace()
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: "folder")
+                            .font(.system(size: 11))
+                        if !coworkWorkspace.isEmpty {
+                            Text(URL(fileURLWithPath: coworkWorkspace).lastPathComponent)
+                                .font(.system(size: 11))
+                                .lineLimit(1)
+                        }
+                    }
+                    .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("工作目录：\(coworkWorkspace.isEmpty ? "(未设置)" : coworkWorkspace)\n相对路径和 shell 命令都在这里；写到别处会先问你。点一下换个目录。")
+
                 // ⇧⌘P still toggles plan mode, the shortcut people have
                 // in their fingers.
                 Button("") {
@@ -2252,6 +2252,14 @@ struct SpotlightContentView: View {
             Spacer()
             if mode == .cowork {
                 coworkBrainMenu
+
+                // How full the model's window is. Next to the model
+                // because that is what it is a property of, and read
+                // right before you press return — past 75% the kernel
+                // folds the older turns into a summary.
+                if contextLength > 0 {
+                    ContextMeterView(used: contextUsed, total: contextLength)
+                }
             }
             // Send, and Stop while a turn is running. One button in
             // one place: the stop used to be a 13pt icon in the top bar
