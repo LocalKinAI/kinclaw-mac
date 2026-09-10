@@ -79,6 +79,10 @@ struct CompanionView: View {
     @State private var kenZoom: CGFloat = 1.03
     @State private var kenShift: CGSize = .zero
     @State private var kenSign: CGFloat = 1
+    /// The joints of the animal in the current still, when macOS could
+    /// find them. Non-nil means the picture can be puppeteered — it
+    /// breathes, blinks and looks at you — rather than merely drifting.
+    @State private var puppetRig: PuppetRig?
 
     private var state: String {
         if isSpeaking { return "speaking" }
@@ -228,6 +232,17 @@ struct CompanionView: View {
     private func media(_ url: URL, image: NSImage?, size: CGSize, live: Bool) -> some View {
         if CompanionArt.isVideo(url) {
             LoopingVideoView(url: url)
+                .frame(width: size.width, height: size.height)
+                .clipped()
+        } else if let img = image, live, let rig = puppetRig {
+            // A photograph that can look back. See AnimalPuppetView:
+            // no lip sync, because a dog does not lip sync — what
+            // reads as alive is attention.
+            AnimalPuppetView(image: img, rig: rig,
+                             isListening: isListening,
+                             isThinking: isThinking,
+                             isSpeaking: isSpeaking,
+                             audioLevel: audioLevel)
                 .frame(width: size.width, height: size.height)
                 .clipped()
         } else if let img = image {
@@ -458,6 +473,17 @@ struct CompanionView: View {
         showPrevious = current != nil
         // Decoded once here, not on every frame of the camera move.
         currentImage = next.flatMap { CompanionArt.isVideo($0) ? nil : NSImage(contentsOf: $0) }
+        // Vision costs a couple hundred milliseconds the first time it
+        // sees a photo and nothing after — the answer is cached beside
+        // the file. Off the main thread either way: a crossfade must
+        // not wait for a pose model.
+        puppetRig = nil
+        if let u = next, !CompanionArt.isVideo(u) {
+            Task { @MainActor in
+                let r = AnimalPuppet.rig(for: u)
+                if current == u { puppetRig = r }
+            }
+        }
         kenSign = -kenSign
         kenZoom = 1.03
         kenShift = .zero
