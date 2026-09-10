@@ -54,11 +54,42 @@ final class AvatarWebView: NSView, WKNavigationDelegate {
         super.init(frame: frame)
         let cfg = WKWebViewConfiguration()
         cfg.suppressesIncrementalRendering = false
+
+        // Their page paints its own light-grey body, a bordered canvas
+        // and a drop shadow — all sensible for a page served on its
+        // own, all wrong inside a panel where the figure is supposed to
+        // be standing in the room rather than in a document.
+        //
+        // Injected at documentStart with `!important` rather than
+        // assigned after load: a stylesheet that arrives once the page
+        // has painted means a flash of grey every time, and inline
+        // styles set afterwards lose to their own rules anyway.
+        let css = """
+        html, body { background: transparent !important; background-color: transparent !important; }
+        #background_video, #screen2, #startMessage, #loadingSpinner { display: none !important; }
+        video, canvas { border: none !important; box-shadow: none !important; background: transparent !important; }
+        """
+        let inject = """
+        (function(){
+          var s = document.createElement('style');
+          s.textContent = `\(css)`;
+          (document.head || document.documentElement).appendChild(s);
+        })();
+        """
+        cfg.userContentController.addUserScript(
+            WKUserScript(source: inject, injectionTime: .atDocumentStart, forMainFrameOnly: false))
         web = WKWebView(frame: bounds, configuration: cfg)
         web.autoresizingMask = [.width, .height]
         web.navigationDelegate = self
         // Transparent, so the companion's background is the background.
+        // Transparent, so the companion's own ground is the ground.
+        // `drawsBackground` is the one that actually stops AppKit
+        // painting white behind the page; the CSS above stops the page
+        // painting over that.
         web.setValue(false, forKey: "drawsBackground")
+        web.underPageBackgroundColor = .clear
+        web.wantsLayer = true
+        web.layer?.backgroundColor = NSColor.clear.cgColor
         addSubview(web)
     }
 
@@ -120,9 +151,9 @@ final class AvatarWebView: NSView, WKNavigationDelegate {
     // MARK: Load
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        // Their page brings its own background video and chat bar. Ours
-        // is behind this view and ours is the one that follows the
-        // conversation, so theirs goes.
+        // Belt and braces: the injected stylesheet above already hides
+        // these, but their scripts create and show elements after load,
+        // so the ones that can come back get turned off again here.
         let tidy = """
         (function(){
           var bg = document.getElementById('background_video');
