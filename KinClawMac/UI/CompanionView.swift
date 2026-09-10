@@ -166,19 +166,37 @@ struct CompanionView: View {
                 }
                 Text(stateLabel)
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(problem == nil ? .white.opacity(0.75) : .orange)
+                    .foregroundColor(problem == nil ? .white.opacity(0.9) : .orange)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Capsule().fill(.black.opacity(0.45)))
                     .padding(.top, 14)
+                Spacer()
+
+                // The last thing said, as a subtitle rather than as
+                // text floating in the middle of the picture. It was
+                // 13pt translucent white with nothing behind it, which
+                // is legible over a dark scrim and not over a face or a
+                // snowfield. Now: bigger, opaque, on its own dark
+                // backing, and along the bottom where a subtitle goes —
+                // out of the way of whoever is talking.
                 if !caption.isEmpty, prompt == nil {
                     Text(caption)
-                        .font(.system(size: 13))
-                        .foregroundColor(.white.opacity(0.85))
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundColor(.white)
                         .multilineTextAlignment(.center)
                         .lineLimit(3)
-                        .padding(.horizontal, 32)
-                        .padding(.top, 10)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 9)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(.black.opacity(0.62))
+                        )
+                        .padding(.horizontal, 22)
+                        .padding(.bottom, 14)
                         .transition(.opacity)
                 }
-                Spacer()
                 if let p = prompt {
                     CompanionPromptView(prompt: p,
                                         onDecision: onPromptDecision,
