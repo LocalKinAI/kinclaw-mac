@@ -114,12 +114,23 @@ struct CompanionView: View {
 
     var body: some View {
         ZStack {
-            background
-            // A dark scrim keeps the halo and caption readable over a
-            // bright picture without hiding the picture.
-            LinearGradient(colors: [.black.opacity(0.15), .black.opacity(0.55)],
-                           startPoint: .top, endPoint: .bottom)
-                .ignoresSafeArea()
+            if avatarBase == nil {
+                background
+                // A dark scrim keeps the halo and caption readable over
+                // a bright picture without hiding the picture.
+                LinearGradient(colors: [.black.opacity(0.15), .black.opacity(0.55)],
+                               startPoint: .top, endPoint: .bottom)
+                    .ignoresSafeArea()
+            } else {
+                // With a person on screen the photograph behind her is
+                // two subjects competing: a green-screened figure over
+                // a picture of somebody's dog reads as a collage, not
+                // as someone in a room. A quiet ground lets the face be
+                // the only thing there is to look at.
+                LinearGradient(colors: [Color(white: 0.10), Color(white: 0.04)],
+                               startPoint: .top, endPoint: .bottom)
+                    .ignoresSafeArea()
+            }
 
             // The living face, between the background and the controls.
             // Its own background is chroma-keyed away, so what shows

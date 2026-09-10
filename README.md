@@ -18,6 +18,10 @@ Same window, same agent picker shape, three different brains. Switch tabs to swi
 
 ## Status
 
+🗣 **Unreleased** — **Companion mode grew a face and a conversation** (⇧⌘M). Sentences are spoken as the model writes them, so the first words land about a second in; you can cut in mid-reply through headphones, or tap to interrupt over speakers. Every reply carries a hidden mood and subject that pick what you are looking at — say "beach" and the background is one. With [localkin-service-avatar](https://github.com/kleinlee/DH_live) checked out it can be a **digital human whose mouth moves with the words** (WASM in a web view, no GPU, driven by the same Kokoro audio the speaker plays). For photos of pets there is no lip sync — a dog does not lip sync — but macOS's animal pose model makes the picture **breathe, blink, perk its ears at your voice and tilt its head**. The gate's questions are read out and answered by voice, and also shown as buttons. See [Companion mode](#companion-mode) below.
+
+🎛 **Unreleased** — **Cowork and Code say what the agent may do.** The composer's bottom-left names the gate — 只看不动 / 先问我 / 放手干 — and switches it live; the workspace sits beside it. Stop is the send button now, red while a turn runs. The top bar keeps connection, search health and new session; everything else is in a ⋯ menu. Code caught up: approval cards (kincode no longer runs `-yolo`), the build it ran after an edit, and an undo button beside what just changed. The file tree is gone from both panels — Finder does that better — but "what did it just change" moved above the composer where it is read.
+
 🌙 **Unreleased** — **Companion mode** (⇧⌘M): the panel becomes a character and a halo, voice only, no text. Art comes from `~/.kinclaw/companion/` or is fetched in-app from Wikimedia Commons (no account) or Pexels (free key).
 
 📚 **Unreleased** — Both Cowork and Code have a **folder pane** that lists the folders you work in, each expanding to the conversations you had there. Click one to restore the folder and the transcript together; each folder has its own New session.
@@ -122,6 +126,69 @@ It opens a conversation rather than guarding each sentence:
 ```
 
 The lapse timer (default 45s, adjustable) counts from when the **reply finishes**, not from when you stopped speaking — otherwise a long answer would expire the session while you were still listening to it. Matching ignores case, spacing and punctuation, since STT output for a short name is unstable. The mic turns amber while waiting for the word and red once you're conversing. Push-to-talk ignores the setting entirely — pressing the button is already deliberate.
+
+## Companion mode
+
+⇧⌘M turns the panel into a picture and a voice. No transcript, no
+buttons: you talk, it answers out loud, and what you are looking at
+responds to the conversation.
+
+**It answers while it is still writing.** Each finished sentence is
+synthesized and spoken as it arrives rather than after the whole reply,
+so the first words land about a second in. Kokoro pads every clip with
+~400ms of silence in front and ~700ms behind — between streamed
+sentences that is a 1.1s hole, so it is trimmed to 60/160ms — and the
+voices are warmed on entry, because Kokoro's first Chinese sentence
+after idle takes 3.4s against 0.5s warm.
+
+**You can interrupt it.** With headphones, talking over it stops the
+reply and takes your words. Through the Mac's own speakers the
+microphone hears the agent louder than it hears you — measured at
+−14…−4 dBFS even with macOS's echo cancellation on — so barge-in is
+gated on the output route, and over speakers you tap the face instead.
+Settings → Voice forces it either way.
+
+**The background follows the conversation.** Every reply opens with a
+bracketed tag that is never spoken: a mood, and a one-word subject.
+The mood picks a folder; the subject is matched against the pictures'
+own filenames and credits, which already describe them — art arrives
+named for the search that found it. Say "beach" and you get the beach
+one. A subject with nothing on disk changes nothing, and earns a
+background fetch by coming up a second time.
+
+Art lives in `~/.kinclaw/companion/`, with `~/.kinclaw/companion-<name>/`
+as alternative sets you can switch between from the face. Files at the
+top level rotate; subfolders named for a state (`idle`, `listening`,
+`thinking`, `speaking`) or a mood (`开心`, `温柔`, `好奇`, `困`, `担心`)
+are used in that state or mood. Short mp4/mov loops work anywhere a
+picture does.
+
+**A face that actually talks.** Check out
+[localkin-service-avatar](https://github.com/kleinlee/DH_live) beside
+this repo and the companion can be a digital human. Its inference is a
+WASM module running in a web view — no GPU, and none of its Python
+service — driven by the same Kokoro bytes the speaker is playing, so
+the mouth moves with the words. With the digital human on, the photographic background steps aside
+for a quiet dark ground — a green-screened figure over a picture of
+somebody's dog reads as a collage rather than as someone in a room.
+Four characters; off unless you turn it on.
+
+**An animal that looks back.** For a photograph of a pet there is no
+lip sync: a dog does not lip sync, and one that did would be a cartoon.
+What reads as an animal in the room is attention. macOS's animal pose
+model finds the eyes and ear tips (0.85+ on ordinary pet photos), and
+the picture then breathes, blinks irregularly, perks its ears at your
+voice, leans in while the mic is open, and tilts its head while it is
+thinking. Photos where the pose is not found stay photos rather than
+being animated from a guess.
+
+**Approvals without a keyboard.** When the kernel's gate stops a call,
+it is read out — "我想跑一条命令：rm -rf ./build。可以吗？" — and short
+affirmations approve it. Only short ones: "把那个文件删了" is an
+instruction, not consent, and fails to parse rather than approving
+something you did not agree to. The same prompt is also docked at the
+bottom of the picture as buttons, because a voice-only question is
+invisible if you stepped away while it was speaking.
 
 ### Backends
 

@@ -2,7 +2,104 @@
 
 All notable changes to KinClaw Mac.
 
-## [Unreleased] - 2026-09-07 (evening) — Streaming speech and barge-in
+## [Unreleased] — Companion mode, and a panel that says what it is doing
+
+A day and a half on two things: making the companion mode something you
+can actually talk to, and making Cowork and Code tell you what the
+agent is allowed to do.
+
+### Companion mode (⇧⌘M)
+
+The panel becomes a picture and a voice. No transcript, no buttons —
+you speak, it answers out loud, and what you are looking at responds.
+
+- **It talks like a conversation, not a form.** Sentences are spoken as
+  the model writes them rather than after it stops, so the first words
+  land about a second in instead of after the whole reply. Kokoro pads
+  every clip with ~400ms of silence in front and ~700ms behind, which
+  between streamed sentences is a 1.1s hole — trimmed to 60/160ms. The
+  play queue holds decoded players, and the voices are warmed on entry
+  because Kokoro's first Chinese sentence after idle takes 3.4s and its
+  first English one 2.4s, against 0.5s warm.
+- **You can cut in.** Through headphones, talking over it stops it and
+  takes your words. Through the Mac's speakers the microphone hears the
+  agent louder than it hears you (measured: −14…−4 dBFS with echo
+  cancellation on), so barge-in is gated on the output route and the
+  halo is tappable instead.
+- **The face reacts to the conversation.** Every reply opens with a
+  hidden `[情绪·主题]` tag — never spoken — that picks the art: mood
+  from five folders, and a subject keyword matched against the
+  pictures' own filenames and credits, which already describe them.
+  Say "beach" and the background is a beach. A subject with nothing on
+  disk changes nothing, and earns a background fetch by coming back.
+- **It hears how you sound.** SenseVoice labels the emotion in your
+  voice; the face softens before the reply arrives, and the model gets
+  one hedged line about it.
+- **A face that actually talks.** With `localkin-service-avatar`
+  checked out, the companion can be a digital human whose mouth moves
+  with the words — its inference is WASM in a web view, no GPU, driven
+  by the same Kokoro bytes the speaker plays. With it on, the
+  photographic background steps aside for a quiet dark ground: a
+  green-screened figure over a picture of somebody's dog reads as a
+  collage, not as someone in a room. Four characters. Off unless
+  asked for.
+- **An animal that looks back.** For photographs of pets there is no
+  lip sync — a dog does not lip sync, and one that did would be a
+  cartoon. macOS's animal pose model finds the eyes and ears, and the
+  picture breathes, blinks irregularly, perks its ears at your voice,
+  leans in to listen, and tilts its head when it is thinking. Photos
+  where the pose is not found stay photos.
+- **Approvals by voice.** The gate's questions and `ask_user` are read
+  out and answered out loud — and also docked at the bottom of the
+  picture as buttons, because a voice-only prompt is invisible if you
+  stepped away. Only short affirmations approve: "把那个文件删了" is an
+  instruction, not consent.
+- **Background art** can be short mp4/mov loops, switched between
+  themes (`~/.kinclaw/companion-<name>/`) from the face. Stills get a
+  slow push-in and a breath that follows the microphone.
+
+### Fixed — the voice loop could talk to itself
+
+Two saved sessions ended with the agent answering its own previous
+sentence. The chain: barge-in fired on the agent's own voice through
+the speakers; the cancelled turn's cleanup then re-spoke the partial
+reply through the non-streaming path into a microphone the barge-in had
+just opened; that hot recording pre-marked itself as speech, so even a
+false trigger reached the transcriber and came back as "Yeah."; and a
+sentence still being synthesized when the reply was stopped played into
+the next one. All four are closed, and the kernel's abort note now
+tells the model to answer rather than recap.
+
+### Changed — Cowork and Code say what they are allowed to do
+
+- **The gate has a name and a switch**, in the composer's bottom-left:
+  只看不动 / 先问我 / 放手干. Plan mode and the approval gate are the
+  same question — how much rope — and were previously an unlabelled
+  clipboard icon and a soul-file field you could not change while
+  running.
+- **Stop is the send button.** While a turn streams it turns red at the
+  far right of the composer, where the hand that just pressed return
+  already is. It used to be a 13pt icon in a row of eleven. ⌘. works
+  with the composer empty.
+- **The top bar keeps three things** — connection, search health, new
+  session — plus a ⋯ menu holding what was competing with them. The
+  context meter moved next to the model picker, the workspace next to
+  the gate: what it may do, and where it does it.
+- **Code caught up with Cowork**: the approval card (kincode no longer
+  launches with `-yolo`), the build result it ran after an edit, an
+  undo button beside the list of what changed, the same ⋯, the same
+  send-becomes-stop.
+- **The file tree is gone** from both side panels — IDE furniture in a
+  window whose premise is that something else reads the files, and
+  Finder does it better. What it also held is worth keeping and is not
+  browsing: "what did it just change" now sits above the composer as
+  one line that opens into the list.
+- **The agent picker offers doors, not parts.** The kernel says which
+  souls are meant to be opened; the five that exist to be dispatched
+  (Eye, Critic, Researcher…) moved into a submenu. Picking one used to
+  get you an agent that mysteriously could not do anything.
+
+### Streaming speech and barge-in (2026-09-07)
 
 ### Added — you can interrupt it
 
