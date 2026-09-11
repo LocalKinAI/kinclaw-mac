@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// Queries the user's local Ollama install (default :11434) for the
@@ -53,6 +54,149 @@ enum OllamaCatalog {
         let saved = UserDefaults.standard.stringArray(forKey: hostsKey) ?? []
         for h in saved + [baseURL] where !out.contains(h) && h != defaultBaseURL {
             out.append(h)
+        }
+        return out
+    }
+
+    /// Remember a host without switching to it — what a LAN scan does
+    /// with what it finds.
+    static func remember(_ host: String) {
+        let h = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !h.isEmpty, h != defaultBaseURL else { return }
+        var saved = UserDefaults.standard.stringArray(forKey: hostsKey) ?? []
+        guard !saved.contains(h) else { return }
+        saved.append(h)
+        UserDefaults.standard.set(saved, forKey: hostsKey)
+    }
+
+    /// Forget a remembered host. Switches back to this Mac if it was
+    /// the active one, so removing the box you are using does not leave
+    /// the dropdowns pointing at nothing.
+    static func forget(_ host: String) {
+        var saved = UserDefaults.standard.stringArray(forKey: hostsKey) ?? []
+        saved.removeAll { $0 == host }
+        UserDefaults.standard.set(saved, forKey: hostsKey)
+        if baseURL == host { setHost("") }
+    }
+
+    // MARK: - Is it there?
+
+    /// What a probe found: reachable, and how many chat models it has.
+    struct Health: Equatable {
+        let reachable: Bool
+        let models: Int
+        /// nil until probed — the row shows nothing rather than
+        /// claiming a host is down before anyone has looked.
+        static let unknown: Health? = nil
+    }
+
+    private static var healthCache: [String: (Health, Date)] = [:]
+
+    /// The last known health of a host, if it was probed recently.
+    static func cachedHealth(_ host: String) -> Health? {
+        guard let (h, at) = healthCache[host], Date().timeIntervalSince(at) < 30 else { return nil }
+        return h
+    }
+
+    /// Ask a host whether it is there. Short timeout: this runs for
+    /// every row of a menu that is about to open, and a menu that waits
+    /// on a dead LAN box is worse than a menu with no dots.
+    @discardableResult
+    static func probe(_ host: String) async -> Health {
+        var h = Health(reachable: false, models: 0)
+        if let url = URL(string: "\(host)/api/tags") {
+            var req = URLRequest(url: url)
+            req.timeoutInterval = 1.5
+            if let (data, resp) = try? await URLSession.shared.data(for: req),
+               (resp as? HTTPURLResponse)?.statusCode == 200,
+               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let models = root["models"] as? [[String: Any]] {
+                let names = models.compactMap { $0["name"] as? String }
+                h = Health(reachable: true, models: names.filter { isChatCapable($0) }.count)
+            }
+        }
+        healthCache[host] = (h, Date())
+        return h
+    }
+
+    /// Probe every remembered host at once.
+    static func probeAll() async {
+        await withTaskGroup(of: Void.self) { group in
+            for host in knownHosts {
+                group.addTask { _ = await probe(host) }
+            }
+        }
+    }
+
+    // MARK: - Finding a box you did not know about
+
+    /// Scan this machine's /24 for Ollama.
+    ///
+    /// The source picker used to be a menu with one row in it — this
+    /// Mac — because a remote host only appeared after you typed its
+    /// full URL into Settings and pressed Return. Which means the
+    /// feature was only usable by someone who already knew the IP, and
+    /// silently did nothing for everyone else.
+    ///
+    /// On demand only, never on launch: scanning somebody's network
+    /// because an app felt like it is not a thing to do quietly.
+    static func discover() async -> [String] {
+        guard let prefix = subnetPrefix() else { return [] }
+        var found: [String] = []
+        await withTaskGroup(of: String?.self) { group in
+            for i in 1...254 {
+                let host = "http://\(prefix).\(i):11434"
+                group.addTask {
+                    guard let url = URL(string: "\(host)/api/tags") else { return nil }
+                    var req = URLRequest(url: url)
+                    // Generous enough for a busy box on wifi, short
+                    // enough that 254 of them finish in a couple of
+                    // seconds.
+                    req.timeoutInterval = 1.2
+                    guard let (data, resp) = try? await URLSession.shared.data(for: req),
+                          (resp as? HTTPURLResponse)?.statusCode == 200,
+                          let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                          root["models"] != nil else { return nil }
+                    return host
+                }
+            }
+            for await host in group {
+                if let host { found.append(host) }
+            }
+        }
+        // This Mac answers on its own LAN address only if Ollama was
+        // told to bind beyond loopback; either way it is already the
+        // first row as "This Mac", so drop the duplicate.
+        let mine = myAddresses().map { "http://\($0):11434" }
+        found.removeAll { mine.contains($0) }
+        return found.sorted()
+    }
+
+    /// The first three octets of this machine's LAN address.
+    private static func subnetPrefix() -> String? {
+        for a in myAddresses() {
+            let parts = a.split(separator: ".")
+            if parts.count == 4 { return parts.prefix(3).joined(separator: ".") }
+        }
+        return nil
+    }
+
+    /// This machine's IPv4 addresses, loopback excluded.
+    private static func myAddresses() -> [String] {
+        var out: [String] = []
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return out }
+        defer { freeifaddrs(ifaddr) }
+        for ptr in sequence(first: first, next: { $0.pointee.ifa_next }) {
+            let flags = Int32(ptr.pointee.ifa_flags)
+            guard flags & IFF_UP != 0, flags & IFF_LOOPBACK == 0,
+                  ptr.pointee.ifa_addr.pointee.sa_family == UInt8(AF_INET) else { continue }
+            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            if getnameinfo(ptr.pointee.ifa_addr, socklen_t(ptr.pointee.ifa_addr.pointee.sa_len),
+                           &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 {
+                let a = String(cString: host)
+                if !a.isEmpty, !a.contains(":") { out.append(a) }
+            }
         }
         return out
     }

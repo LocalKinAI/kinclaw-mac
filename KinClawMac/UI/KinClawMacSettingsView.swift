@@ -325,6 +325,9 @@ private struct BackendSettingsTab: View {
     @AppStorage("kinclaw.kincode.brain.model") private var defaultBrainModel = ""
 
     @State private var localStatus = "Probing…"
+    /// Result of the Ollama host test button, or nil before pressing it.
+    @State private var ollamaProbe: String?
+    @State private var ollamaCommit: DispatchWorkItem?
     @State private var kincodeStatus = "Probing…"
 
     /// Brain presets loaded from local Ollama. Same source as
@@ -495,13 +498,27 @@ private struct BackendSettingsTab: View {
 
             SettingsCard("Sidecars") {
                 SettingsRow(label: "Ollama host") {
-                    TextField("http://localhost:11434 (this Mac)", text: $ollamaHost)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.system(size: 11, design: .monospaced))
-                        .frame(maxWidth: 320)
-                        .onSubmit { OllamaCatalog.setHost(ollamaHost) }
+                    HStack(spacing: 6) {
+                        TextField("http://localhost:11434 (this Mac)", text: $ollamaHost)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 11, design: .monospaced))
+                            .frame(maxWidth: 260)
+                            // Committed when the text settles, not only
+                            // on Return: typing an address and tabbing
+                            // away used to leave it un-normalized and
+                            // never added to the source picker, so the
+                            // box you just configured did not appear in
+                            // the menu at all.
+                            .onSubmit { commitOllamaHost() }
+                            .onChange(of: ollamaHost) { _, _ in scheduleOllamaHostCommit() }
+                        Button(ollamaProbe == nil ? "测试" : ollamaProbe!) {
+                            commitOllamaHost()
+                            probeOllamaHost()
+                        }
+                        .controlSize(.small)
+                    }
                 }
-                SettingsCaption("The Ollama that both brain dropdowns list models from and that Ollama brain switches point at, in Cowork and Code. Leave empty for this Mac; a LAN box looks like http://192.168.0.21:11434. Souls keep their own brain.endpoint for the boot default.")
+                SettingsCaption("The Ollama that both brain dropdowns list models from and that Ollama brain switches point at, in Cowork and Code. Leave empty for this Mac; a LAN box looks like http://192.168.0.21:11434. You do not have to type it — the brain menu's 「扫描局域网找 Ollama」 finds boxes on your network. Souls keep their own brain.endpoint for the boot default.")
                 SettingsRow(label: "SearXNG") {
                     TextField("", text: $searxng)
                         .textFieldStyle(.roundedBorder)
@@ -590,6 +607,37 @@ private struct BackendSettingsTab: View {
             binaryOverride = url.path
         }
     }
+
+    /// Normalize and remember what is in the field. Idempotent, so
+    /// calling it on every keystroke's tail is harmless.
+    private func commitOllamaHost() {
+        OllamaCatalog.setHost(ollamaHost)
+        ollamaProbe = nil
+    }
+
+    /// Debounced: commit shortly after typing stops, so an address is
+    /// remembered without anyone having to know that Return is what
+    /// saves it.
+    private func scheduleOllamaHostCommit() {
+        ollamaCommit?.cancel()
+        let work = DispatchWorkItem { commitOllamaHost() }
+        ollamaCommit = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: work)
+    }
+
+    /// Say whether the box is actually there, in the place where you
+    /// just typed its address — the alternative is switching to it and
+    /// inferring the answer from an empty model list.
+    private func probeOllamaHost() {
+        ollamaProbe = "…"
+        Task {
+            let h = await OllamaCatalog.probe(OllamaCatalog.baseURL)
+            await MainActor.run {
+                ollamaProbe = h.reachable ? "✓ \(h.models) 个模型" : "✗ 连不上"
+            }
+        }
+    }
+
 }
 
 // MARK: - Agents

@@ -88,6 +88,14 @@ struct SpotlightContentView: View {
     @State private var coworkActiveProvider: String = ""
     @State private var coworkActiveModel: String = ""
     @State private var coworkBrainPresets: [BrainPreset] = BrainPreset.fallbackPresets
+    /// Bumped when a host's health or the host list changes, purely to
+    /// make the menu redraw — SwiftUI has no reason to notice a cache
+    /// inside OllamaCatalog otherwise.
+    @State private var ollamaHealthTick = 0
+    @State private var scanningLAN = false
+    /// What the last scan or source switch found, shown in the menu
+    /// rather than dropped into the conversation.
+    @State private var lanScanResult: String?
 
     /// Connection error string for kinclaw's :5001 server. Nil = OK,
     /// non-nil = the green dot in agentBar flips orange and the
@@ -620,6 +628,7 @@ struct SpotlightContentView: View {
             // this the dropdown shows only fallback presets until the
             // user manually clicks "Reload from Ollama".
             Task { await reloadCoworkBrainPresets() }
+            refreshOllamaHealth()
             // Probe kinclaw's :5001 once on appear so the green dot
             // reflects truth from the start (vs waiting for the next
             // hello/error event to arrive).
@@ -1231,24 +1240,51 @@ struct SpotlightContentView: View {
     /// SSE hello / brain_switched events.
     private var coworkBrainMenu: some View {
         Menu {
+            // Referencing the tick makes SwiftUI rebuild these rows
+            // when a probe lands; the value itself is not used.
+            let _ = ollamaHealthTick
             // Source — which Ollama the models below come from. One
             // click flips between this Mac and the LAN box; the model
             // list reloads and the current model is re-pointed at the
             // new host when it exists there.
-            Section("Source") {
+            Section("模型来自哪台机器") {
                 ForEach(OllamaCatalog.knownHosts, id: \.self) { host in
                     Button {
                         switchOllamaSource(to: host)
                     } label: {
+                        // Whether a box is alive is the whole question
+                        // here, and the menu used to answer it by
+                        // saying nothing and letting you find out after
+                        // the model list came back empty.
                         HStack {
-                            Image(systemName: host == OllamaCatalog.defaultBaseURL ? "laptopcomputer" : "network")
-                            Text(OllamaCatalog.hostLabel(host))
-                            Spacer()
-                            if host == OllamaCatalog.baseURL { Image(systemName: "checkmark") }
+                            if host == OllamaCatalog.baseURL {
+                                Image(systemName: "checkmark")
+                            } else {
+                                Image(systemName: host == OllamaCatalog.defaultBaseURL
+                                      ? "laptopcomputer" : "network")
+                            }
+                            Text(OllamaCatalog.hostLabel(host) + hostSuffix(host))
                         }
                     }
                 }
-                Button("Add a host in Settings…") { openSettings() }
+                Divider()
+                Button(scanningLAN ? "扫描中…" : "扫描局域网找 Ollama…") { scanLAN() }
+                    .disabled(scanningLAN)
+                if OllamaCatalog.knownHosts.count > 1 {
+                    Menu("忘掉一台…") {
+                        ForEach(OllamaCatalog.knownHosts.dropFirst(), id: \.self) { host in
+                            Button(OllamaCatalog.hostLabel(host)) {
+                                OllamaCatalog.forget(host)
+                                Task { await reloadCoworkBrainPresets() }
+                            }
+                        }
+                    }
+                }
+                Button("手动填地址（设置）…") { openSettings() }
+                if let r = lanScanResult {
+                    Divider()
+                    Text(r).foregroundColor(.secondary)
+                }
             }
             Divider()
             if coworkBrainPresets.isEmpty {
@@ -1277,8 +1313,9 @@ struct SpotlightContentView: View {
                 }
             }
             Divider()
-            Button("Reload from Ollama") {
+            Button("重新读取模型列表") {
                 Task { await reloadCoworkBrainPresets() }
+                refreshOllamaHealth()
             }
             Text("Soul stays the same; only brain swaps")
                 .foregroundColor(.secondary)
@@ -1312,17 +1349,75 @@ struct SpotlightContentView: View {
     /// and, if the current model exists there, re-points the running
     /// brain at it so the switch is complete in one click; otherwise
     /// the list is refreshed and the user picks.
+    /// "· 13 个模型" / "· 连不上" — appended to a host's row once it
+    /// has been probed, and nothing before that.
+    private func hostSuffix(_ host: String) -> String {
+        guard let h = OllamaCatalog.cachedHealth(host) else { return "" }
+        return h.reachable ? "  · \(h.models) 个模型" : "  · 连不上"
+    }
+
+    /// Probe every remembered host so the menu's dots mean something.
+    /// Cheap and cached for 30s, so opening the menu twice costs one
+    /// round of 1.5s-timeout requests at most.
+    private func refreshOllamaHealth() {
+        Task {
+            await OllamaCatalog.probeAll()
+            await MainActor.run { ollamaHealthTick += 1 }
+        }
+    }
+
+    /// Look for Ollama on this machine's subnet.
+    ///
+    /// The source picker was a menu with one row in it, because a
+    /// remote host only appeared after you typed its full URL into
+    /// Settings *and pressed Return* — tab away instead and it was
+    /// silently forgotten. So the feature worked only for someone who
+    /// already knew the IP and the ritual.
+    private func scanLAN() {
+        guard !scanningLAN else { return }
+        scanningLAN = true
+        Task {
+            let found = await OllamaCatalog.discover()
+            await MainActor.run {
+                let before = Set(OllamaCatalog.knownHosts)
+                for h in found { OllamaCatalog.remember(h) }
+                let added = found.filter { !before.contains($0) }
+                scanningLAN = false
+                lanScanResult = added.isEmpty
+                    ? (found.isEmpty ? "这个网段上没找到别的 Ollama" : "找到的都已经在列表里了")
+                    : "找到 " + added.map { OllamaCatalog.hostLabel($0) }.joined(separator: "、")
+                ollamaHealthTick += 1
+            }
+            await OllamaCatalog.probeAll()
+            await MainActor.run { ollamaHealthTick += 1 }
+        }
+    }
+
     private func switchOllamaSource(to host: String) {
         OllamaCatalog.setHost(host)
         Task {
+            await OllamaCatalog.probe(host)
             await reloadCoworkBrainPresets()
+            await MainActor.run { ollamaHealthTick += 1 }
             guard coworkActiveProvider == "ollama" else { return }
-            if let same = coworkBrainPresets.first(where: { $0.model == coworkActiveModel }) {
-                switchCoworkBrain(to: same)
+
+            // The same model if the new box has it; otherwise the
+            // closest thing by name, because "ornith-1.5:35b" and
+            // "ornith-1.5:9b" are the same brain at two sizes and
+            // silently doing nothing is the least useful outcome.
+            let want = coworkActiveModel
+            let family = want.split(separator: ":").first.map(String.init) ?? want
+            let pick = coworkBrainPresets.first { $0.model == want }
+                ?? coworkBrainPresets.first { $0.model.hasPrefix(family) }
+            if let pick {
+                switchCoworkBrain(to: pick)
             } else {
+                // Said in the menu, not in the transcript: the
+                // conversation is not where a settings problem belongs.
                 await MainActor.run {
-                    messages.append(ChatMessage.assistant(
-                        "Source is now \(OllamaCatalog.hostLabel(OllamaCatalog.baseURL)); \(coworkActiveModel) isn't there — pick a model from the brain menu."))
+                    lanScanResult = coworkBrainPresets.isEmpty
+                        ? "\(OllamaCatalog.hostLabel(host)) 连不上或没有模型"
+                        : "\(OllamaCatalog.hostLabel(host)) 上没有 \(want)，从下面挑一个"
                 }
             }
         }
