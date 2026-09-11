@@ -67,6 +67,10 @@ struct CodePane: View {
     /// server mode forced -yolo, so Code ran an agent that edited files
     /// and ran commands without ever asking.
     @State private var permissionMode: String = "ask"
+    /// Bumped when a host's health changes, to redraw the brain menu.
+    @State private var ollamaHealthTick = 0
+    @State private var scanningLAN = false
+    @State private var lanScanResult: String?
     /// A parked tool call waiting on the human.
     @State private var pendingPermission: PermissionRequest?
     /// What taking back the last turn would restore. Empty means there
@@ -184,6 +188,7 @@ struct CodePane: View {
             // still be booting on first onAppear.
             Task { await refreshState() }
             refreshUndo()
+            refreshOllamaHealth()
             // Load the user's actual Ollama models for the brain
             // dropdown. Cached for the rest of the session;
             // "Reload from Ollama" in the menu refreshes manually.
@@ -1566,18 +1571,41 @@ struct CodePane: View {
     /// Kincode card is where the default is set.
     private var brainMenu: some View {
         Menu {
-            Section("Source") {
+            // Referencing the tick rebuilds these rows when a probe
+            // lands; the value itself is unused.
+            let _ = ollamaHealthTick
+            Section("模型来自哪台机器") {
                 ForEach(OllamaCatalog.knownHosts, id: \.self) { host in
                     Button {
                         switchOllamaSource(to: host)
                     } label: {
                         HStack {
-                            Image(systemName: host == OllamaCatalog.defaultBaseURL ? "laptopcomputer" : "network")
-                            Text(OllamaCatalog.hostLabel(host))
-                            Spacer()
-                            if host == OllamaCatalog.baseURL { Image(systemName: "checkmark") }
+                            if host == OllamaCatalog.baseURL {
+                                Image(systemName: "checkmark")
+                            } else {
+                                Image(systemName: host == OllamaCatalog.defaultBaseURL
+                                      ? "laptopcomputer" : "network")
+                            }
+                            Text(OllamaCatalog.hostLabel(host) + hostSuffix(host))
                         }
                     }
+                }
+                Divider()
+                Button(scanningLAN ? "扫描中…" : "扫描局域网找 Ollama…") { scanLAN() }
+                    .disabled(scanningLAN)
+                if OllamaCatalog.knownHosts.count > 1 {
+                    Menu("忘掉一台…") {
+                        ForEach(OllamaCatalog.knownHosts.dropFirst(), id: \.self) { host in
+                            Button(OllamaCatalog.hostLabel(host)) {
+                                OllamaCatalog.forget(host)
+                                Task { await reloadBrainPresets() }
+                            }
+                        }
+                    }
+                }
+                if let r = lanScanResult {
+                    Divider()
+                    Text(r).foregroundColor(.secondary)
                 }
             }
             Divider()
@@ -1607,8 +1635,9 @@ struct CodePane: View {
                 }
             }
             Divider()
-            Button("Reload from Ollama") {
+            Button("重新读取模型列表") {
                 Task { await reloadBrainPresets() }
+                refreshOllamaHealth()
             }
             Text("Default brain → Settings → Backend")
                 .foregroundColor(.secondary)
@@ -1641,16 +1670,66 @@ struct CodePane: View {
     /// Flip the Ollama source: reload the list from the new host and
     /// re-point the running brain at it when the current model exists
     /// there; otherwise leave the brain and let the user pick.
+    /// "· 13 个模型" / "· 连不上", once a host has been probed.
+    private func hostSuffix(_ host: String) -> String {
+        guard let h = OllamaCatalog.cachedHealth(host) else { return "" }
+        return h.reachable ? "  · \(h.models) 个模型" : "  · 连不上"
+    }
+
+    private func refreshOllamaHealth() {
+        Task {
+            await OllamaCatalog.probeAll()
+            await MainActor.run { ollamaHealthTick += 1 }
+        }
+    }
+
+    /// Same scan Cowork has. Both menus read one catalog, so a box
+    /// found here is a box Cowork can use too.
+    private func scanLAN() {
+        guard !scanningLAN else { return }
+        scanningLAN = true
+        Task {
+            let found = await OllamaCatalog.discover()
+            await MainActor.run {
+                let before = Set(OllamaCatalog.knownHosts)
+                for h in found { OllamaCatalog.remember(h) }
+                let added = found.filter { !before.contains($0) }
+                scanningLAN = false
+                lanScanResult = added.isEmpty
+                    ? (found.isEmpty ? "这个网段上没找到别的 Ollama" : "找到的都已经在列表里了")
+                    : "找到 " + added.map { OllamaCatalog.hostLabel($0) }.joined(separator: "、")
+                ollamaHealthTick += 1
+            }
+            await OllamaCatalog.probeAll()
+            await MainActor.run { ollamaHealthTick += 1 }
+        }
+    }
+
     private func switchOllamaSource(to host: String) {
         OllamaCatalog.setHost(host)
         Task {
+            await OllamaCatalog.probe(host)
             await reloadBrainPresets()
+            await MainActor.run { ollamaHealthTick += 1 }
             guard activeProvider == "ollama" else { return }
-            if let same = brainPresets.first(where: { $0.model == activeModel }) {
-                switchBrain(to: same)
+
+            // The same model if the new box has it, else the closest by
+            // family: ornith-1.5:35b and ornith-1.5:9b are one brain at
+            // two sizes, and doing nothing is the least useful outcome.
+            let want = activeModel
+            let family = want.split(separator: ":").first.map(String.init) ?? want
+            let pick = brainPresets.first { $0.model == want }
+                ?? brainPresets.first { $0.model.hasPrefix(family) }
+            if let pick {
+                switchBrain(to: pick)
             } else {
+                // In the menu, not on the connection dot: a host
+                // without your model is a choice to make, not a
+                // connection failure.
                 await MainActor.run {
-                    connectError = "source is now \(OllamaCatalog.hostLabel(OllamaCatalog.baseURL)); \(activeModel) isn't there — pick a model"
+                    lanScanResult = brainPresets.isEmpty
+                        ? "\(OllamaCatalog.hostLabel(host)) 连不上或没有模型"
+                        : "\(OllamaCatalog.hostLabel(host)) 上没有 \(want)，从下面挑一个"
                 }
             }
         }
