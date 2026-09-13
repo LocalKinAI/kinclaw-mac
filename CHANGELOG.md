@@ -99,6 +99,24 @@ tells the model to answer rather than recap.
   (Eye, Critic, Researcher…) moved into a submenu. Picking one used to
   get you an agent that mysteriously could not do anything.
 
+### Added — kinfer as a model source
+
+- **A kinfer server is a source like any Ollama.** Give it its own port
+  in Settings → Sidecars → Ollama host (`http://192.168.0.21:11590`), or
+  let the brain menu's scan find it, and Cowork and Code both list its
+  models and run on them: kinfer speaks Ollama's `/api/tags` and
+  OpenAI's `/v1/chat/completions`, which is everything either kernel
+  asks of a host. Its row says `kinfer` once probed — one box can run
+  both, on two ports, with model lists that overlap.
+- **The LAN scan looks for kinfer too**: Ollama's :11434, kinfer's
+  default :11500, and any port a remembered host uses. One port at a
+  time — three sweeps at once is close to the 256 open files an app
+  gets, and a probe that fails for that reason reads as nobody there.
+- **What actually stood in the way was in the kernels.** kinfer answers
+  a streamed request that carries tools with one JSON body instead of
+  SSE, and both kernels read that as a reply with nothing in it. Fixed
+  in kinclaw and kincode.
+
 ### Streaming speech and barge-in (2026-09-07)
 
 ### Added — you can interrupt it

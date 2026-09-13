@@ -6,6 +6,10 @@ import Foundation
 /// `BrainPreset` rows for the Code-mode brain dropdown + Settings →
 /// Backend → Default brain.
 ///
+/// kinfer fits the same slot: it serves Ollama's /api/tags and
+/// OpenAI's /v1/chat/completions, which is everything the dropdowns
+/// and both kernels ask of a host.
+///
 /// Why dynamic: every Ollama install has a different set of models —
 /// hardcoding "Kimi K2.6" / "GPT-4o" / "Claude" lies if the user
 /// doesn't have them, and misses what they actually pulled (the cloud
@@ -26,8 +30,9 @@ enum OllamaCatalog {
 
     /// The Ollama the dropdowns list models from and brain switches
     /// point at — the laptop's own by default, or a box on the LAN
-    /// (`http://192.168.0.21:11434`). Normalized: scheme added if
-    /// missing, trailing slash and any path dropped.
+    /// (`http://192.168.0.21:11434`, or a kinfer on a port of its own).
+    /// Normalized: scheme added if missing, trailing slash and any path
+    /// dropped.
     static var baseURL: String {
         let raw = (UserDefaults.standard.string(forKey: hostKey) ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -81,10 +86,15 @@ enum OllamaCatalog {
 
     // MARK: - Is it there?
 
-    /// What a probe found: reachable, and how many chat models it has.
+    /// What a probe found: reachable, how many chat models it has, and
+    /// whether the server is kinfer rather than Ollama.
     struct Health: Equatable {
         let reachable: Bool
         let models: Int
+        /// Worth saying in the row: one box can run both, on two ports,
+        /// with model lists that overlap — kinfer lists and serves what
+        /// the Ollama next to it has, on top of its own.
+        var kinfer = false
         /// nil until probed — the row shows nothing rather than
         /// claiming a host is down before anyone has looked.
         static let unknown: Health? = nil
@@ -103,6 +113,7 @@ enum OllamaCatalog {
     /// on a dead LAN box is worse than a menu with no dots.
     @discardableResult
     static func probe(_ host: String) async -> Health {
+        async let kinfer = identifiesAsKinfer(host)
         var h = Health(reachable: false, models: 0)
         if let url = URL(string: "\(host)/api/tags") {
             var req = URLRequest(url: url)
@@ -115,8 +126,24 @@ enum OllamaCatalog {
                 h = Health(reachable: true, models: names.filter { isChatCapable($0) }.count)
             }
         }
+        let isKinfer = await kinfer
+        h.kinfer = h.reachable && isKinfer
         healthCache[host] = (h, Date())
         return h
+    }
+
+    /// kinfer names itself in its OpenAI model list (`owned_by: kinfer`
+    /// on the models it runs); Ollama puts "library" or the model's
+    /// namespace there.
+    private static func identifiesAsKinfer(_ host: String) async -> Bool {
+        guard let url = URL(string: "\(host)/v1/models") else { return false }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 1.5
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              (resp as? HTTPURLResponse)?.statusCode == 200,
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let models = root["data"] as? [[String: Any]] else { return false }
+        return models.contains { ($0["owned_by"] as? String) == "kinfer" }
     }
 
     /// Probe every remembered host at once.
@@ -130,7 +157,7 @@ enum OllamaCatalog {
 
     // MARK: - Finding a box you did not know about
 
-    /// Scan this machine's /24 for Ollama.
+    /// Scan this machine's /24 for Ollama and kinfer.
     ///
     /// The source picker used to be a menu with one row in it — this
     /// Mac — because a remote host only appeared after you typed its
@@ -143,25 +170,32 @@ enum OllamaCatalog {
     static func discover() async -> [String] {
         guard let prefix = subnetPrefix() else { return [] }
         var found: [String] = []
-        await withTaskGroup(of: String?.self) { group in
-            for i in 1...254 {
-                let host = "http://\(prefix).\(i):11434"
-                group.addTask {
-                    guard let url = URL(string: "\(host)/api/tags") else { return nil }
-                    var req = URLRequest(url: url)
-                    // Generous enough for a busy box on wifi, short
-                    // enough that 254 of them finish in a couple of
-                    // seconds.
-                    req.timeoutInterval = 1.2
-                    guard let (data, resp) = try? await URLSession.shared.data(for: req),
-                          (resp as? HTTPURLResponse)?.statusCode == 200,
-                          let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                          root["models"] != nil else { return nil }
-                    return host
+        // One port at a time. A sweep holds a socket open per address
+        // until it answers or times out, and three ports' worth at once
+        // is close to the 256 open files a process gets by default —
+        // past that, requests fail the same way an empty address does,
+        // and a box that is there reads as not there.
+        for port in scanPorts {
+            await withTaskGroup(of: String?.self) { group in
+                for i in 1...254 {
+                    let host = "http://\(prefix).\(i):\(port)"
+                    group.addTask {
+                        guard let url = URL(string: "\(host)/api/tags") else { return nil }
+                        var req = URLRequest(url: url)
+                        // Generous enough for a busy box on wifi, short
+                        // enough that 254 of them finish in a couple of
+                        // seconds.
+                        req.timeoutInterval = 1.2
+                        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+                              (resp as? HTTPURLResponse)?.statusCode == 200,
+                              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                              root["models"] != nil else { return nil }
+                        return host
+                    }
                 }
-            }
-            for await host in group {
-                if let host { found.append(host) }
+                for await host in group {
+                    if let host { found.append(host) }
+                }
             }
         }
         // This Mac answers on its own LAN address only if Ollama was
@@ -170,6 +204,18 @@ enum OllamaCatalog {
         let mine = myAddresses().map { "http://\($0):11434" }
         found.removeAll { mine.contains($0) }
         return found.sorted()
+    }
+
+    /// Ollama's port, kinfer's default, and every other port a
+    /// remembered host uses. kinfer is often started with `-addr` on a
+    /// port of its own, and a scan that ignores a port you have already
+    /// told it about finds less than you know.
+    private static var scanPorts: [Int] {
+        var ports = [11434, 11500]
+        for h in knownHosts {
+            if let p = URLComponents(string: h)?.port, !ports.contains(p) { ports.append(p) }
+        }
+        return ports
     }
 
     /// The first three octets of this machine's LAN address.

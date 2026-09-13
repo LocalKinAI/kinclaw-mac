@@ -1268,7 +1268,7 @@ struct SpotlightContentView: View {
                     }
                 }
                 Divider()
-                Button(scanningLAN ? "扫描中…" : "扫描局域网找 Ollama…") { scanLAN() }
+                Button(scanningLAN ? "扫描中…" : "扫描局域网找 Ollama / kinfer…") { scanLAN() }
                     .disabled(scanningLAN)
                 if OllamaCatalog.knownHosts.count > 1 {
                     Menu("忘掉一台…") {
@@ -1288,7 +1288,7 @@ struct SpotlightContentView: View {
             }
             Divider()
             if coworkBrainPresets.isEmpty {
-                Text("Ollama not reachable at \(OllamaCatalog.hostLabel(OllamaCatalog.baseURL))")
+                Text("\(OllamaCatalog.hostLabel(OllamaCatalog.baseURL)) 连不上，或者上面没有模型")
                     .foregroundColor(.secondary)
             } else {
                 ForEach(coworkBrainPresets) { preset in
@@ -1349,11 +1349,12 @@ struct SpotlightContentView: View {
     /// and, if the current model exists there, re-points the running
     /// brain at it so the switch is complete in one click; otherwise
     /// the list is refreshed and the user picks.
-    /// "· 13 个模型" / "· 连不上" — appended to a host's row once it
-    /// has been probed, and nothing before that.
+    /// "· 13 个模型" / "· kinfer · 11 个模型" / "· 连不上" — appended to
+    /// a host's row once it has been probed, and nothing before that.
     private func hostSuffix(_ host: String) -> String {
         guard let h = OllamaCatalog.cachedHealth(host) else { return "" }
-        return h.reachable ? "  · \(h.models) 个模型" : "  · 连不上"
+        guard h.reachable else { return "  · 连不上" }
+        return "  · " + (h.kinfer ? "kinfer · " : "") + "\(h.models) 个模型"
     }
 
     /// Probe every remembered host so the menu's dots mean something.
@@ -1384,7 +1385,7 @@ struct SpotlightContentView: View {
                 let added = found.filter { !before.contains($0) }
                 scanningLAN = false
                 lanScanResult = added.isEmpty
-                    ? (found.isEmpty ? "这个网段上没找到别的 Ollama" : "找到的都已经在列表里了")
+                    ? (found.isEmpty ? "这个网段上没找到别的 Ollama 或 kinfer" : "找到的都已经在列表里了")
                     : "找到 " + added.map { OllamaCatalog.hostLabel($0) }.joined(separator: "、")
                 ollamaHealthTick += 1
             }

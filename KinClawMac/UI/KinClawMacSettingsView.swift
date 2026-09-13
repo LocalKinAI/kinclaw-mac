@@ -518,7 +518,7 @@ private struct BackendSettingsTab: View {
                         .controlSize(.small)
                     }
                 }
-                SettingsCaption("The Ollama that both brain dropdowns list models from and that Ollama brain switches point at, in Cowork and Code. Leave empty for this Mac; a LAN box looks like http://192.168.0.21:11434. You do not have to type it — the brain menu's 「扫描局域网找 Ollama」 finds boxes on your network. Souls keep their own brain.endpoint for the boot default.")
+                SettingsCaption("The Ollama that both brain dropdowns list models from and that Ollama brain switches point at, in Cowork and Code. Leave empty for this Mac; a LAN box looks like http://192.168.0.21:11434. A kinfer server goes in the same field with its own port (http://192.168.0.21:11590) — it speaks Ollama's API, so everything else works unchanged. You do not have to type either — the brain menu's 「扫描局域网找 Ollama / kinfer」 finds Ollama on :11434 and kinfer on :11500 or on any port you have used before. Souls keep their own brain.endpoint for the boot default.")
                 SettingsRow(label: "SearXNG") {
                     TextField("", text: $searxng)
                         .textFieldStyle(.roundedBorder)
