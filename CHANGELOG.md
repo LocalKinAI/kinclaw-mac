@@ -144,6 +144,15 @@ would be strictly worse than the real thing. The tab keeps a
 do: the child is spawned by this app, so a permission prompt it triggers
 is attributed to KinClawMac.
 
+The agent runs under your login shell, interactive. A GUI app inherits
+launchd's PATH — /usr/bin:/bin:/usr/sbin:/sbin — and the first thing this
+tab ever printed was `env: node: No such file or directory`: the agent
+itself was found by absolute path, but the MCP servers and hooks *it*
+starts were not. `zsh -l -c` would not have fixed it either, because this
+Mac keeps PATH and nvm in .zshrc, which a non-interactive login shell
+never reads. Measured: `env node` fails under launchd's PATH, resolves to
+/opt/homebrew/bin/node under `zsh -l -i -c`.
+
 Not in yet: agents that want somebody else's config file rewritten
 (Codex's `model_providers`, Cline's VS Code settings) — a different
 promise from exporting a variable, and it needs an undo.

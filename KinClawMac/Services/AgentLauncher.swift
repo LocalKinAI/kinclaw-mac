@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// Opens a third-party agent in a terminal, pointed at the Ollama the
@@ -73,6 +74,37 @@ enum AgentLauncher {
         return FileManager.default.homeDirectoryForCurrentUser.path
     }
 
+    /// The user's login shell, from the user record rather than the
+    /// environment — launchd does not reliably hand a GUI app a SHELL.
+    static var loginShell: String {
+        if let pw = getpwuid(getuid()), let shell = pw.pointee.pw_shell {
+            let path = String(cString: shell)
+            if !path.isEmpty { return path }
+        }
+        return "/bin/zsh"
+    }
+
+    /// PATH for a child this app spawns itself.
+    ///
+    /// A GUI app inherits launchd's PATH — /usr/bin:/bin:/usr/sbin:/sbin
+    /// — which is how the Term tab first died with `env: node: No such
+    /// file or directory`: the agent was found by absolute path, but the
+    /// MCP servers and hooks *it* starts were not. The login shell the
+    /// terminal runs rebuilds PATH properly (this Mac keeps nvm and the
+    /// rest in .zshrc); this is the floor under that.
+    static func childPath(for binary: String) -> String {
+        var dirs = [(binary as NSString).deletingLastPathComponent,
+                    "/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin",
+                    NSHomeDirectory() + "/.local/bin", NSHomeDirectory() + "/bin",
+                    "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+        if let inherited = ProcessInfo.processInfo.environment["PATH"] {
+            dirs += inherited.split(separator: ":").map(String.init)
+        }
+        var seen = Set<String>()
+        return dirs.filter { !$0.isEmpty && seen.insert($0).inserted }
+            .joined(separator: ":")
+    }
+
     /// Open `item` in a terminal against `host` and `model`. Returns nil
     /// when the window is on its way, or a sentence to put in the menu.
     @discardableResult
@@ -89,14 +121,14 @@ enum AgentLauncher {
             "#",
             "# If this model's window is smaller than Claude Code assumes:",
             "#   export CLAUDE_CODE_MAX_CONTEXT_TOKENS=32768",
-            "cd \(quoted(dir)) || exit 1",
+            "cd \(shellQuoted(dir)) || exit 1",
         ]
         for (key, value) in item.integration.env(host).sorted(by: { $0.key < $1.key }) {
-            lines.append("export \(key)=\(quoted(value))")
+            lines.append("export \(key)=\(shellQuoted(value))")
         }
         lines.append("echo \"→ \(item.integration.label) · \(model) · \(host)\"")
-        let args = item.integration.modelArgs(model).map(quoted).joined(separator: " ")
-        lines.append("exec \(quoted(item.binary)) \(args)")
+        let args = item.integration.modelArgs(model).map(shellQuoted).joined(separator: " ")
+        lines.append("exec \(shellQuoted(item.binary)) \(args)")
 
         let folder = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Library/Caches/kinclaw/launch")
@@ -136,7 +168,8 @@ enum AgentLauncher {
         }
     }
 
-    private static func quoted(_ s: String) -> String {
+    /// Single-quote a word for a shell command line.
+    static func shellQuoted(_ s: String) -> String {
         "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 

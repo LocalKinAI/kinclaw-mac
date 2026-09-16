@@ -223,11 +223,24 @@ private struct TerminalHost: NSViewRepresentable {
 
     private func start(_ view: LocalProcessTerminalView, context: Context) {
         context.coordinator.started = serial
+        // Our PATH has to win, and two PATH= entries in one environment
+        // array is anybody's guess, so drop the inherited one first.
         var env = Terminal.getEnvironmentVariables(termName: "xterm-256color")
+            .filter { !$0.hasPrefix("PATH=") }
+        env.append("PATH=" + AgentLauncher.childPath(for: binary))
         for (key, value) in environment.sorted(by: { $0.key < $1.key }) {
             env.append("\(key)=\(value)")
         }
-        view.startProcess(executable: binary, args: args, environment: env,
+        // Through the login shell, interactive: the agent starts children
+        // of its own (MCP servers, hooks) that want node, and this Mac
+        // keeps PATH and nvm in .zshrc — which `zsh -l -c` does not read.
+        // Measured: `env node` fails under launchd's PATH and resolves to
+        // /opt/homebrew/bin/node under `zsh -l -i -c`. `exec` hands the
+        // PTY straight to the agent, so ^C and the exit code are its own.
+        let command = ([binary] + args).map(AgentLauncher.shellQuoted).joined(separator: " ")
+        view.startProcess(executable: AgentLauncher.loginShell,
+                          args: ["-l", "-i", "-c", "exec " + command],
+                          environment: env,
                           currentDirectory: directory)
     }
 }
