@@ -71,6 +71,8 @@ struct CodePane: View {
     @State private var ollamaHealthTick = 0
     @State private var scanningLAN = false
     @State private var lanScanResult: String?
+    /// What the last agent launch said, when it did not work.
+    @State private var launchNote: String?
     /// A parked tool call waiting on the human.
     @State private var pendingPermission: PermissionRequest?
     /// What taking back the last turn would restore. Empty means there
@@ -1639,6 +1641,7 @@ struct CodePane: View {
                 Task { await reloadBrainPresets() }
                 refreshOllamaHealth()
             }
+            agentLaunchRows(model: activeModel, provider: activeProvider)
             Text("Default brain → Settings → Backend")
                 .foregroundColor(.secondary)
         } label: {
@@ -1676,6 +1679,28 @@ struct CodePane: View {
         guard let h = OllamaCatalog.cachedHealth(host) else { return "" }
         guard h.reachable else { return "  · 连不上" }
         return "  · " + (h.kinfer ? "kinfer · " : "") + "\(h.models) 个模型"
+    }
+
+    /// 「在终端里用这个模型开 Claude Code」 — the two environment variables
+    /// `ollama launch` exports, with the host and model this menu is
+    /// already showing. Only offered for an Ollama brain: aiming an agent
+    /// at a host that does not serve the model it was handed is a worse
+    /// outcome than no row at all.
+    @ViewBuilder
+    private func agentLaunchRows(model: String, provider: String) -> some View {
+        if provider == "ollama", !model.isEmpty, !AgentLauncher.available.isEmpty {
+            Divider()
+            ForEach(AgentLauncher.available) { item in
+                Button("在终端里用这个模型开 \(item.integration.label)") {
+                    launchNote = AgentLauncher.launch(item,
+                                                      host: OllamaCatalog.baseURL,
+                                                      model: model)
+                }
+            }
+            if let launchNote {
+                Text(launchNote).foregroundColor(.secondary)
+            }
+        }
     }
 
     private func refreshOllamaHealth() {

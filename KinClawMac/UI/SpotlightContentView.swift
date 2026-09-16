@@ -96,6 +96,8 @@ struct SpotlightContentView: View {
     /// What the last scan or source switch found, shown in the menu
     /// rather than dropped into the conversation.
     @State private var lanScanResult: String?
+    /// What the last agent launch said, when it did not work.
+    @State private var launchNote: String?
 
     /// Connection error string for kinclaw's :5001 server. Nil = OK,
     /// non-nil = the green dot in agentBar flips orange and the
@@ -1317,6 +1319,7 @@ struct SpotlightContentView: View {
                 Task { await reloadCoworkBrainPresets() }
                 refreshOllamaHealth()
             }
+            agentLaunchRows(model: coworkActiveModel, provider: coworkActiveProvider)
             Text("Soul stays the same; only brain swaps")
                 .foregroundColor(.secondary)
         } label: {
@@ -1355,6 +1358,28 @@ struct SpotlightContentView: View {
         guard let h = OllamaCatalog.cachedHealth(host) else { return "" }
         guard h.reachable else { return "  · 连不上" }
         return "  · " + (h.kinfer ? "kinfer · " : "") + "\(h.models) 个模型"
+    }
+
+    /// 「在终端里用这个模型开 Claude Code」 — the two environment variables
+    /// `ollama launch` exports, with the host and model this menu is
+    /// already showing. Only offered for an Ollama brain: aiming an agent
+    /// at a host that does not serve the model it was handed is a worse
+    /// outcome than no row at all.
+    @ViewBuilder
+    private func agentLaunchRows(model: String, provider: String) -> some View {
+        if provider == "ollama", !model.isEmpty, !AgentLauncher.available.isEmpty {
+            Divider()
+            ForEach(AgentLauncher.available) { item in
+                Button("在终端里用这个模型开 \(item.integration.label)") {
+                    launchNote = AgentLauncher.launch(item,
+                                                      host: OllamaCatalog.baseURL,
+                                                      model: model)
+                }
+            }
+            if let launchNote {
+                Text(launchNote).foregroundColor(.secondary)
+            }
+        }
     }
 
     /// Probe every remembered host so the menu's dots mean something.

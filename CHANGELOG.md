@@ -117,6 +117,33 @@ tells the model to answer rather than recap.
   SSE, and both kernels read that as a reply with nothing in it. Fixed
   in kinclaw and kincode.
 
+### Added — the model menu opens another agent on the same model
+
+`ollama launch claude` works because Ollama serves three dialects, not
+because the launcher is clever: Anthropic's Messages API is there at
+/v1/messages (measured on 0.34.0 and 0.34.1 — real `message_start` /
+`content_block_delta` streaming, `thinking` blocks included), so aiming
+Claude Code at it is two environment variables and nothing else.
+
+Both model menus now carry that row: **在终端里用这个模型开 Claude Code**.
+It exports `ANTHROPIC_BASE_URL` for the host picked in 「模型来自哪台机器」
+— this Mac or the box on the LAN — pins the model the menu is showing,
+starts in the folder Code is pointed at, and opens in whichever terminal
+owns `.command`. Measured end to end: `claude --model kimi-k2.6:cloud`
+through this Mac's Ollama answered in 3.9s. That last part is the bit
+`ollama launch` cannot do — it only ever knows the Ollama on the machine
+it runs on.
+
+The row hides itself unless the current brain is an Ollama one and the
+agent's binary is really installed (resolved once per launch, so a newly
+installed agent shows up after a restart). Two things deliberately left
+out: agents that need somebody else's config file rewritten (Codex's
+`model_providers`, Cline's VS Code settings) — that is a different
+promise from exporting a variable and it needs an undo; and embedding an
+agent *inside* a pane — `claude -p --output-format stream-json` has no
+approval callback, so the approval cards would degrade into a
+pre-approved tool list.
+
 ### Streaming speech and barge-in (2026-09-07)
 
 ### Added — you can interrupt it
