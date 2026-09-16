@@ -149,14 +149,17 @@ struct AgentTerminalPane: View {
         }
     }
 
-    /// kinfer serves Ollama's API and OpenAI's chat one, but not
-    /// /v1/responses — the only dialect Codex speaks since it dropped
-    /// `wire_api = "chat"`. Better said in the header than discovered as
-    /// a dead connection in the terminal.
+    /// Whether the chosen machine speaks the chosen agent's dialect — asked
+    /// of the host, since a kinfer box can be running a build from before
+    /// it learned /v1/messages and /v1/responses. Better said in the header
+    /// than discovered as a dead connection in the terminal.
     private var dialectWarning: String? {
-        guard let agent, agent.integration.dialect == .openAIResponses,
-              OllamaCatalog.cachedHealth(host)?.kinfer == true else { return nil }
-        return "kinfer 没有 /v1/responses，\(agent.integration.label) 用不了这台"
+        guard let agent, let health = OllamaCatalog.cachedHealth(host), health.reachable else { return nil }
+        let (served, path) = agent.integration.dialect == .openAIResponses
+            ? (health.openAIResponses, "/v1/responses")
+            : (health.anthropicMessages, "/v1/messages")
+        guard !served else { return nil }
+        return "\(OllamaCatalog.hostLabel(host)) 没有 \(path)，\(agent.integration.label) 用不了这台 —— 更新那台的 kinfer"
     }
 
     /// Which machine's models the agent talks to. Same catalog as both

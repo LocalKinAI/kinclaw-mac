@@ -162,8 +162,16 @@ overridden"), so the tab declares a provider of its own — which is also
 what lets Codex talk to the box on the LAN instead of only this Mac.
 Measured end to end: this Mac + kimi-k2.6:cloud, 2.8s; the LAN box +
 qwen4exp-local, 74s for its ~9K-token opening prompt (a 4K-context model
-cannot run Codex at all). kinfer serves no /v1/responses, so the header
-says Codex cannot use that host rather than letting the terminal find out.
+cannot run Codex at all).
+
+Whether a machine can serve an agent is asked of the machine, not assumed
+from what it is: kinfer learned /v1/messages and /v1/responses in 86ba172,
+and a box can be running a build from before that. A POST naming a model
+that cannot exist gets a JSON error back from a route that exists and the
+router's plain-text 404 from one that does not — the status is 404 either
+way, so the body type is the answer — and the header says "没有
+/v1/responses，Codex 用不了这台 —— 更新那台的 kinfer" before the terminal
+has to find out.
 
 The agent picker appears in the header as soon as more than one agent is
 installed; with one, it stays a label.

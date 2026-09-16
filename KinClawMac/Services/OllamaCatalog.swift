@@ -95,6 +95,11 @@ enum OllamaCatalog {
         /// with model lists that overlap — kinfer lists and serves what
         /// the Ollama next to it has, on top of its own.
         var kinfer = false
+        /// Which agent dialects the host serves. Ollama serves both; kinfer
+        /// did not until it was taught to, and a box can be running either
+        /// build — so for kinfer this is asked, not assumed.
+        var anthropicMessages = true
+        var openAIResponses = true
         /// nil until probed — the row shows nothing rather than
         /// claiming a host is down before anyone has looked.
         static let unknown: Health? = nil
@@ -128,6 +133,12 @@ enum OllamaCatalog {
         }
         let isKinfer = await kinfer
         h.kinfer = h.reachable && isKinfer
+        if h.kinfer {
+            async let messages = routeExists(host, "/v1/messages")
+            async let responses = routeExists(host, "/v1/responses")
+            h.anthropicMessages = await messages
+            h.openAIResponses = await responses
+        }
         healthCache[host] = (h, Date())
         return h
     }
@@ -144,6 +155,22 @@ enum OllamaCatalog {
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let models = root["data"] as? [[String: Any]] else { return false }
         return models.contains { ($0["owned_by"] as? String) == "kinfer" }
+    }
+
+    /// Whether `path` is a route on this host. A POST naming a model that
+    /// cannot exist gets a JSON error back from a route that exists (the
+    /// model is missing) and the router's plain-text 404 from one that does
+    /// not — the status is 404 either way, so the body type is the answer.
+    private static func routeExists(_ host: String, _ path: String) async -> Bool {
+        guard let url = URL(string: host + path) else { return false }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = Data(#"{"model":"__kinclaw_probe__"}"#.utf8)
+        req.timeoutInterval = 1.5
+        guard let (_, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse else { return false }
+        return (http.value(forHTTPHeaderField: "Content-Type") ?? "").contains("json")
     }
 
     /// Probe every remembered host at once.
