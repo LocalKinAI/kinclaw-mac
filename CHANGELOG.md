@@ -176,6 +176,13 @@ has to find out.
 The agent picker appears in the header as soon as more than one agent is
 installed; with one, it stays a label.
 
+The folder is the tab's own too, picked in the same header: its recent
+folders and Code's recent repos, a folder picker, "follow Code's repo", and
+"show in Finder". Changing it restarts the agent — a working directory is
+fixed when a process starts, and an agent still running in the old folder
+under a header naming the new one is worse than a restart. Opened from
+Code's model menu, the agent starts in Code's repo.
+
 A terminal rather than our own transcript with our own cards, because
 these are interactive TUIs: their own approval prompts, their own
 scrollback, their own ^C. `claude -p --output-format stream-json` has no

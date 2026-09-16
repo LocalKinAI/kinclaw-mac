@@ -1686,7 +1686,8 @@ struct CodePane: View {
             Divider()
             ForEach(AgentLauncher.available) { item in
                 Button("在 Term 里用这个模型开 \(item.integration.label)") {
-                    AgentTerminalStore.shared.run(item, host: OllamaCatalog.baseURL, model: model)
+                    AgentTerminalStore.shared.run(item, host: OllamaCatalog.baseURL, model: model,
+                                                  directory: repoPath.isEmpty ? nil : repoPath)
                 }
             }
         }

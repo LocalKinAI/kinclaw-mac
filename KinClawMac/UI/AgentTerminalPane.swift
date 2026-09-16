@@ -13,6 +13,9 @@ final class AgentTerminalStore: ObservableObject {
         let agent: String
         let host: String
         let model: String
+        /// The folder to start in, when the asker has one — Code passes its
+        /// repo. nil keeps whatever folder the tab already has.
+        let directory: String?
         /// Bumped on every ask, so the same agent on the same model is a
         /// fresh request rather than a no-op.
         let serial: Int
@@ -21,9 +24,10 @@ final class AgentTerminalStore: ObservableObject {
     @Published private(set) var request: Request?
     private var serial = 0
 
-    func run(_ item: AgentLauncher.Installed, host: String, model: String) {
+    func run(_ item: AgentLauncher.Installed, host: String, model: String, directory: String? = nil) {
         serial += 1
-        request = Request(agent: item.integration.id, host: host, model: model, serial: serial)
+        request = Request(agent: item.integration.id, host: host, model: model,
+                          directory: directory, serial: serial)
     }
 }
 
@@ -47,6 +51,12 @@ struct AgentTerminalPane: View {
     @AppStorage("kinclaw.term.agent") private var termAgent: String = ""
     @AppStorage("kinclaw.term.host") private var termHost: String = ""
     @AppStorage("kinclaw.term.model") private var termModel: String = ""
+    /// Empty = the folder Code is pointed at, else home.
+    @AppStorage("kinclaw.term.folder") private var termFolder: String = ""
+    @AppStorage("kinclaw.term.recents") private var termRecentsRaw: String = ""
+    /// Code's recent repos, offered here too: they are the folders a person
+    /// actually works in.
+    @AppStorage("kinclaw.kincode.recents") private var codeRecentsRaw: String = ""
 
     @State private var presets: [BrainPreset] = []
     @State private var serial: Int = 0
@@ -64,6 +74,13 @@ struct AgentTerminalPane: View {
 
     private var host: String { termHost.isEmpty ? OllamaCatalog.baseURL : termHost }
 
+    /// Where the agent works: the tab's own choice while it still exists,
+    /// else the folder Code is pointed at, else home.
+    private var folder: String {
+        if !termFolder.isEmpty, FileManager.default.fileExists(atPath: termFolder) { return termFolder }
+        return AgentLauncher.defaultDirectory
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -72,7 +89,7 @@ struct AgentTerminalPane: View {
                 TerminalHost(binary: agent.binary,
                              args: agent.integration.args(host, termModel),
                              environment: agent.integration.env(host),
-                             directory: AgentLauncher.defaultDirectory,
+                             directory: folder,
                              serial: serial,
                              onExit: { code in
                                  note = code.map { "进程结束（退出码 \($0)）" } ?? "进程结束了"
@@ -98,6 +115,7 @@ struct AgentTerminalPane: View {
                 agentMenu(current: agent)
                 machineMenu
                 modelMenu
+                folderMenu
             } else {
                 Text("没有可跑的 agent")
                     .font(.system(size: 12, weight: .medium))
@@ -235,7 +253,95 @@ struct AgentTerminalPane: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    /// Where the agent works. Changing it restarts the agent: a process's
+    /// working directory is fixed when it starts, and an agent still running
+    /// in the old folder while the header names the new one is worse than one
+    /// that restarted.
+    private var folderMenu: some View {
+        Menu {
+            ForEach(recentFolders, id: \.self) { path in
+                Button {
+                    switchFolder(to: path)
+                } label: {
+                    HStack {
+                        if path == folder { Image(systemName: "checkmark") }
+                        Text(displayPath(path))
+                    }
+                }
+            }
+            Divider()
+            Button("选择文件夹…") { pickFolder() }
+            if !termFolder.isEmpty {
+                Button("跟随 Code 的仓库") { switchFolder(to: "") }
+            }
+            Button("在 Finder 中显示") {
+                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: folder)
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "folder")
+                    .font(.system(size: 9))
+                Text((folder as NSString).lastPathComponent)
+                    .font(.system(size: 10))
+                    .lineLimit(1)
+            }
+            .foregroundColor(.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(folder)
+    }
+
+    /// The current folder, then the tab's recent ones, then Code's —
+    /// deduplicated, with folders that no longer exist left out.
+    private var recentFolders: [String] {
+        let candidates = [folder]
+            + termRecentsRaw.split(separator: ",").map(String.init)
+            + codeRecentsRaw.split(separator: ",").map(String.init)
+        var out: [String] = []
+        for path in candidates where !path.isEmpty && !out.contains(path)
+            && FileManager.default.fileExists(atPath: path) {
+            out.append(path)
+            if out.count == 8 { break }
+        }
+        return out
+    }
+
+    private func displayPath(_ path: String) -> String {
+        let home = NSHomeDirectory()
+        return path.hasPrefix(home) ? "~" + path.dropFirst(home.count) : path
+    }
+
     // MARK: - Doing things
+
+    private func pickFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = URL(fileURLWithPath: folder)
+        panel.message = "Agent 在哪个文件夹里工作？"
+        if panel.runModal() == .OK, let url = panel.url {
+            switchFolder(to: url.path)
+        }
+    }
+
+    /// Make `path` the tab's folder and put it at the front of its recents.
+    /// "" goes back to following Code.
+    private func rememberFolder(_ path: String) {
+        termFolder = path
+        guard !path.isEmpty else { return }
+        var recents = termRecentsRaw.split(separator: ",").map(String.init).filter { $0 != path }
+        recents.insert(path, at: 0)
+        termRecentsRaw = recents.prefix(10).joined(separator: ",")
+    }
+
+    private func switchFolder(to path: String) {
+        rememberFolder(path)
+        note = nil
+        if !termModel.isEmpty { serial += 1 }
+    }
 
     /// A model menu in Cowork or Code asked for this agent: take its
     /// machine and model as the tab's own and start.
@@ -245,6 +351,9 @@ struct AgentTerminalPane: View {
         termAgent = request.agent
         termHost = request.host
         termModel = request.model
+        if let directory = request.directory, !directory.isEmpty {
+            rememberFolder(directory)
+        }
         serial += 1
         Task { await reloadPresets() }
     }
@@ -282,7 +391,7 @@ struct AgentTerminalPane: View {
 
     private func openOutside() {
         guard let agent else { return }
-        note = AgentLauncher.launch(agent, host: host, model: termModel)
+        note = AgentLauncher.launch(agent, host: host, model: termModel, directory: folder)
     }
 
     private func scanLAN() {
