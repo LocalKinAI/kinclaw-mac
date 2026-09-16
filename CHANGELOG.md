@@ -183,6 +183,16 @@ fixed when a process starts, and an agent still running in the old folder
 under a header naming the new one is worse than a restart. Opened from
 Code's model menu, the agent starts in Code's repo.
 
+**Tabs.** Several agents at once, each with its own agent, machine, model
+and folder; + opens one set up like the tab you are on. The terminals
+belong to a session object rather than to the view tree, which also fixes
+what the single tab got wrong: leaving Term ended the agent, because
+SwiftUI tears a view down when it leaves the hierarchy. Now only closing a
+tab does. Tabs are remembered across launches and start their agent the
+first time they are shown, so a restored set does not launch every agent
+at once. A model menu opens the tab already set up that way, or a new one
+— never by replacing the agent you were talking to.
+
 A terminal rather than our own transcript with our own cards, because
 these are interactive TUIs: their own approval prompts, their own
 scrollback, their own ^C. `claude -p --output-format stream-json` has no
@@ -218,6 +228,16 @@ exit code was grep's. A FAILED build printed the tick and `make run`
 happily launched the previous binary — found by wondering why a new tab
 had not appeared. Full output now lands in `/tmp/xcodebuild.log`, the
 filtered summary still prints, and the status is xcodebuild's own.
+
+### Fixed — the app could crash within a second of launch
+
+`OllamaCatalog.probeAll()` probes every remembered host at once, and each
+probe wrote the shared health cache from whatever thread its task finished
+on. Two writes landing together corrupted the dictionary: two crash reports
+on 2026-09-16, at 08:55 and 16:44, 0.3 and 0.4s after launch, both at that
+write — once as a bad pointer inside the dictionary's storage, once as a
+message sent to something that was no longer what it had been. The cache
+is behind a lock now. It came in with the LAN health probes on 2026-09-12.
 
 ### Streaming speech and barge-in (2026-09-07)
 
