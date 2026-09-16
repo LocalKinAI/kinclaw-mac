@@ -64,6 +64,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Backend → Kincode autostart.
     let kincodeSupervisor = KinCodeSupervisor()
 
+    /// Clicking the icon — in the Dock, in Finder, or `open -a KinClawMac`
+    /// — summons the panel, the same as the hotkey. Without this, an app
+    /// whose only surface is a hotkey panel looks broken to anyone who
+    /// has forgotten the hotkey: the icon bounces and nothing appears.
+    func applicationShouldHandleReopen(_ sender: NSApplication,
+                                       hasVisibleWindows flag: Bool) -> Bool {
+        spotlightWindow?.show()
+        return true
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // One-shot migration: if the user has chat history saved
         // under the old UserDefaults `chat_<slug>` keys, rewrite as

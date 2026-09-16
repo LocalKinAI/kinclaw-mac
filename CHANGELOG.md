@@ -117,6 +117,13 @@ tells the model to answer rather than recap.
   SSE, and both kernels read that as a reply with nothing in it. Fixed
   in kinclaw and kincode.
 
+### Changed — clicking the icon summons the panel
+
+⌥⌘K is still the way in, but an app whose only surface is a hotkey panel
+should not be unreachable to someone who has forgotten the hotkey: the
+Dock icon used to bounce and show nothing. `applicationShouldHandleReopen`
+now shows the panel, which also makes `open -a KinClawMac` work.
+
 ### Added — a Term tab: another agent, on the model you picked
 
 `ollama launch claude` works because Ollama serves three dialects, not
