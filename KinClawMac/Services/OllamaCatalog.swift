@@ -107,9 +107,16 @@ enum OllamaCatalog {
 
     private static var healthCache: [String: (Health, Date)] = [:]
 
+    /// probeAll runs a probe per host at once, and each one finishes on
+    /// whatever thread the pool hands its task. Unguarded, two of them
+    /// writing this dictionary together corrupted it: two crashes on
+    /// 2026-09-16, 0.3 and 0.4s after launch, both at the write in probe(_:).
+    private static let healthLock = NSLock()
+
     /// The last known health of a host, if it was probed recently.
     static func cachedHealth(_ host: String) -> Health? {
-        guard let (h, at) = healthCache[host], Date().timeIntervalSince(at) < 30 else { return nil }
+        guard let (h, at) = healthLock.withLock({ healthCache[host] }),
+              Date().timeIntervalSince(at) < 30 else { return nil }
         return h
     }
 
@@ -139,7 +146,8 @@ enum OllamaCatalog {
             h.anthropicMessages = await messages
             h.openAIResponses = await responses
         }
-        healthCache[host] = (h, Date())
+        let probed = h
+        healthLock.withLock { healthCache[host] = (probed, Date()) }
         return h
     }
 
