@@ -150,6 +150,24 @@ over when the new host has it, falls back to the same family when it does
 not (ornith-1.5:35b → ornith-1.5:9b), and otherwise says so and waits,
 rather than handing the agent a model name that host never heard of.
 
+**Codex is in too**, and it took a different shape: its endpoint goes in
+as config overrides on the command line (`-c model_provider=…`), not as
+environment, because rewriting somebody's ~/.codex/config.toml would need
+an undo. Three things the attempt taught, all of them only findable by
+trying (0.154.0): `wire_api = "chat"` is refused outright now ("set
+wire_api = \"responses\""); Ollama does serve /v1/responses, so that is
+fine (measured — 200, proper Responses body); and the built-in `ollama`
+provider will not take a base_url override ("Built-in providers cannot be
+overridden"), so the tab declares a provider of its own — which is also
+what lets Codex talk to the box on the LAN instead of only this Mac.
+Measured end to end: this Mac + kimi-k2.6:cloud, 2.8s; the LAN box +
+qwen4exp-local, 74s for its ~9K-token opening prompt (a 4K-context model
+cannot run Codex at all). kinfer serves no /v1/responses, so the header
+says Codex cannot use that host rather than letting the terminal find out.
+
+The agent picker appears in the header as soon as more than one agent is
+installed; with one, it stays a label.
+
 A terminal rather than our own transcript with our own cards, because
 these are interactive TUIs: their own approval prompts, their own
 scrollback, their own ^C. `claude -p --output-format stream-json` has no

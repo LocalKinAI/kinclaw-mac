@@ -42,7 +42,9 @@ final class AgentTerminalStore: ObservableObject {
 struct AgentTerminalPane: View {
     @ObservedObject private var store = AgentTerminalStore.shared
 
-    /// Empty = follow whatever source the panes are using.
+    /// The tab's own agent, machine and model. Empty host = follow
+    /// whatever source the panes are using.
+    @AppStorage("kinclaw.term.agent") private var termAgent: String = ""
     @AppStorage("kinclaw.term.host") private var termHost: String = ""
     @AppStorage("kinclaw.term.model") private var termModel: String = ""
 
@@ -54,13 +56,10 @@ struct AgentTerminalPane: View {
 
     private var installed: [AgentLauncher.Installed] { AgentLauncher.available }
 
-    /// The agent asked for, else the only one installed.
+    /// The agent asked for, else the tab's own, else whatever is here.
     private var agent: AgentLauncher.Installed? {
-        if let id = store.request?.agent,
-           let match = installed.first(where: { $0.integration.id == id }) {
-            return match
-        }
-        return installed.first
+        let wanted = store.request?.agent ?? termAgent
+        return installed.first { $0.integration.id == wanted } ?? installed.first
     }
 
     private var host: String { termHost.isEmpty ? OllamaCatalog.baseURL : termHost }
@@ -71,7 +70,7 @@ struct AgentTerminalPane: View {
             Divider().opacity(0.15)
             if let agent, !termModel.isEmpty {
                 TerminalHost(binary: agent.binary,
-                             args: agent.integration.modelArgs(termModel),
+                             args: agent.integration.args(host, termModel),
                              environment: agent.integration.env(host),
                              directory: AgentLauncher.defaultDirectory,
                              serial: serial,
@@ -95,19 +94,21 @@ struct AgentTerminalPane: View {
             Image(systemName: "terminal")
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
-            Text(agent?.integration.label ?? "没有可跑的 agent")
-                .font(.system(size: 12, weight: .medium))
-            if agent != nil {
+            if let agent {
+                agentMenu(current: agent)
                 machineMenu
                 modelMenu
+            } else {
+                Text("没有可跑的 agent")
+                    .font(.system(size: 12, weight: .medium))
             }
             Spacer()
-            if let note {
-                Text(note)
+            if let message = note ?? dialectWarning {
+                Text(message)
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
                     .lineLimit(1)
-                    .help(note)
+                    .help(message)
             }
             if agent != nil, !termModel.isEmpty {
                 Button("重启") { note = nil; serial += 1 }
@@ -119,6 +120,43 @@ struct AgentTerminalPane: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
+    }
+
+    /// Which agent. A picker only when there is something to pick
+    /// between — one installed agent does not need a menu.
+    @ViewBuilder
+    private func agentMenu(current: AgentLauncher.Installed) -> some View {
+        if installed.count > 1 {
+            Menu(current.integration.label) {
+                ForEach(installed) { item in
+                    Button {
+                        note = nil
+                        termAgent = item.integration.id
+                        serial += 1
+                    } label: {
+                        HStack {
+                            if item.id == current.id { Image(systemName: "checkmark") }
+                            Text(item.integration.label)
+                        }
+                    }
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+        } else {
+            Text(current.integration.label)
+                .font(.system(size: 12, weight: .medium))
+        }
+    }
+
+    /// kinfer serves Ollama's API and OpenAI's chat one, but not
+    /// /v1/responses — the only dialect Codex speaks since it dropped
+    /// `wire_api = "chat"`. Better said in the header than discovered as
+    /// a dead connection in the terminal.
+    private var dialectWarning: String? {
+        guard let agent, agent.integration.dialect == .openAIResponses,
+              OllamaCatalog.cachedHealth(host)?.kinfer == true else { return nil }
+        return "kinfer 没有 /v1/responses，\(agent.integration.label) 用不了这台"
     }
 
     /// Which machine's models the agent talks to. Same catalog as both
@@ -201,6 +239,7 @@ struct AgentTerminalPane: View {
     private func adopt(_ request: AgentTerminalStore.Request?) {
         guard let request else { return }
         note = nil
+        termAgent = request.agent
         termHost = request.host
         termModel = request.model
         serial += 1

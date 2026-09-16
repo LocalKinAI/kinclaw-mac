@@ -14,6 +14,15 @@ import Foundation
 /// environment.
 enum AgentLauncher {
 
+    /// The API dialect a host has to serve for an agent to work against
+    /// it. Ollama serves all three; kinfer, today, only the chat one.
+    enum Dialect {
+        /// Anthropic's Messages API, `/v1/messages`.
+        case anthropicMessages
+        /// OpenAI's Responses API, `/v1/responses`.
+        case openAIResponses
+    }
+
     /// An agent we know how to point at an Ollama.
     struct Integration {
         let id: String
@@ -22,8 +31,11 @@ enum AgentLauncher {
         let binaries: [String]
         /// The environment that aims the agent at `host`.
         let env: (_ host: String) -> [String: String]
-        /// Arguments that pin the model.
-        let modelArgs: (_ model: String) -> [String]
+        /// Arguments that aim it at `host` and pin `model` — not every
+        /// agent takes its endpoint from the environment.
+        let args: (_ host: String, _ model: String) -> [String]
+        /// What the host must speak. Shown before it fails, not after.
+        let dialect: Dialect
     }
 
     /// An integration whose binary is actually on this Mac.
@@ -50,14 +62,45 @@ enum AgentLauncher {
                 "ANTHROPIC_AUTH_TOKEN": "ollama",
             ]
         },
-        modelArgs: { model in ["--model", model] }
+        args: { _, model in ["--model", model] },
+        dialect: .anthropicMessages
     )
 
-    /// Agents that need a config file rewritten rather than two env vars
-    /// (Codex's `model_providers`, Cline's VS Code settings) are not here
-    /// yet — patching somebody else's config is a different promise than
-    /// exporting a variable, and it needs an undo.
-    static let all: [Integration] = [claudeCode]
+    /// Codex takes its endpoint as config overrides — `-c key=value` —
+    /// which beats rewriting somebody's ~/.codex/config.toml, because a
+    /// rewrite needs an undo.
+    ///
+    /// Three things learned by trying it (0.154.0):
+    ///   - `wire_api = "chat"` is refused outright now: "set wire_api =
+    ///     \"responses\"". Ollama does serve /v1/responses — measured,
+    ///     200 with a proper Responses body — so this works anyway.
+    ///   - the built-in `ollama` provider cannot have its base_url
+    ///     overridden ("Built-in providers cannot be overridden"), hence
+    ///     a provider of our own. Which is also what lets Codex point at
+    ///     the box on the LAN and not just this Mac.
+    ///   - Codex opens with a ~7-9K token prompt, so a 4K-context model
+    ///     cannot run it at all.
+    static let codex = Integration(
+        id: "codex",
+        label: "Codex",
+        binaries: ["codex"],
+        env: { _ in [:] },
+        args: { host, model in
+            [
+                "-c", "model_provider=kinhost",
+                "-c", "model_providers.kinhost.name=\"KinClaw host\"",
+                "-c", "model_providers.kinhost.base_url=\"\(host)/v1\"",
+                "-c", "model_providers.kinhost.wire_api=\"responses\"",
+                "--model", model,
+            ]
+        },
+        dialect: .openAIResponses
+    )
+
+    /// Agents that want somebody else's config file rewritten (Cline's
+    /// VS Code settings) are still out: a different promise from a flag,
+    /// and it needs an undo.
+    static let all: [Integration] = [claudeCode, codex]
 
     /// The ones installed here. Resolved once: this is read while a menu
     /// is being built.
@@ -127,7 +170,7 @@ enum AgentLauncher {
             lines.append("export \(key)=\(shellQuoted(value))")
         }
         lines.append("echo \"→ \(item.integration.label) · \(model) · \(host)\"")
-        let args = item.integration.modelArgs(model).map(shellQuoted).joined(separator: " ")
+        let args = item.integration.args(host, model).map(shellQuoted).joined(separator: " ")
         lines.append("exec \(shellQuoted(item.binary)) \(args)")
 
         let folder = URL(fileURLWithPath: NSHomeDirectory())
