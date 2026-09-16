@@ -71,8 +71,6 @@ struct CodePane: View {
     @State private var ollamaHealthTick = 0
     @State private var scanningLAN = false
     @State private var lanScanResult: String?
-    /// What the last agent launch said, when it did not work.
-    @State private var launchNote: String?
     /// A parked tool call waiting on the human.
     @State private var pendingPermission: PermissionRequest?
     /// What taking back the last turn would restore. Empty means there
@@ -1691,14 +1689,9 @@ struct CodePane: View {
         if provider == "ollama", !model.isEmpty, !AgentLauncher.available.isEmpty {
             Divider()
             ForEach(AgentLauncher.available) { item in
-                Button("在终端里用这个模型开 \(item.integration.label)") {
-                    launchNote = AgentLauncher.launch(item,
-                                                      host: OllamaCatalog.baseURL,
-                                                      model: model)
+                Button("在 Term 里用这个模型开 \(item.integration.label)") {
+                    AgentTerminalStore.shared.run(item, host: OllamaCatalog.baseURL, model: model)
                 }
-            }
-            if let launchNote {
-                Text(launchNote).foregroundColor(.secondary)
             }
         }
     }

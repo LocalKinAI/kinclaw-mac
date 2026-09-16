@@ -63,6 +63,8 @@ struct SpotlightContentView: View {
     /// Active surface — Chat / Cowork / Code. Loaded from UserDefaults
     /// so the user's last choice survives a relaunch.
     @State private var mode: ChatMode = ChatMode.loadPersisted()
+    /// A model menu asking for an agent in the Term tab.
+    @ObservedObject private var termStore = AgentTerminalStore.shared
 
     /// Per-mode last-used agent slug. Each tab has its OWN active
     /// agent — switching tabs swaps which agent is in use. This is
@@ -96,8 +98,6 @@ struct SpotlightContentView: View {
     /// What the last scan or source switch found, shown in the menu
     /// rather than dropped into the conversation.
     @State private var lanScanResult: String?
-    /// What the last agent launch said, when it did not work.
-    @State private var launchNote: String?
 
     /// Connection error string for kinclaw's :5001 server. Nil = OK,
     /// non-nil = the green dot in agentBar flips orange and the
@@ -546,7 +546,7 @@ struct SpotlightContentView: View {
             // Secondary row — agent picker and utility buttons. Code
             // mode has CodePane's own repoBar acting as its secondary
             // row, so we skip ours there to avoid double bars.
-            if mode != .code {
+            if mode != .code, mode != .term {
                 agentBar
                 Divider().opacity(0.15)
             }
@@ -592,10 +592,19 @@ struct SpotlightContentView: View {
                     .animation(.easeOut(duration: 0.18), value: showWorkspaceSidebar)
                 case .code:
                     CodePane()
+                case .term:
+                    AgentTerminalPane()
                 }
             }
         }
         .preferredColorScheme(.dark)
+        // A model menu asked for an agent in a terminal: show it.
+        .onChange(of: termStore.request?.serial) { _, serial in
+            if serial != nil, mode != .term {
+                mode = .term
+                mode.persist()
+            }
+        }
         .background(Color.clear) // SpotlightWindow's blur shows through
         // Drag any file in from Finder / desktop / mail — becomes a
         // pending attachment. Local kinclaw souls (Pilot etc.) get
@@ -1185,7 +1194,7 @@ struct SpotlightContentView: View {
                     }
                 }
 
-            case .code:
+            case .code, .term:
                 // Unreachable — header swaps the picker for a static
                 // "🦞 kincode" label when mode == .code. Defensive
                 // empty case.
@@ -1370,14 +1379,9 @@ struct SpotlightContentView: View {
         if provider == "ollama", !model.isEmpty, !AgentLauncher.available.isEmpty {
             Divider()
             ForEach(AgentLauncher.available) { item in
-                Button("在终端里用这个模型开 \(item.integration.label)") {
-                    launchNote = AgentLauncher.launch(item,
-                                                      host: OllamaCatalog.baseURL,
-                                                      model: model)
+                Button("在 Term 里用这个模型开 \(item.integration.label)") {
+                    AgentTerminalStore.shared.run(item, host: OllamaCatalog.baseURL, model: model)
                 }
-            }
-            if let launchNote {
-                Text(launchNote).foregroundColor(.secondary)
             }
         }
     }
@@ -3173,7 +3177,7 @@ struct SpotlightContentView: View {
     ///   .code   → no agent (kincode is fixed)
     private func pickDefaultAgent(for mode: ChatMode) -> Agent? {
         switch mode {
-        case .code:
+        case .code, .term:
             return nil
         case .chat:
             if !chatLastAgentSlug.isEmpty,
@@ -3198,7 +3202,7 @@ struct SpotlightContentView: View {
     /// given mode. Called from onChange(mode). Code mode is a no-op
     /// — its UI doesn't consume selectedAgent.
     private func applyAgentForMode(_ newMode: ChatMode) {
-        if newMode == .code {
+        if newMode == .code || newMode == .term {
             return
         }
         // If the currently-selected agent is already valid for the
@@ -3224,7 +3228,7 @@ struct SpotlightContentView: View {
             // localkin repo and carry `domain == "kinclaw-private"`.
             // Both flavours route through the same chatBody surface.
             return agent.name.hasPrefix("KinClaw") || agent.domain == "kinclaw-private"
-        case .code:   return false              // never matches
+        case .code, .term: return false         // never matches
         }
     }
 
@@ -3238,7 +3242,7 @@ struct SpotlightContentView: View {
         switch mode {
         case .chat:   chatLastAgentSlug = s
         case .cowork: coworkLastSoulSlug = s
-        case .code:   break
+        case .code, .term: break
         }
     }
 

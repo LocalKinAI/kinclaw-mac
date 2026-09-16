@@ -17,6 +17,18 @@ packages:
   KeyboardShortcuts:
     url: https://github.com/sindresorhus/KeyboardShortcuts
     from: "2.0.0"
+  # The Term tab needs a real terminal: PTY, ANSI, resize, mouse. MIT,
+  # pure Swift, no cgo or embedded dylib to carry.
+  #
+  # Pinned to the last release that builds with nothing extra installed:
+  # 1.12+ ships a Metal shader, which Xcode 26 can only compile after a
+  # multi-gigabyte `xcodebuild -downloadComponent MetalToolchain`, and
+  # 1.19+ adds a build-tool plugin that a command-line build refuses to
+  # run unless it is told to trust plugins. 1.10.1 has the whole
+  # LocalProcessTerminalView API this app uses and two dependencies.
+  SwiftTerm:
+    url: https://github.com/migueldeicaza/SwiftTerm
+    exactVersion: "1.10.1"
 
 targets:
   KinClawMac:
@@ -26,6 +38,7 @@ targets:
       - KinClawMac
     dependencies:
       - package: KeyboardShortcuts
+      - package: SwiftTerm
     settings:
       base:
         INFOPLIST_FILE: KinClawMac/Info.plist

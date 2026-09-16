@@ -131,11 +131,19 @@ gen: ## Regenerate KinClawMac.xcodeproj from project.yml (XcodeGen)
 .PHONY: build
 build: gen ## Build KinClawMac.app (Debug)
 	@echo "==> xcodebuild $(SCHEME) ($(CONFIGURATION)) ..."
+	@# The status dance below is because this recipe used to pipe xcodebuild
+	@# into grep and end with `|| true`: a FAILED build printed "✓ Built" and
+	@# exited 0, so `make run` went on to launch the previous binary.
 	@cd $(REPO_ROOT) && xcodebuild \
 	  -scheme $(SCHEME) \
 	  -configuration $(CONFIGURATION) \
-	  build 2>&1 \
-	  | grep -E "error:|warning:|BUILD " | tail -20 || true
+	  build > $(LOG_DIR)/xcodebuild.log 2>&1; \
+	  status=$$?; \
+	  grep -E "error:|warning:|BUILD " $(LOG_DIR)/xcodebuild.log | tail -20; \
+	  if [ $$status -ne 0 ]; then \
+	    echo "✗ xcodebuild failed ($$status) — full log: $(LOG_DIR)/xcodebuild.log"; \
+	    exit $$status; \
+	  fi
 	@$(MAKE) -s _refresh-app-path
 	@echo "✓ Built: $$(cat .last-app-path 2>/dev/null || echo '<not found>')"
 

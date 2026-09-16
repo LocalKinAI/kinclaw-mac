@@ -117,32 +117,50 @@ tells the model to answer rather than recap.
   SSE, and both kernels read that as a reply with nothing in it. Fixed
   in kinclaw and kincode.
 
-### Added — the model menu opens another agent on the same model
+### Added — a Term tab: another agent, on the model you picked
 
 `ollama launch claude` works because Ollama serves three dialects, not
 because the launcher is clever: Anthropic's Messages API is there at
-/v1/messages (measured on 0.34.0 and 0.34.1 — real `message_start` /
-`content_block_delta` streaming, `thinking` blocks included), so aiming
+/v1/messages (measured on 0.34.0 and 0.34.1 — a real `message_start` /
+`content_block_delta` stream, `thinking` blocks included), so aiming
 Claude Code at it is two environment variables and nothing else.
 
-Both model menus now carry that row: **在终端里用这个模型开 Claude Code**.
-It exports `ANTHROPIC_BASE_URL` for the host picked in 「模型来自哪台机器」
-— this Mac or the box on the LAN — pins the model the menu is showing,
-starts in the folder Code is pointed at, and opens in whichever terminal
-owns `.command`. Measured end to end: `claude --model kimi-k2.6:cloud`
-through this Mac's Ollama answered in 3.9s. That last part is the bit
-`ollama launch` cannot do — it only ever knows the Ollama on the machine
-it runs on.
+So the panel has a fourth pill: **Term**. It runs the agent in a real
+terminal — SwiftTerm's PTY view — with `ANTHROPIC_BASE_URL` pointed at
+the host picked in 「模型来自哪台机器」 (this Mac, or the box on the LAN),
+the model the menu is showing, and the folder Code is pointed at as the
+working directory. Both model menus carry a row that opens it there:
+在 Term 里用这个模型开 Claude Code. Measured end to end: `claude --model
+kimi-k2.6:cloud` through this Mac's Ollama answered in 3.9s. Aiming it
+at the LAN box is the part `ollama launch` cannot do — it only ever
+knows the Ollama on the machine it runs on.
 
-The row hides itself unless the current brain is an Ollama one and the
-agent's binary is really installed (resolved once per launch, so a newly
-installed agent shows up after a restart). Two things deliberately left
-out: agents that need somebody else's config file rewritten (Codex's
-`model_providers`, Cline's VS Code settings) — that is a different
-promise from exporting a variable and it needs an undo; and embedding an
-agent *inside* a pane — `claude -p --output-format stream-json` has no
-approval callback, so the approval cards would degrade into a
-pre-approved tool list.
+A terminal rather than our own transcript with our own cards, because
+these are interactive TUIs: their own approval prompts, their own
+scrollback, their own ^C. `claude -p --output-format stream-json` has no
+approval callback to hang cards on, so a pane that swallowed the agent
+would be strictly worse than the real thing. The tab keeps a
+「在外部终端打开」 button for the one thing the embedded version cannot
+do: the child is spawned by this app, so a permission prompt it triggers
+is attributed to KinClawMac.
+
+Not in yet: agents that want somebody else's config file rewritten
+(Codex's `model_providers`, Cline's VS Code settings) — a different
+promise from exporting a variable, and it needs an undo.
+
+SwiftTerm is pinned to 1.10.1, the last release that builds with nothing
+extra installed: 1.12+ carries a Metal shader that Xcode 26 compiles
+only after a multi-gigabyte `xcodebuild -downloadComponent
+MetalToolchain`, and 1.19+ adds a build-tool plugin that a command-line
+build refuses to run untrusted.
+
+### Fixed — `make build` said "✓ Built" when the build had failed
+
+The recipe piped xcodebuild through `grep` and ended in `|| true`, so the
+exit code was grep's. A FAILED build printed the tick and `make run`
+happily launched the previous binary — found by wondering why a new tab
+had not appeared. Full output now lands in `/tmp/xcodebuild.log`, the
+filtered summary still prints, and the status is xcodebuild's own.
 
 ### Streaming speech and barge-in (2026-09-07)
 
