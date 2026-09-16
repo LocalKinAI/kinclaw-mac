@@ -135,6 +135,14 @@ kimi-k2.6:cloud` through this Mac's Ollama answered in 3.9s. Aiming it
 at the LAN box is the part `ollama launch` cannot do — it only ever
 knows the Ollama on the machine it runs on.
 
+The tab keeps its own machine and model, both picked in its own header —
+this Mac, any remembered box, or whatever a LAN scan turns up — because a
+session started against the box on the LAN should not move when Cowork
+switches its brain back to this Mac. Changing machine carries the model
+over when the new host has it, falls back to the same family when it does
+not (ornith-1.5:35b → ornith-1.5:9b), and otherwise says so and waits,
+rather than handing the agent a model name that host never heard of.
+
 A terminal rather than our own transcript with our own cards, because
 these are interactive TUIs: their own approval prompts, their own
 scrollback, their own ^C. `claude -p --output-format stream-json` has no

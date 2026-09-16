@@ -273,6 +273,15 @@ enum OllamaCatalog {
         return host
     }
 
+    /// "  · 13 个模型" / "  · kinfer · 11 个模型" / "  · 连不上" — what a
+    /// host's row says once it has been probed, and nothing before that.
+    /// One copy: three menus show this now.
+    static func healthNote(_ host: String) -> String {
+        guard let h = cachedHealth(host) else { return "" }
+        guard h.reachable else { return "  · 连不上" }
+        return "  · " + (h.kinfer ? "kinfer · " : "") + "\(h.models) 个模型"
+    }
+
     /// Short badge for the current source in the brain label.
     static var sourceBadge: String { isRemote ? hostLabel(baseURL) : "local" }
 

@@ -1363,11 +1363,7 @@ struct SpotlightContentView: View {
     /// the list is refreshed and the user picks.
     /// "· 13 个模型" / "· kinfer · 11 个模型" / "· 连不上" — appended to
     /// a host's row once it has been probed, and nothing before that.
-    private func hostSuffix(_ host: String) -> String {
-        guard let h = OllamaCatalog.cachedHealth(host) else { return "" }
-        guard h.reachable else { return "  · 连不上" }
-        return "  · " + (h.kinfer ? "kinfer · " : "") + "\(h.models) 个模型"
-    }
+    private func hostSuffix(_ host: String) -> String { OllamaCatalog.healthNote(host) }
 
     /// 「在终端里用这个模型开 Claude Code」 — the two environment variables
     /// `ollama launch` exports, with the host and model this menu is

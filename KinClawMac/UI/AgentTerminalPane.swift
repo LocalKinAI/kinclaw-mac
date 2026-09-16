@@ -2,9 +2,9 @@ import AppKit
 import SwiftTerm
 import SwiftUI
 
-/// What the Term tab should be running. The model menus in Cowork and
-/// Code drop a request in here; SpotlightContentView notices, switches to
-/// the tab, and the tab starts the process.
+/// What the Term tab should run. The model menus in Cowork and Code drop
+/// a request in here; SpotlightContentView notices, switches to the tab,
+/// and the tab takes it from there.
 @MainActor
 final class AgentTerminalStore: ObservableObject {
     static let shared = AgentTerminalStore()
@@ -13,8 +13,8 @@ final class AgentTerminalStore: ObservableObject {
         let agent: String
         let host: String
         let model: String
-        /// Bumped on every ask, so running the same agent on the same
-        /// model again is a restart rather than a no-op.
+        /// Bumped on every ask, so the same agent on the same model is a
+        /// fresh request rather than a no-op.
         let serial: Int
     }
 
@@ -33,19 +33,24 @@ final class AgentTerminalStore: ObservableObject {
 /// Claude Code and its kind are interactive TUIs — their own approval
 /// prompts, their own scrollback, their own ^C — and `claude -p`'s JSON
 /// mode has no approval callback to hang cards on, so a pane that
-/// swallowed one would be strictly worse than the real thing. A PTY runs
-/// the real thing; what this tab adds is the environment, which is the
-/// whole point: the host and the model you picked in the model menu.
+/// swallowed one would be strictly worse than the real thing. What this
+/// tab adds is the environment: the machine and the model you picked.
 ///
-/// One caveat worth knowing: the child is spawned by this app, so a file
-/// or network prompt it triggers is attributed to KinClawMac. 「在外部终端
-/// 打开」 is there for when that matters.
+/// The tab keeps its own machine and model, rather than following the
+/// panes': a terminal session you started against the LAN box should not
+/// move when Cowork switches its brain back to this Mac.
 struct AgentTerminalPane: View {
     @ObservedObject private var store = AgentTerminalStore.shared
-    /// Last model run here, so the tab can start on its own next time.
-    @AppStorage("kinclaw.term.model") private var lastModel: String = ""
+
+    /// Empty = follow whatever source the panes are using.
+    @AppStorage("kinclaw.term.host") private var termHost: String = ""
+    @AppStorage("kinclaw.term.model") private var termModel: String = ""
+
     @State private var presets: [BrainPreset] = []
+    @State private var serial: Int = 0
     @State private var note: String?
+    @State private var scanning = false
+    @State private var healthTick = 0
 
     private var installed: [AgentLauncher.Installed] { AgentLauncher.available }
 
@@ -58,31 +63,32 @@ struct AgentTerminalPane: View {
         return installed.first
     }
 
-    private var host: String { store.request?.host ?? OllamaCatalog.baseURL }
-    private var model: String { store.request?.model ?? lastModel }
+    private var host: String { termHost.isEmpty ? OllamaCatalog.baseURL : termHost }
 
     var body: some View {
         VStack(spacing: 0) {
             header
             Divider().opacity(0.15)
-            if let agent, !model.isEmpty {
+            if let agent, !termModel.isEmpty {
                 TerminalHost(binary: agent.binary,
-                             args: agent.integration.modelArgs(model),
+                             args: agent.integration.modelArgs(termModel),
                              environment: agent.integration.env(host),
                              directory: AgentLauncher.defaultDirectory,
-                             serial: store.request?.serial ?? 0,
+                             serial: serial,
                              onExit: { code in
                                  note = code.map { "进程结束（退出码 \($0)）" } ?? "进程结束了"
                              })
-                    .id(agent.id)
+                    .id("\(agent.id)|\(host)")
             } else {
                 empty
             }
         }
         .background(Color.black.opacity(0.28))
-        .task { await loadPresets() }
-        .onChange(of: model) { _, m in if !m.isEmpty { lastModel = m } }
+        .task { await reloadPresets() }
+        .onChange(of: store.request) { _, request in adopt(request) }
     }
+
+    // MARK: - Header
 
     private var header: some View {
         HStack(spacing: 8) {
@@ -92,9 +98,7 @@ struct AgentTerminalPane: View {
             Text(agent?.integration.label ?? "没有可跑的 agent")
                 .font(.system(size: 12, weight: .medium))
             if agent != nil {
-                Text(OllamaCatalog.hostLabel(host))
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
+                machineMenu
                 modelMenu
             }
             Spacer()
@@ -103,41 +107,75 @@ struct AgentTerminalPane: View {
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
                     .lineLimit(1)
+                    .help(note)
             }
-            if agent != nil, !model.isEmpty {
-                Button("重启") { restart() }
+            if agent != nil, !termModel.isEmpty {
+                Button("重启") { note = nil; serial += 1 }
                     .controlSize(.small)
-                Button("在外部终端打开") {
-                    if let agent {
-                        note = AgentLauncher.launch(agent, host: host, model: model)
-                    }
-                }
-                .controlSize(.small)
-                .help("同样的环境，但窗口归终端 app —— 它的权限提示也就不算在 KinClaw 头上")
+                Button("在外部终端打开") { openOutside() }
+                    .controlSize(.small)
+                    .help("同样的环境，但窗口归终端 app —— 它的权限提示也就不算在 KinClaw 头上")
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
     }
 
-    /// The models on whichever host the source picker is pointing at —
-    /// the same list the brain menus show, read from the same catalog.
+    /// Which machine's models the agent talks to. Same catalog as both
+    /// brain menus — this Mac, every remembered box, and a LAN scan —
+    /// but the choice is the tab's own.
+    private var machineMenu: some View {
+        Menu {
+            let _ = healthTick
+            ForEach(OllamaCatalog.knownHosts, id: \.self) { candidate in
+                Button {
+                    switchMachine(to: candidate)
+                } label: {
+                    HStack {
+                        if candidate == host {
+                            Image(systemName: "checkmark")
+                        } else {
+                            Image(systemName: candidate == OllamaCatalog.defaultBaseURL
+                                  ? "laptopcomputer" : "network")
+                        }
+                        Text(OllamaCatalog.hostLabel(candidate) + OllamaCatalog.healthNote(candidate))
+                    }
+                }
+            }
+            Divider()
+            Button(scanning ? "扫描中…" : "扫描局域网找 Ollama / kinfer…") { scanLAN() }
+                .disabled(scanning)
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: OllamaCatalog.isRemote || !termHost.isEmpty
+                      ? "network" : "laptopcomputer")
+                    .font(.system(size: 9))
+                Text(OllamaCatalog.hostLabel(host))
+                    .font(.system(size: 10))
+            }
+            .foregroundColor(.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .onAppear { refreshHealth() }
+    }
+
     private var modelMenu: some View {
-        Menu(model.isEmpty ? "选个模型" : model) {
+        Menu(termModel.isEmpty ? "选个模型" : termModel) {
             if presets.isEmpty {
                 Text("\(OllamaCatalog.hostLabel(host)) 上没读到模型")
                     .foregroundColor(.secondary)
             }
             ForEach(presets) { preset in
                 Button(preset.label) {
-                    lastModel = preset.model
-                    if let agent {
-                        store.run(agent, host: OllamaCatalog.baseURL, model: preset.model)
-                    }
+                    note = nil
+                    termModel = preset.model
+                    serial += 1
                 }
             }
             Divider()
-            Button("重新读取模型列表") { Task { await loadPresets() } }
+            Button("重新读取模型列表") { Task { await reloadPresets() } }
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
@@ -156,14 +194,84 @@ struct AgentTerminalPane: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func restart() {
-        guard let agent else { return }
+    // MARK: - Doing things
+
+    /// A model menu in Cowork or Code asked for this agent: take its
+    /// machine and model as the tab's own and start.
+    private func adopt(_ request: AgentTerminalStore.Request?) {
+        guard let request else { return }
         note = nil
-        store.run(agent, host: host, model: model)
+        termHost = request.host
+        termModel = request.model
+        serial += 1
+        Task { await reloadPresets() }
     }
 
-    private func loadPresets() async {
-        let fresh = await OllamaCatalog.loadPresets()
+    /// Point the tab at another machine. The model has to exist there —
+    /// carrying a name the new host has never heard of just fails later,
+    /// in the terminal, as a 404 nobody asked for.
+    private func switchMachine(to candidate: String) {
+        termHost = candidate
+        note = nil
+        Task {
+            await OllamaCatalog.probe(candidate)
+            let fresh = await OllamaCatalog.loadPresets(baseURL: candidate)
+            await MainActor.run {
+                presets = fresh
+                healthTick += 1
+                if fresh.isEmpty {
+                    note = "\(OllamaCatalog.hostLabel(candidate)) 连不上或没有模型"
+                } else if fresh.contains(where: { $0.model == termModel }) {
+                    serial += 1
+                } else if let family = termModel.split(separator: ":").first,
+                          let near = fresh.first(where: { $0.model.hasPrefix(family) }) {
+                    termModel = near.model
+                    serial += 1
+                } else {
+                    let wanted = termModel
+                    termModel = ""
+                    note = wanted.isEmpty
+                        ? nil
+                        : "\(OllamaCatalog.hostLabel(candidate)) 上没有 \(wanted)，挑一个"
+                }
+            }
+        }
+    }
+
+    private func openOutside() {
+        guard let agent else { return }
+        note = AgentLauncher.launch(agent, host: host, model: termModel)
+    }
+
+    private func scanLAN() {
+        guard !scanning else { return }
+        scanning = true
+        Task {
+            let found = await OllamaCatalog.discover()
+            await MainActor.run {
+                let before = Set(OllamaCatalog.knownHosts)
+                for h in found { OllamaCatalog.remember(h) }
+                let added = found.filter { !before.contains($0) }
+                scanning = false
+                note = added.isEmpty
+                    ? (found.isEmpty ? "这个网段上没找到别的 Ollama 或 kinfer" : "找到的都已经在列表里了")
+                    : "找到 " + added.map { OllamaCatalog.hostLabel($0) }.joined(separator: "、")
+                healthTick += 1
+            }
+            await OllamaCatalog.probeAll()
+            await MainActor.run { healthTick += 1 }
+        }
+    }
+
+    private func refreshHealth() {
+        Task {
+            await OllamaCatalog.probeAll()
+            await MainActor.run { healthTick += 1 }
+        }
+    }
+
+    private func reloadPresets() async {
+        let fresh = await OllamaCatalog.loadPresets(baseURL: host)
         await MainActor.run { presets = fresh }
     }
 }

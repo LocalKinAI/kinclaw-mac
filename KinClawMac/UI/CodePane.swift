@@ -1673,11 +1673,7 @@ struct CodePane: View {
     /// there; otherwise leave the brain and let the user pick.
     /// "· 13 个模型" / "· kinfer · 11 个模型" / "· 连不上", once a host
     /// has been probed.
-    private func hostSuffix(_ host: String) -> String {
-        guard let h = OllamaCatalog.cachedHealth(host) else { return "" }
-        guard h.reachable else { return "  · 连不上" }
-        return "  · " + (h.kinfer ? "kinfer · " : "") + "\(h.models) 个模型"
-    }
+    private func hostSuffix(_ host: String) -> String { OllamaCatalog.healthNote(host) }
 
     /// 「在终端里用这个模型开 Claude Code」 — the two environment variables
     /// `ollama launch` exports, with the host and model this menu is
