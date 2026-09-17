@@ -124,6 +124,26 @@ should not be unreachable to someone who has forgotten the hotkey: the
 Dock icon used to bounce and show nothing. `applicationShouldHandleReopen`
 now shows the panel, which also makes `open -a KinClawMac` work.
 
+### Changed — the panel is an ordinary window, not always on top
+
+The panel floated above every app, which suited a quick question and not a
+Term tab running an agent for an hour beside the editor it works on. It is a
+normal-level window now: it comes to the front when summoned or clicked, and
+other windows go over it when they are. Settings, which had to float with the
+panel or open behind it, is normal-level too.
+
+- **⌥⌘K and the 🦞 item hide a panel you can see and bring forward one you
+  can't** — hidden, or on screen under another window. Hiding a panel the user
+  pressed the hotkey to find would take two presses to get it back. Whether
+  it is covered is read from the window server's stacking order, not from
+  key status, which clicking the menubar item can take away from a panel
+  that is plainly in front.
+- **A click raises it.** The panel still never activates the app — the
+  agent's keystrokes must not land in it while it drives another app — and a
+  window that does not activate is not raised by activation, so the click
+  raises it explicitly.
+- Still on every Space and beside full-screen apps, as before.
+
 ### Added — a Term tab: another agent, on the model you picked
 
 `ollama launch claude` works because Ollama serves three dialects, not

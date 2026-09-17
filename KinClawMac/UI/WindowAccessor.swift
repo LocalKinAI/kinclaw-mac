@@ -57,14 +57,11 @@ func applyGlassChrome(to window: NSWindow) {
     // would re-wrap the contentView each time.
     if window.contentView is NSVisualEffectView { return }
 
-    // Float alongside the spotlight panel.
-    //
-    // SpotlightWindow sets `.floating`, so a Settings window at the default
-    // `.normal` level opens *behind* it — the user clicks Settings, the panel
-    // stays on top, and it reads as Settings not opening at all. Same level
-    // means the most recently activated one wins, which is the behaviour
-    // clicking a window is supposed to have.
-    window.level = .floating
+    // Same level as the spotlight panel, which is `.normal` now: the most
+    // recently activated window wins, which is the behaviour clicking a
+    // window is supposed to have. (While the panel floated, Settings had to
+    // float too, or it opened behind the panel and read as not opening.)
+    window.level = .normal
 
     window.titleVisibility = .hidden
     window.titlebarAppearsTransparent = true

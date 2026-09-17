@@ -6,7 +6,7 @@ private extension NSRect {
     var area: CGFloat { width * height }
 }
 
-/// The floating chat panel — frameless, glass-blurred, always-on-top.
+/// The chat panel — frameless, glass-blurred, a window among windows.
 /// Hosts a SwiftUI tree (currently the ported `ContentView`; M3+ will
 /// replace that with a single-column Spotlight UX).
 ///
@@ -16,8 +16,11 @@ private extension NSRect {
 ///   - **Centered with a slight upward bias** on first run, mimicking
 ///     macOS Spotlight (which sits ~1/3 down the screen, not dead
 ///     center).
-///   - **`.floating` window level** — above normal app windows, below
-///     modal sheets / system alerts.
+///   - **`.normal` window level** — it comes to the front when summoned
+///     or clicked, and other windows go over it when they are. It was
+///     `.floating`, always above every app, which suited a quick question
+///     and not a Term tab running an agent for an hour beside the editor
+///     it works on.
 ///   - **`.canJoinAllSpaces`** — ⌘⌥K (M3) summons the panel regardless
 ///     of which Space the user is on.
 ///   - **`.nonactivatingPanel`** — opening the panel does NOT pull
@@ -26,7 +29,8 @@ private extension NSRect {
 ///     hijack it.
 ///
 /// Lifecycle: AppDelegate owns one instance; `toggle()` is the
-/// hotkey entry point; ESC also hides.
+/// hotkey entry point — it hides a panel you can see and brings forward
+/// one you can't; ESC also hides.
 final class SpotlightWindow: NSPanel {
 
     /// First-run size. After that we restore the user's last frame.
@@ -64,8 +68,8 @@ final class SpotlightWindow: NSPanel {
             defer: false
         )
 
-        // Floating above normal windows; sticks across Spaces.
-        self.level = .floating
+        // An ordinary window in the stacking order; sticks across Spaces.
+        self.level = .normal
         self.collectionBehavior = [.canJoinAllSpaces, .stationary,
                                    .fullScreenAuxiliary]
 
@@ -138,6 +142,20 @@ final class SpotlightWindow: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
+    /// A click brings the panel forward. A panel that never activates the
+    /// app is not raised by activation the way an ordinary window is, so at
+    /// `.normal` level a click into one half-covered by another app's
+    /// window would type into it while leaving it covered.
+    override func sendEvent(_ event: NSEvent) {
+        switch event.type {
+        case .leftMouseDown, .rightMouseDown, .otherMouseDown:
+            orderFrontRegardless()
+        default:
+            break
+        }
+        super.sendEvent(event)
+    }
+
     // MARK: - Show / hide / toggle (the hotkey entry points)
 
     /// Make the panel visible without activating the app — the user
@@ -184,6 +202,13 @@ final class SpotlightWindow: NSPanel {
     }
 
     func show() {
+        // Already up, perhaps under another window: raise it, without the
+        // fade from nothing that would blink a panel already on screen.
+        if self.isVisible {
+            self.orderFrontRegardless()
+            self.makeKey()
+            return
+        }
         if Self.savedFrame == nil {
             self.setFrame(Self.centeredFrame(), display: true)
         } else {
@@ -244,10 +269,40 @@ final class SpotlightWindow: NSPanel {
         return clamped
     }
 
-    /// Hotkey-style: visible → hide; hidden → show. The whole point
-    /// of the Spotlight form factor.
+    /// Hotkey-style: a panel you can see hides; one you can't — hidden, or
+    /// on screen under another app's window — comes forward. The second
+    /// case exists since the panel stopped floating: hiding a panel the user
+    /// was pressing the hotkey to find would take two presses to get back.
     func toggle() {
-        if self.isVisible { hide() } else { show() }
+        if self.isVisible && !isCovered { hide() } else { show() }
+    }
+
+    /// Whether a normal-level window of any app overlaps the panel from
+    /// above. Window server order, not key status: clicking the menubar
+    /// item can take key status away from a panel that is plainly in front.
+    /// Bounds and layers need no screen-recording permission; only window
+    /// titles do.
+    private var isCovered: Bool {
+        guard let above = CGWindowListCopyWindowInfo(
+            [.optionOnScreenAboveWindow, .excludeDesktopElements],
+            CGWindowID(self.windowNumber)) as? [[String: Any]],
+              let mainHeight = NSScreen.screens.first?.frame.height else {
+            return false
+        }
+        // The window server measures from the top-left of the main display;
+        // AppKit from its bottom-left.
+        let mine = CGRect(x: frame.minX, y: mainHeight - frame.maxY,
+                          width: frame.width, height: frame.height)
+        let me = ProcessInfo.processInfo.processIdentifier
+        return above.contains { info in
+            guard (info[kCGWindowLayer as String] as? Int) == 0,
+                  (info[kCGWindowOwnerPID as String] as? pid_t) != me,
+                  let dict = info[kCGWindowBounds as String] as? NSDictionary,
+                  let bounds = CGRect(dictionaryRepresentation: dict as CFDictionary) else {
+                return false
+            }
+            return bounds.intersects(mine)
+        }
     }
 
     // ESC hides — same gesture as Spotlight / Raycast / Alfred.
