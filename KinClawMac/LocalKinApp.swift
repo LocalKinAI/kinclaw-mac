@@ -14,7 +14,8 @@ import KeyboardShortcuts
 // M3 will add the global hotkey + menubar; for now the panel just
 // shows on launch.
 
-@main
+// Launched from main.swift, not by @main: the same binary also serves the
+// panel's MCP tools over stdio, and that path must not start an app.
 struct KinClawMacApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
@@ -75,6 +76,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // 0. The panel's MCP server, before the kernel: kinclaw connects to
+        //    its MCP servers as it starts, and this is one of them.
+        PanelBridge.shared.start()
+
         // One-shot migration: if the user has chat history saved
         // under the old UserDefaults `chat_<slug>` keys, rewrite as
         // session JSONs in ~/.kinclaw/sessions/ and clear the keys.
@@ -154,6 +159,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // (either kernel) are left alone — they belong to the user.
         supervisor.stop()
         kincodeSupervisor.stop()
+        // The handshake file is a live claim about a port; a dead app should
+        // not leave one lying around.
+        PanelBridge.shared.stop()
     }
 
     /// Opens (or focuses) the SwiftUI Settings scene. The legacy

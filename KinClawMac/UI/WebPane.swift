@@ -279,6 +279,55 @@ final class BrowserTabs: ObservableObject {
 
     fileprivate func openInNewTab(_ url: URL) { open(url.absoluteString) }
 
+    // MARK: What the agent's tools need
+
+    /// Make sure a tab has a web view even if its pane was never shown — an
+    /// agent may open a page before the user has ever clicked Web.
+    func ensureView(_ id: UUID) {
+        guard views[id] == nil, let tab = tabs.first(where: { $0.id == id }) else { return }
+        _ = view(for: tab)
+    }
+
+    /// Wait for the tab to finish loading. False when it is still going after
+    /// `seconds` — the caller returns what there is rather than nothing.
+    func waitForLoad(_ id: UUID, seconds: Double) async -> Bool {
+        // A load takes a moment to even start, and `loading` is false until it
+        // does; without this pause the first look would call it finished.
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        var waited = 0.4
+        while waited < seconds {
+            let state = liveState(id)
+            if state.error != nil { return true }
+            if !state.loading, !state.url.isEmpty { return true }
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            waited += 0.2
+        }
+        return false
+    }
+
+    /// The page as text, the way 给 agent 看这页 sends it.
+    func pageText(_ id: UUID, limit: Int) async -> String {
+        guard let view = views[id] else { return "" }
+        let text: String = await withCheckedContinuation { cont in
+            view.evaluateJavaScript("document.body ? document.body.innerText : ''") { result, _ in
+                cont.resume(returning: (result as? String) ?? "")
+            }
+        }
+        return String(text.prefix(limit))
+    }
+
+    /// The open tabs, numbered the way the tools take them.
+    func summary() -> String {
+        guard !tabs.isEmpty else { return "面板的 Web 标签里没有打开的页面" }
+        return tabs.enumerated().map { i, tab in
+            let state = liveState(tab.id)
+            let mark = tab.id == selected?.id ? "→" : " "
+            let title = state.title.isEmpty ? tab.title : state.title
+            let url = state.url.isEmpty ? tab.url : state.url
+            return "\(mark) \(i + 1). \(title.isEmpty ? "(新标签页)" : title)  \(url)"
+        }.joined(separator: "\n")
+    }
+
     // MARK: Search engine
 
     /// Ask the kernel which search endpoint it uses, so a word typed in the

@@ -238,6 +238,63 @@ final class AgentTerminalSessions: ObservableObject {
         notes[id] = code.map { "进程结束（退出码 \($0)）" } ?? "进程结束了"
     }
 
+    // MARK: What the agent's tools need
+
+    /// The tabs, numbered the way the tools take them.
+    func summary() -> String {
+        guard !sessions.isEmpty else { return "面板的 Term 标签里没有打开的终端" }
+        return sessions.enumerated().map { i, s in
+            let label = Self.installed(s)?.integration.label ?? s.agent
+            let mark = s.id == selected?.id ? "→" : " "
+            let state = running.contains(s.id) ? "运行中" : (terminals[s.id] == nil ? "未启动" : "已结束")
+            let model = s.model.isEmpty ? "" : " · \(s.model)"
+            return "\(mark) \(i + 1). \(label)\(model) · \(Self.folder(of: s)) · \(state)"
+        }.joined(separator: "\n")
+    }
+
+    /// What a terminal is showing: the last `lines` lines of it, scrollback
+    /// included — what scrolled off the top is often exactly what the agent is
+    /// being asked about. nil when that tab has no process yet; a tab starts
+    /// its terminal the first time it is shown, so one the user has never
+    /// opened has nothing to read.
+    func screenText(_ id: UUID, lines: Int) -> String? {
+        guard let view = terminals[id] else { return nil }
+        let terminal = view.getTerminal()
+        // Two readings, because one of them is not enough. A selection's text
+        // spans the scrollback and joins wrapped lines, which is what a long
+        // agent session needs; walking the visible rows is what always works.
+        var rows = Self.selectionLines(terminal, lines: lines)
+        if rows.allSatisfy({ $0.trimmingCharacters(in: .whitespaces).isEmpty }) {
+            rows = Self.visibleLines(terminal)
+        }
+        // The last N lines are counted from the last line with something on it.
+        // Counted from the bottom of the screen they would be the blank part
+        // under the prompt — which is how the first version of this answered
+        // "the terminal is empty" about a terminal with a prompt in it.
+        while let last = rows.last, last.trimmingCharacters(in: .whitespaces).isEmpty { rows.removeLast() }
+        if rows.count > lines { rows.removeFirst(rows.count - lines) }
+        while let first = rows.first, first.trimmingCharacters(in: .whitespaces).isEmpty { rows.removeFirst() }
+        return rows.joined(separator: "\n")
+    }
+
+    /// The buffer as a selection would copy it: scrollback included, wrapped
+    /// lines joined, blank runs collapsed. Twice the asked-for lines of rows,
+    /// since the blank ones do not survive into the text.
+    private static func selectionLines(_ terminal: Terminal, lines: Int) -> [String] {
+        let bottom = terminal.getTopVisibleRow() + terminal.rows - 1
+        let top = max(0, bottom - max(lines, terminal.rows) * 2)
+        let text = terminal.getText(start: SwiftTerm.Position(col: 0, row: top),
+                                    end: SwiftTerm.Position(col: max(0, terminal.cols - 1), row: bottom))
+        return text.components(separatedBy: "\n")
+    }
+
+    /// The rows on screen, one string each.
+    private static func visibleLines(_ terminal: Terminal) -> [String] {
+        (0..<terminal.rows).map { row in
+            terminal.getLine(row: row)?.translateToString(trimRight: true) ?? ""
+        }
+    }
+
     // MARK: Persistence
 
     private func save() {

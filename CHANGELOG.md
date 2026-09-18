@@ -124,6 +124,37 @@ should not be unreachable to someone who has forgotten the hotkey: the
 Dock icon used to bounce and show nothing. `applicationShouldHandleReopen`
 now shows the panel, which also makes `open -a KinClawMac` work.
 
+### Added — the agent can open a page and read your terminal
+
+The panel now offers the kernel five tools of its own, over MCP: `browser_open`,
+`browser_read`, `browser_tabs`, `terminal_tabs`, `terminal_read`. Ask Pilot to
+look something up and it opens the page in the Web tab — the browser you are
+signed into, not a fetch from nowhere — and reads what rendered. Ask what went
+wrong in the Term tab and it reads the screen, scrollback included.
+
+How it is wired, and why that way:
+
+- **The server is this app's own binary.** The kernel's MCP client speaks stdio
+  to a process it spawned (kinclaw `pkg/mcp`), and the state these tools
+  describe — live web views, running terminals — is inside an app it did not
+  spawn. So `~/.localkin/mcp.json` gets a `panel` server whose command is
+  `KinClawMac --mcp-stdio`: the same binary, started by the kernel, doing
+  nothing but carrying JSON-RPC lines to the running app over loopback. Same
+  binary because it is then always exactly as new as the app it talks to.
+- **Loopback, and a token.** Any process on this Mac can reach a loopback port,
+  and "open a URL in the user's signed-in browser" is not a thing to leave
+  open. The port and a per-launch token live in `~/.localkin/panel.json`, mode
+  0600; a request without the token gets a 403. Measured: refused from another
+  machine on the LAN, 403 on loopback without the token.
+- **Read mostly.** The agent can open a page, read a page, and read a terminal.
+  It cannot type into your shell. `mcp_*` skills ask before running, by the
+  kernel's own default, so the first call raises an approval card in the panel.
+- **It reads what you see.** `terminal_read` counts its lines back from the last
+  line with something on it, not from the bottom of the screen — the first
+  version did the latter and reported an empty terminal for a terminal with a
+  prompt in it. Measured against a flooded shell: `lines: 5` returns lines
+  196–200 of 200, `lines: 120` starts at 81, from the scrollback.
+
 ### Added — a Web tab: a browser in the panel, and the page handed to the agent
 
 The two panes beside Claude Desktop's conversation, as far as they make sense
