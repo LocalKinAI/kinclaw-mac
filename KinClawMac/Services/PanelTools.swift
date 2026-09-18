@@ -68,19 +68,19 @@ enum PanelTools {
         [
             "name": "avatar_outfits",
             "description": """
-                List the outfits the KinClaw companion has — the VRM models in \
-                the user's wardrobe folder — and say which one she is wearing \
-                and whether she is on screen right now.
+                List what the KinClaw companion can look like: the real-person \
+                looks (video-driven) and the 3D outfits (VRM models), which one \
+                she is wearing, and whether she is on screen right now.
                 """,
             "inputSchema": ["type": "object", "properties": [String: Any]()],
         ],
         [
             "name": "avatar_wear",
             "description": """
-                Change what the KinClaw companion is wearing, by outfit name — \
-                a partial name is enough. Use it when the user asks her to \
-                change clothes or to be someone else. Call avatar_outfits first \
-                if you do not know what she owns.
+                Change how the KinClaw companion looks, by name — a real-person \
+                look or a 3D outfit, and a partial name is enough. Use it when \
+                the user asks her to change clothes or to be someone else. Call \
+                avatar_outfits first if you do not know what she has.
                 """,
             "inputSchema": [
                 "type": "object",
@@ -198,32 +198,74 @@ enum PanelTools {
     // MARK: Her clothes
 
     private static func wardrobe() -> String {
+        let looks = AvatarStage.characters
         let outfits = VRMWardrobe.outfits
-        guard !outfits.isEmpty else {
-            return "衣柜是空的。把 .vrm 模型放进 \(VRMWardrobe.folder.path)（VRoid Hub 上能下），"
-                + "她就有衣服可以换了。"
+        let real = AvatarServerBox.shared.base != nil
+        let threeD = VRMServerBox.shared.base != nil
+        guard !looks.isEmpty || !outfits.isEmpty else {
+            return "她现在什么形象都没有。真人形象来自数字人服务的视频，3D 形象是 "
+                + "\(VRMWardrobe.folder.path) 里的 .vrm 模型（VRoid Hub 上能下）。"
         }
-        let wearing = VRMWardrobe.chosen?.id
-        let onScreen = VRMServerBox.shared.base != nil
-        let list = outfits.map { "\($0.id == wearing ? "→" : " ") \($0.name)" }.joined(separator: "\n")
-        return list + "\n\n" + (onScreen ? "她现在在屏幕上（陪伴模式）。"
-                                           : "陪伴模式没开，所以换了要等下次见面才看得到。")
+        var lines: [String] = []
+        if !looks.isEmpty {
+            let wearing = AvatarStage.chosen?.id
+            lines.append("真人形象（视频驱动）：")
+            lines += looks.map { "\($0.id == wearing && real ? "→" : " ") \($0.name)" }
+        }
+        if !outfits.isEmpty {
+            let wearing = VRMWardrobe.chosen?.id
+            if !lines.isEmpty { lines.append("") }
+            lines.append("3D 形象（VRM）：")
+            lines += outfits.map { "\($0.id == wearing && threeD ? "→" : " ") \($0.name)" }
+        }
+        lines.append("")
+        let visible = CompanionPresence.shared.onScreen
+        switch (visible, real, threeD) {
+        case (true, true, _): lines.append("她现在以真人形象在屏幕上。")
+        case (true, _, true): lines.append("她现在以 3D 形象在屏幕上。")
+        case (true, _, _):    lines.append("陪伴模式开着，但她没有形象，只有背景图。")
+        default:              lines.append("陪伴模式没开，所以换了要等下次见面才看得到。")
+        }
+        return lines.joined(separator: "\n")
     }
 
+    /// Wear a look or an outfit. Real people first: a name that matches both is
+    /// far likelier to mean the person than the model, and the two surfaces are
+    /// one or the other — the 3D canvas covers the panel.
     private static func wear(_ args: [String: Any]) -> (String, Bool) {
         guard let wanted = (args["outfit"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
               !wanted.isEmpty else {
-            return ("avatar_wear 需要一个 outfit 名字", true)
+            return ("avatar_wear 需要一个名字", true)
         }
-        guard let outfit = VRMWardrobe.match(wanted) else {
-            let names = VRMWardrobe.outfits.map(\.name)
-            return names.isEmpty
-                ? ("衣柜是空的（\(VRMWardrobe.folder.path) 里没有 .vrm）", true)
-                : ("没有叫「\(wanted)」的，她有的是：" + names.joined(separator: "、"), true)
+        if let look = AvatarStage.match(wanted) {
+            if VRMServerBox.shared.base != nil {
+                VRMWardrobe.isEnabled = false
+                VRMServerBox.shared.stop()
+            }
+            AvatarStage.isEnabledSetting = true
+            AvatarServerBox.shared.switchCharacter(look)
+            AvatarServerBox.shared.startIfWanted()
+            return ("换成「\(look.name)」了" + seen(), false)
         }
-        VRMStage.shared.wear(outfit)
-        let onScreen = VRMServerBox.shared.base != nil
-        return ("换成「\(outfit.name)」了" + (onScreen ? "。" : "，等陪伴模式打开就能看到。"), false)
+        if let outfit = VRMWardrobe.match(wanted) {
+            if AvatarServerBox.shared.base != nil {
+                AvatarServerBox.shared.stop()
+            }
+            VRMWardrobe.isEnabled = true          // which turns the person off
+            VRMStage.shared.wear(outfit)
+            VRMServerBox.shared.startIfWanted()
+            return ("换成 3D 的「\(outfit.name)」了" + seen(), false)
+        }
+        let names = AvatarStage.characters.map(\.name) + VRMWardrobe.outfits.map(\.name)
+        return names.isEmpty
+            ? ("她还没有任何形象可以换", true)
+            : ("没有叫「\(wanted)」的，她有的是：" + names.joined(separator: "、"), true)
+    }
+
+    /// Whether the change is something the user can see right now, as the end
+    /// of a sentence.
+    private static func seen() -> String {
+        CompanionPresence.shared.onScreen ? "。" : "，等陪伴模式（⇧⌘M）打开就能看到。"
     }
 
     /// A tab by its 1-based number, as the list tools print them, falling back

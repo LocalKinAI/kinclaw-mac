@@ -16,6 +16,7 @@ struct CompanionView: View {
     /// the stage is a singleton because she has to outlive the view.
     @ObservedObject private var vrm = VRMStage.shared
     @ObservedObject private var vrmServer = VRMServerBox.shared
+    @ObservedObject private var lookMaker = RealLookMaker.shared
 
     /// Live inputs from the panel's existing voice objects.
     let isListening: Bool
@@ -246,7 +247,21 @@ struct CompanionView: View {
         .onChange(of: isSpeaking) { _, speaking in
             vrm.voice(level: speaking ? audioLevel * 1.4 : 0, speaking: speaking)
         }
-        .onAppear { vrmServer.startIfWanted() }
+        .onAppear {
+            CompanionPresence.shared.onScreen = true
+            vrmServer.startIfWanted()
+        }
+        .onDisappear { CompanionPresence.shared.onScreen = false }
+        // A look that just finished is one she should be wearing: the point of
+        // making it was to see it.
+        .onChange(of: lookMaker.made?.id) { _, id in
+            guard id != nil, let made = lookMaker.made else { return }
+            if vrmServer.base != nil {
+                VRMWardrobe.isEnabled = false
+                vrmServer.stop()
+            }
+            onAvatarCharacter(made)
+        }
         // The subject changing is the strongest reason to change the
         // picture — and the only one that makes the background about
         // the conversation rather than about the voice.
@@ -347,6 +362,20 @@ struct CompanionView: View {
         .padding(12)
     }
 
+    /// Ask for a video and make a look out of it. A minute of someone talking
+    /// to the camera is what the scripts want; the name is the folder it lands
+    /// in and what the menu calls her.
+    private func pickLookVideo() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.movie, .mpeg4Movie, .quickTimeMovie]
+        panel.message = "挑一段她说话的视频（正脸、一分钟左右就够）"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        lookMaker.make(from: url, name: url.deletingPathExtension().lastPathComponent)
+    }
+
     /// The 3D companion and her clothes: a folder of VRM models, and which one
     /// she is wearing. Desktop Mate's outfit switch and Grok's "switch to a
     /// summer dress" are the same move underneath — a VRM carries its clothes
@@ -359,7 +388,12 @@ struct CompanionView: View {
                 get: { vrmServer.base != nil },
                 set: { on in
                     VRMWardrobe.isEnabled = on
-                    if on { vrmServer.startIfWanted() } else { vrmServer.stop() }
+                    if on {
+                        if avatarBase != nil { onAvatarToggle(false) }
+                        vrmServer.startIfWanted()
+                    } else {
+                        vrmServer.stop()
+                    }
                 }
             )) {
                 Label("3D 形象", systemImage: "person.crop.square.badge.video")
@@ -371,6 +405,7 @@ struct CompanionView: View {
                     Button {
                         vrm.wear(outfit)
                         if vrmServer.base == nil {
+                            if avatarBase != nil { onAvatarToggle(false) }
                             VRMWardrobe.isEnabled = true
                             vrmServer.startIfWanted()
                         }
@@ -471,7 +506,15 @@ struct CompanionView: View {
             Menu {
                 Toggle(isOn: Binding(
                     get: { avatarBase != nil },
-                    set: { onAvatarToggle($0) }
+                    set: { on in
+                        // One or the other: the 3D canvas covers the panel, so
+                        // both on means a cartoon standing in front of her.
+                        if on, vrmServer.base != nil {
+                            VRMWardrobe.isEnabled = false
+                            vrmServer.stop()
+                        }
+                        onAvatarToggle(on)
+                    }
                 )) {
                     Label("会说话的人", systemImage: "person.wave.2")
                 }
@@ -481,7 +524,7 @@ struct CompanionView: View {
                         Button {
                             onAvatarCharacter(c)
                         } label: {
-                            if c.dir == AvatarStage.chosen.dir {
+                            if c.id == AvatarStage.chosen?.id {
                                 Label(c.name, systemImage: "checkmark")
                             } else {
                                 Text(c.name)
@@ -489,10 +532,24 @@ struct CompanionView: View {
                         }
                     }
                 }
+                Divider()
+                Button(lookMaker.busy ? "正在做新形象…" : "用一段视频做新形象…") {
+                    pickLookVideo()
+                }
+                .disabled(lookMaker.busy)
+                Button("打开形象文件夹…") {
+                    try? FileManager.default.createDirectory(at: AvatarStage.madeFolder,
+                                                             withIntermediateDirectories: true)
+                    NSWorkspace.shared.open(AvatarStage.madeFolder)
+                }
+                if let note = lookMaker.note {
+                    Divider()
+                    Text(note).foregroundColor(.secondary)
+                }
             } label: {
                 HStack(spacing: 5) {
                     Image(systemName: avatarBase != nil ? "person.wave.2.fill" : "person.wave.2")
-                    Text(avatarBase != nil ? AvatarStage.chosen.name : "数字人")
+                    Text(avatarBase != nil ? (AvatarStage.chosen?.name ?? "数字人") : "数字人")
                 }
                 .font(.system(size: 11, weight: .medium))
                 .foregroundColor(avatarBase != nil ? .cyan.opacity(0.9) : .white.opacity(0.6))

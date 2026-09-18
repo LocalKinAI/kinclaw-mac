@@ -8,6 +8,10 @@ import SwiftUI
 /// that needs it is built before that happens.
 @MainActor
 final class AvatarServerBox: ObservableObject {
+    /// Shared so the panel's own tools can reach her — `avatar_wear` changes
+    /// the look whether or not a view is on screen.
+    static let shared = AvatarServerBox()
+
     @Published private(set) var base: URL?
     private var server: AvatarServer?
 
@@ -25,7 +29,7 @@ final class AvatarServerBox: ObservableObject {
     /// Re-stage for a different character and reload from the same
     /// origin — the page reads `assets/`, which is a symlink.
     func switchCharacter(_ c: AvatarStage.Character) {
-        UserDefaults.standard.set(c.dir, forKey: AvatarStage.characterKey)
+        UserDefaults.standard.set(c.id, forKey: AvatarStage.characterKey)
         guard AvatarStage.prepare(c) != nil else { return }
         // Bounce the base URL so the view reloads.
         let current = base

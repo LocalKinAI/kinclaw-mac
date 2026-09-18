@@ -44,9 +44,15 @@ enum VRMWardrobe {
             .map(Outfit.init)
     }
 
+    /// Whether she is the 3D one. The other way round from
+    /// `AvatarStage.isEnabledSetting`, and for the same reason: the 3D canvas
+    /// covers the panel, so these two are one or the other.
     static var isEnabled: Bool {
         get { UserDefaults.standard.bool(forKey: enabledKey) }
-        set { UserDefaults.standard.set(newValue, forKey: enabledKey) }
+        set {
+            UserDefaults.standard.set(newValue, forKey: enabledKey)
+            if newValue { UserDefaults.standard.set(false, forKey: AvatarStage.enabledKey) }
+        }
     }
 
     /// The one she is wearing: the remembered choice while it still exists,
@@ -134,7 +140,8 @@ final class VRMServerBox: ObservableObject {
 
     /// Start only if the user turned her on and there is a model to show.
     func startIfWanted() {
-        guard base == nil, VRMWardrobe.isEnabled, VRMWardrobe.chosen != nil,
+        guard base == nil, VRMWardrobe.isEnabled, !AvatarStage.isEnabled,
+              VRMWardrobe.chosen != nil,
               let stage = VRMWardrobe.prepareStage() else { return }
         let s = AvatarServer(root: stage)
         guard let url = s.start() else { return }
@@ -147,4 +154,16 @@ final class VRMServerBox: ObservableObject {
         server = nil
         base = nil
     }
+}
+
+/// Whether companion mode is on screen.
+///
+/// A server being up is not the same as her being visible — the panel starts
+/// the stage and then the user switches to Code — and the panel's own tools
+/// have to tell the agent which it is, or "换好了" is a lie about what the
+/// person can see.
+@MainActor
+final class CompanionPresence: ObservableObject {
+    static let shared = CompanionPresence()
+    @Published var onScreen = false
 }

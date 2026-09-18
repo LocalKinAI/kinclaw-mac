@@ -124,6 +124,34 @@ should not be unreachable to someone who has forgotten the hotkey: the
 Dock icon used to bounce and show nothing. `applicationShouldHandleReopen`
 now shows the panel, which also makes `open -a KinClawMac` work.
 
+### Changed — the real person is a wardrobe too, and the cartoon no longer stands in front of her
+
+The 3D character shipped drawing over the digital human — both on meant a
+cartoon in front of a person — and the person, who is the one anybody asked
+for, had four looks hardcoded in a list.
+
+- **One face or the other, enforced where it is stored.** Turning either on
+  turns the other off in the setter, not at the call sites: there are two
+  menus, two tools and a restore-on-launch path, and each of them would have
+  had to remember.
+- **Real-person looks are scanned, not listed.** The avatar service's four,
+  plus any folder under `~/.kinclaw/avatars-real/` holding `01.mp4` and
+  `combined_data.json.gz`. A look is a folder, so a new one needs no build —
+  the same shape as the 3D wardrobe beside it.
+- **「用一段视频做新形象…」** runs DH_live's two preparation scripts on a video
+  you pick, with `--matting` so she is a figure rather than a rectangle of
+  somebody's living room, and wears the result when it is done. No training:
+  a minute of someone talking to a camera is the whole input. It checks ffmpeg
+  first, because a broken one arrives as a Python traceback about SIGABRT —
+  measured on this Mac, whose Homebrew ffmpeg had lost `libass.9.dylib`.
+- **`avatar_wear` covers both wardrobes.** Real people first: a name that
+  matches both far likelier means the person than the model. And the tools now
+  say whether she is actually on screen rather than whether a server is up.
+
+What a real person cannot do is change clothes by prompt: her clothes are in
+the video. Another outfit is another video of her — a phone recording, stock
+footage, or a generated clip — run through the same two scripts.
+
 ### Added — the companion has a body: a 3D character, and clothes she can change
 
 Companion mode was a picture that changed with her mood. It can now be a VRM

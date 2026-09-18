@@ -161,7 +161,7 @@ struct SpotlightContentView: View {
     /// view once it exists. nil when the feature is off or the avatar
     /// service is not checked out — then companion mode is the picture
     /// and the halo it has always been.
-    @StateObject private var avatarServer = AvatarServerBox()
+    @ObservedObject private var avatarServer = AvatarServerBox.shared
     @State private var avatarWeb: AvatarWebView?
     /// The kernel's approval gate: "ask" or "auto". Comes from the soul
     /// at load and from /api/state after; the footer picker changes it.
