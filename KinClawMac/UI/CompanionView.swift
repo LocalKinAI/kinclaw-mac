@@ -845,6 +845,19 @@ struct CompanionArtPicker: View {
                 Button(diffuser.busy ? "画中…" : "生成") { draw() }
                     .controlSize(.small)
                     .disabled(diffuser.busy || drawPrompt.trimmingCharacters(in: .whitespaces).isEmpty)
+                // An mp4 in her folder is already a moving background, so a
+                // clip needs nothing here that a picture does not.
+                Button("拍 4 秒") { film() }
+                    .controlSize(.small)
+                    .disabled(drawPrompt.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .help("在视频服务上拍一段 4 秒的背景（\(DiffuserClient.videoHost)），几分钟")
+            }
+            if let job = diffuser.videoJobs.first {
+                Text(job.line)
+                    .font(.system(size: 10))
+                    .foregroundColor(job.error != nil ? .orange : (job.done ? .green : .secondary))
+                    .lineLimit(2)
+                    .truncationMode(.middle)
             }
             HStack(spacing: 6) {
                 if let drawn {
@@ -875,6 +888,16 @@ struct CompanionArtPicker: View {
                     .help("OllamaDiffuser 的地址，默认是盒子：\(DiffuserClient.defaultHost)")
             }
         }
+    }
+
+    /// Film one. The job announces itself in the row above; nothing here
+    /// waits, because minutes.
+    private func film() {
+        let prompt = drawPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty else { return }
+        let folder = group.isEmpty ? CompanionArt.folder
+                                   : CompanionArt.folder.appendingPathComponent(group)
+        _ = diffuser.startVideo(prompt: prompt, into: folder)
     }
 
     private func draw() {

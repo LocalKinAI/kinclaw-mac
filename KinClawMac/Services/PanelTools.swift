@@ -116,6 +116,40 @@ enum PanelTools {
             ],
         ],
         [
+            "name": "video_generate",
+            "description": """
+                Film a short clip from a description, on the user's own \
+                diffusion server, and save it where the KinClaw companion \
+                keeps her art — an mp4 there becomes her moving background. \
+                This takes minutes, so it starts the job and answers with \
+                where the file will land; call video_status to see whether it \
+                is done.
+                """,
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "prompt": ["type": "string",
+                               "description": "What to film, in English — a scene with some motion in it."],
+                    "mood": ["type": "string",
+                             "description": "Save it under one of the companion's moods (开心/温柔/好奇/困/担心) or states (idle/listening/thinking/speaking). Default: the rotating pool."],
+                    "seconds": ["type": "number",
+                                "description": "How long, 1–10 (default 4). Longer costs proportionally more time."],
+                    "width": ["type": "integer", "description": "Pixels wide (default 704)."],
+                    "height": ["type": "integer", "description": "Pixels tall (default 480)."],
+                    "seed": ["type": "integer", "description": "Fixed seed, to repeat a clip."],
+                ],
+                "required": ["prompt"],
+            ],
+        ],
+        [
+            "name": "video_status",
+            "description": """
+                How the clips are coming along: what is still filming, what \
+                landed and where, and what failed and why.
+                """,
+            "inputSchema": ["type": "object", "properties": [:]],
+        ],
+        [
             "name": "terminal_read",
             "description": """
                 Read what a terminal in the KinClaw panel is showing — the \
@@ -148,6 +182,8 @@ enum PanelTools {
         case "avatar_outfits": return (wardrobe(), false)
         case "avatar_wear":  return wear(args)
         case "image_generate": return await draw(args)
+        case "video_generate": return film(args)
+        case "video_status": return (DiffuserClient.shared.videoReport, false)
         default:              return ("这个面板没有叫 \(name) 的工具", true)
         }
     }
@@ -248,6 +284,28 @@ enum PanelTools {
             let hint = status.reachable ? "" : "（出图服务在 \(DiffuserClient.host)，看看它在不在）"
             return ("画不出来：\(error.localizedDescription)\(hint)", true)
         }
+    }
+
+    /// Start a clip. Answers immediately — see the tool's description for why.
+    private static func film(_ args: [String: Any]) -> (String, Bool) {
+        guard let prompt = (args["prompt"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !prompt.isEmpty else {
+            return ("video_generate 需要 prompt", true)
+        }
+        let mood = (args["mood"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let folder = mood.isEmpty ? CompanionArt.folder
+                                  : CompanionArt.folder.appendingPathComponent(mood)
+        // Ten seconds is the point past which a clip stops being a background
+        // loop and starts being a wait.
+        let seconds = min(max(args["seconds"] as? Double ?? 4, 1), 10)
+        let file = DiffuserClient.shared.startVideo(
+            prompt: prompt, into: folder, seconds: seconds,
+            width: args["width"] as? Int ?? 704,
+            height: args["height"] as? Int ?? 480,
+            seed: args["seed"] as? Int
+        )
+        let where_ = mood.isEmpty ? "陪伴模式的图片池" : "「\(mood)」那一组"
+        return ("开拍了，\(Int(seconds)) 秒的片子，几分钟后落在\(where_)：\(file.path)（用 video_status 看进度）", false)
     }
 
     // MARK: Her clothes

@@ -141,6 +141,27 @@ one.
   is a real image of a plausible size, and says to read the server's log
   rather than writing a broken PNG into her folder.
 
+### Added — and she films her own backgrounds
+
+An mp4 in her art folder has been a moving background since the Pexels
+work, so a generated clip needed no new plumbing to show up — only
+somewhere to come from. LTX-2 on the box makes one with sound.
+
+- **「拍 4 秒」 next to 生成**, same field, same folder. A clip made
+  under 温柔 is what moves behind her when she is gentle.
+- **`video_generate` and `video_status`**, tools nine and ten. Measured
+  on the box with an LTX-2.3 int4 pack: **4 seconds of 704×448 in 83s,
+  2 seconds in 37s** — about 18s of compute per second of video — with
+  a 48 kHz stereo track the model generates jointly, not dubbed on.
+- **Filming is a job, not a call.** The kernel gives one MCP round trip
+  60 seconds and *closes the client* when it overruns, which would take
+  every other panel tool down with it. So `video_generate` answers with
+  the path the file will land in and leaves; `video_status` says what is
+  still filming, what landed, and what failed. The picture path stays
+  synchronous — 15s fits.
+- **Its own address**, because OllamaDiffuser serves one model per
+  process: pictures on `:8000`, video on `:8001`, both settable.
+
 ### Changed — clicking the icon summons the panel
 
 ⌥⌘K is still the way in, but an app whose only surface is a hotkey panel
