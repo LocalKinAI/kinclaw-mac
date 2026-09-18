@@ -161,6 +161,12 @@ somewhere to come from. LTX-2 on the box makes one with sound.
   synchronous — 15s fits.
 - **Its own address**, because OllamaDiffuser serves one model per
   process: pictures on `:8000`, video on `:8001`, both settable.
+- **Her art folder was already settable to anywhere**, which for video
+  means an external disk — and an external disk is the kind that is not
+  plugged in on a Tuesday. Unasked, that looked like "she has no
+  pictures" and like an unreadable write error. Settings names the drive
+  to plug in, and both generators refuse with that sentence instead of
+  an errno.
 
 ### Changed — clicking the icon summons the panel
 

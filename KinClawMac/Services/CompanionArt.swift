@@ -71,6 +71,27 @@ final class CompanionArt: ObservableObject {
         var id: String { url.path }
     }
 
+    /// The drive a folder lives on, when that drive is not mounted — as a
+    /// sentence to show, or nil when there is nothing wrong.
+    ///
+    /// The art folder is settable to anywhere, and "anywhere" is usually a
+    /// big external disk, which is exactly the kind that is not plugged in
+    /// on a Tuesday. Unasked, that looks like "she has no pictures" and
+    /// like an unreadable write error; asked, it is one sentence naming the
+    /// drive to plug in. A missing folder on a mounted disk is not trouble —
+    /// it is made on first write.
+    static func unreachableVolume(_ url: URL) -> String? {
+        if FileManager.default.fileExists(atPath: url.path) { return nil }
+        let parts = url.pathComponents
+        guard parts.count > 2, parts[1] == "Volumes" else { return nil }
+        let drive = parts[2]
+        return FileManager.default.fileExists(atPath: "/Volumes/" + drive)
+            ? nil : "「\(drive)」这个盘没挂上——图片和视频都在它上面"
+    }
+
+    /// The same, for wherever the art currently lives.
+    static var folderTrouble: String? { unreachableVolume(folder) }
+
     static var defaultFolder: URL {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".kinclaw/companion")
     }

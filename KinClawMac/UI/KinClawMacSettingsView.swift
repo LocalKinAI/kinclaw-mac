@@ -488,6 +488,9 @@ private struct BackendSettingsTab: View {
                         .buttonStyle(.plain).font(.system(size: 11)).foregroundColor(.green)
                     }
                 }
+                if let trouble = CompanionArt.folderTrouble {
+                    SettingsCaption("⚠︎ \(trouble)")
+                }
                 SettingsRow(label: "Pexels key") {
                     SecureField("optional — better pictures", text: $pexelsKey)
                         .textFieldStyle(.roundedBorder)

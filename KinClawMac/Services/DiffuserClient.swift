@@ -136,6 +136,9 @@ final class DiffuserClient: ObservableObject {
             throw Failure.message("服务返回的不是一张正常的图（\(data.count) 字节），看看它的日志")
         }
 
+        if let trouble = CompanionArt.unreachableVolume(folder) {
+            throw Failure.message("画好了，但存不下：" + trouble)
+        }
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let file = folder.appendingPathComponent(Self.fileName(for: cleaned))
         try data.write(to: file)
@@ -236,8 +239,11 @@ final class DiffuserClient: ObservableObject {
             throw Failure.message("服务返回的不像一段视频（\(data.count) 字节），看看它的日志")
         }
 
-        try FileManager.default.createDirectory(
-            at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let home = file.deletingLastPathComponent()
+        if let trouble = CompanionArt.unreachableVolume(home) {
+            throw Failure.message("拍好了，但存不下：" + trouble)
+        }
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
         try data.write(to: file)
         try? cleaned.write(to: file.appendingPathExtension("txt"),
                            atomically: true, encoding: .utf8)
