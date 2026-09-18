@@ -18,7 +18,10 @@ import Foundation
 ///             driven by kincode kernel running on :5002
 ///   .term   → a third-party agent (Claude Code today) in a real
 ///             terminal, pointed at the Ollama and the model the model
-///             menu is already using
+///             menu is already using — or your own shell in the same
+///             tab strip, for the times the answer is one command
+///   .web    → a browser in the panel: the page you are signed into,
+///             one button from the agent
 ///
 /// This mirrors Claude Code Desktop's three-mode top bar, but plugged
 /// into the LocalKin kernel family (kinclaw + kincode) instead of
@@ -29,6 +32,7 @@ enum ChatMode: String, CaseIterable, Identifiable {
     case cowork
     case code
     case term
+    case web
 
     var id: String { rawValue }
 
@@ -39,6 +43,7 @@ enum ChatMode: String, CaseIterable, Identifiable {
         case .cowork: return "Cowork"
         case .code:   return "Code"
         case .term:   return "Term"
+        case .web:    return "Web"
         }
     }
 
@@ -51,6 +56,7 @@ enum ChatMode: String, CaseIterable, Identifiable {
         case .cowork: return "eye"
         case .code:   return "chevron.left.forwardslash.chevron.right"
         case .term:   return "terminal"
+        case .web:    return "globe"
         }
     }
 
@@ -64,7 +70,9 @@ enum ChatMode: String, CaseIterable, Identifiable {
         case .code:
             return "Code — repo-aware coding agent (kincode on :5002)"
         case .term:
-            return "Term — another agent in a terminal, on the model you picked"
+            return "Term — another agent in a terminal, on the model you picked, or your own shell"
+        case .web:
+            return "Web — a browser in the panel; 给 agent 看这页 hands the page over"
         }
     }
 }

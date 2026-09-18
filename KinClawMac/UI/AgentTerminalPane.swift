@@ -93,7 +93,9 @@ final class AgentTerminalSessions: ObservableObject {
     /// you the same agent on the same machine without choosing it all again.
     @discardableResult
     func newTab(like template: Session? = nil) -> Session {
-        let s = Session(agent: template?.agent ?? AgentLauncher.available.first?.integration.id ?? "",
+        let s = Session(agent: template?.agent
+                            ?? AgentLauncher.availableAgents.first?.integration.id
+                            ?? AgentLauncher.available.first?.integration.id ?? "",
                         host: template?.host ?? "",
                         model: template?.model ?? "",
                         folder: template?.folder ?? "")
@@ -121,6 +123,18 @@ final class AgentTerminalSessions: ObservableObject {
         sessions.append(s)
         selectedID = s.id
         save()
+    }
+
+    /// A tab running your own shell, in the folder the selected tab is in —
+    /// which is the folder you were just looking at.
+    @discardableResult
+    func newShell() -> Session {
+        let s = Session(agent: AgentLauncher.shell.id, host: "", model: "",
+                        folder: selected?.folder ?? "")
+        sessions.append(s)
+        selectedID = s.id
+        save()
+        return s
     }
 
     func close(_ id: UUID) {
@@ -165,7 +179,8 @@ final class AgentTerminalSessions: ObservableObject {
     /// all start agents at once.
     func terminal(for s: Session) -> LocalProcessTerminalView? {
         if let view = terminals[s.id] { return view }
-        guard let item = Self.installed(s), !s.model.isEmpty else { return nil }
+        guard let item = Self.installed(s),
+              !item.integration.needsModel || !s.model.isEmpty else { return nil }
 
         let view = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 720, height: 420))
         view.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
@@ -194,10 +209,14 @@ final class AgentTerminalSessions: ObservableObject {
         // fails under launchd's PATH and resolves under `zsh -l -i -c`. `exec`
         // hands the PTY straight to the agent, so ^C and the exit code are its
         // own.
-        let command = ([item.binary] + item.integration.args(host, s.model))
-            .map(AgentLauncher.shellQuoted).joined(separator: " ")
+        var args = ["-l", "-i"]
+        if item.integration.needsModel {
+            let command = ([item.binary] + item.integration.args(host, s.model))
+                .map(AgentLauncher.shellQuoted).joined(separator: " ")
+            args += ["-c", "exec " + command]
+        }
         view.startProcess(executable: AgentLauncher.loginShell,
-                          args: ["-l", "-i", "-c", "exec " + command],
+                          args: args,
                           environment: env,
                           currentDirectory: Self.folder(of: s))
         // Not published from here: this runs while a view is being built.
@@ -329,6 +348,15 @@ struct AgentTerminalPane: View {
                 .padding(.horizontal, 8)
             }
             Button {
+                sessions.newShell()
+            } label: {
+                Image(systemName: "apple.terminal")
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .buttonStyle(.borderless)
+            .padding(.leading, 6)
+            .help("新开一个 shell 标签（就是你的登录 shell，在当前文件夹里）")
+            Button {
                 sessions.newTab(like: sessions.selected)
             } label: {
                 Image(systemName: "plus")
@@ -383,8 +411,10 @@ struct AgentTerminalPane: View {
                 .foregroundColor(.secondary)
             if let agent {
                 agentMenu(s, current: agent)
-                machineMenu(s)
-                modelMenu(s)
+                if agent.integration.needsModel {
+                    machineMenu(s)
+                    modelMenu(s)
+                }
                 folderMenu(s)
             } else {
                 Text("没有可跑的 agent")
@@ -398,7 +428,7 @@ struct AgentTerminalPane: View {
                     .lineLimit(1)
                     .help(message)
             }
-            if agent != nil, !s.model.isEmpty {
+            if let agent, !agent.integration.needsModel || !s.model.isEmpty {
                 Button("重启") { sessions.restart(s.id) }
                     .controlSize(.small)
                 Button("在外部终端打开") { openOutside(s) }
@@ -438,7 +468,8 @@ struct AgentTerminalPane: View {
     /// since a kinfer box can be running a build from before it learned
     /// /v1/messages and /v1/responses.
     private func dialectWarning(_ s: Session) -> String? {
-        guard let agent = AgentTerminalSessions.installed(s) else { return nil }
+        guard let agent = AgentTerminalSessions.installed(s),
+              agent.integration.needsModel else { return nil }
         let host = AgentTerminalSessions.host(of: s)
         guard let health = OllamaCatalog.cachedHealth(host), health.reachable else { return nil }
         let (served, path) = agent.integration.dialect == .openAIResponses
@@ -548,13 +579,16 @@ struct AgentTerminalPane: View {
     }
 
     private var emptySession: some View {
-        VStack(spacing: 8) {
-            Text(installed.isEmpty ? "这台机器上没找到可以跑的 agent" : "先在上面挑一个模型")
+        let agents = AgentLauncher.availableAgents
+        return VStack(spacing: 8) {
+            Text(agents.isEmpty ? "这台机器上没找到可以跑的 agent" : "先在上面挑一个模型")
                 .font(.system(size: 13))
-            if installed.isEmpty {
-                Text("装好 Claude Code 或 Codex 再重开 app。")
+            if agents.isEmpty {
+                Text("装好 Claude Code 或 Codex 再重开 app —— 或者开一个 shell 标签。")
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
+                Button("开一个 shell") { sessions.newShell() }
+                    .controlSize(.small)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -562,10 +596,14 @@ struct AgentTerminalPane: View {
 
     private var noTabs: some View {
         VStack(spacing: 10) {
-            Text("没有打开的 agent")
+            Text("没有打开的标签")
                 .font(.system(size: 13))
-            Button("开一个") { sessions.newTab() }
-                .controlSize(.small)
+            HStack(spacing: 8) {
+                Button("开一个 agent") { sessions.newTab() }
+                    .controlSize(.small)
+                Button("开一个 shell") { sessions.newShell() }
+                    .controlSize(.small)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

@@ -65,6 +65,7 @@ struct SpotlightContentView: View {
     @State private var mode: ChatMode = ChatMode.loadPersisted()
     /// A model menu asking for an agent in the Term tab.
     @ObservedObject private var termStore = AgentTerminalStore.shared
+    @ObservedObject private var browser = BrowserTabs.shared
 
     /// Per-mode last-used agent slug. Each tab has its OWN active
     /// agent — switching tabs swaps which agent is in use. This is
@@ -546,7 +547,7 @@ struct SpotlightContentView: View {
             // Secondary row — agent picker and utility buttons. Code
             // mode has CodePane's own repoBar acting as its secondary
             // row, so we skip ours there to avoid double bars.
-            if mode != .code, mode != .term {
+            if mode != .code, mode != .term, mode != .web {
                 agentBar
                 Divider().opacity(0.15)
             }
@@ -594,6 +595,8 @@ struct SpotlightContentView: View {
                     CodePane()
                 case .term:
                     AgentTerminalPane()
+                case .web:
+                    WebPane()
                 }
             }
         }
@@ -602,6 +605,24 @@ struct SpotlightContentView: View {
         .onChange(of: termStore.request?.serial) { _, serial in
             if serial != nil, mode != .term {
                 mode = .term
+                mode.persist()
+            }
+        }
+        // 给 agent 看这页: the page's text arrives as a file and its URL as a
+        // line, and the panel goes to the surface with an input field. Which
+        // one it goes to matters: a local soul reads the file, a cloud agent
+        // only sees the path, so Cowork is where this lands unless the user
+        // was already in Chat.
+        .onChange(of: browser.handoff?.serial) { _, serial in
+            guard serial != nil, let page = browser.handoff else { return }
+            if let file = page.file {
+                pendingAttachments.append(Attachment(localURL: file))
+            }
+            let mention = "看看这一页：\(page.title)\n\(page.url)"
+            inputText = inputText.isEmpty ? mention
+                : inputText.trimmingCharacters(in: .whitespacesAndNewlines) + "\n\n" + mention
+            if mode != .chat, mode != .cowork {
+                mode = .cowork
                 mode.persist()
             }
         }
@@ -1194,10 +1215,10 @@ struct SpotlightContentView: View {
                     }
                 }
 
-            case .code, .term:
-                // Unreachable — header swaps the picker for a static
-                // "🦞 kincode" label when mode == .code. Defensive
-                // empty case.
+            case .code, .term, .web:
+                // Unreachable — these modes have no agent picker: Code shows a
+                // static "🦞 kincode" label, Term and Web have toolbars of
+                // their own. Defensive empty case.
                 EmptyView()
             }
 
@@ -3173,7 +3194,7 @@ struct SpotlightContentView: View {
     ///   .code   → no agent (kincode is fixed)
     private func pickDefaultAgent(for mode: ChatMode) -> Agent? {
         switch mode {
-        case .code, .term:
+        case .code, .term, .web:
             return nil
         case .chat:
             if !chatLastAgentSlug.isEmpty,
@@ -3224,7 +3245,7 @@ struct SpotlightContentView: View {
             // localkin repo and carry `domain == "kinclaw-private"`.
             // Both flavours route through the same chatBody surface.
             return agent.name.hasPrefix("KinClaw") || agent.domain == "kinclaw-private"
-        case .code, .term: return false         // never matches
+        case .code, .term, .web: return false   // never matches
         }
     }
 
@@ -3238,7 +3259,7 @@ struct SpotlightContentView: View {
         switch mode {
         case .chat:   chatLastAgentSlug = s
         case .cowork: coworkLastSoulSlug = s
-        case .code, .term: break
+        case .code, .term, .web: break
         }
     }
 

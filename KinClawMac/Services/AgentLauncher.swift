@@ -27,7 +27,8 @@ enum AgentLauncher {
     struct Integration {
         let id: String
         let label: String
-        /// Binary names to look for, in order.
+        /// Binary names to look for, in order. Empty means the login shell,
+        /// which is always here.
         let binaries: [String]
         /// The environment that aims the agent at `host`.
         let env: (_ host: String) -> [String: String]
@@ -36,6 +37,22 @@ enum AgentLauncher {
         let args: (_ host: String, _ model: String) -> [String]
         /// What the host must speak. Shown before it fails, not after.
         let dialect: Dialect
+        /// Whether a model has to be picked before this can start. A shell
+        /// does not talk to one.
+        let needsModel: Bool
+
+        init(id: String, label: String, binaries: [String],
+             env: @escaping (_ host: String) -> [String: String],
+             args: @escaping (_ host: String, _ model: String) -> [String],
+             dialect: Dialect, needsModel: Bool = true) {
+            self.id = id
+            self.label = label
+            self.binaries = binaries
+            self.env = env
+            self.args = args
+            self.dialect = dialect
+            self.needsModel = needsModel
+        }
     }
 
     /// An integration whose binary is actually on this Mac.
@@ -97,17 +114,41 @@ enum AgentLauncher {
         dialect: .openAIResponses
     )
 
+    /// Your own shell, in the tab strip beside the agents.
+    ///
+    /// Not an integration with anything — no host, no model, nothing exported.
+    /// It is here because half of what the Claude desktop terminal is for is
+    /// the command you would otherwise have gone to another window to run,
+    /// with the panel's folder already picked. The agents keep their place at
+    /// the front of the list: a new tab should still be an agent.
+    static let shell = Integration(
+        id: "shell",
+        label: "Shell",
+        binaries: [],
+        env: { _ in [:] },
+        args: { _, _ in [] },
+        dialect: .anthropicMessages,
+        needsModel: false
+    )
+
     /// Agents that want somebody else's config file rewritten (Cline's
     /// VS Code settings) are still out: a different promise from a flag,
     /// and it needs an undo.
-    static let all: [Integration] = [claudeCode, codex]
+    static let all: [Integration] = [claudeCode, codex, shell]
 
     /// The ones installed here. Resolved once: this is read while a menu
     /// is being built.
     static let available: [Installed] = all.compactMap { integration in
+        if integration.binaries.isEmpty {
+            return Installed(integration: integration, binary: loginShell)
+        }
         guard let path = locate(integration.binaries) else { return nil }
         return Installed(integration: integration, binary: path)
     }
+
+    /// The ones that are somebody else's agent, for the places that count
+    /// them — "no agent installed" should not be answered by the shell.
+    static var availableAgents: [Installed] { available.filter { $0.integration.needsModel } }
 
     /// Where the agent should start: the folder Code is pointed at, if
     /// there is one — that is where a coding agent is any use.
@@ -153,7 +194,9 @@ enum AgentLauncher {
     @discardableResult
     static func launch(_ item: Installed, host: String, model: String,
                        directory: String? = nil) -> String? {
-        guard isTame(model) else { return "模型名里有意外的字符，没敢拼进命令：\(model)" }
+        guard !item.integration.needsModel || isTame(model) else {
+            return "模型名里有意外的字符，没敢拼进命令：\(model)"
+        }
         guard isTame(host) else { return "地址里有意外的字符，没敢拼进命令：\(host)" }
 
         let dir = directory ?? defaultDirectory
@@ -169,9 +212,15 @@ enum AgentLauncher {
         for (key, value) in item.integration.env(host).sorted(by: { $0.key < $1.key }) {
             lines.append("export \(key)=\(shellQuoted(value))")
         }
-        lines.append("echo \"→ \(item.integration.label) · \(model) · \(host)\"")
-        let args = item.integration.args(host, model).map(shellQuoted).joined(separator: " ")
-        lines.append("exec \(shellQuoted(item.binary)) \(args)")
+        if item.integration.needsModel {
+            lines.append("echo \"→ \(item.integration.label) · \(model) · \(host)\"")
+            let args = item.integration.args(host, model).map(shellQuoted).joined(separator: " ")
+            lines.append("exec \(shellQuoted(item.binary)) \(args)")
+        } else {
+            // A shell, interactive: the same window the agents get, with
+            // nothing wrapped around it.
+            lines.append("exec \(shellQuoted(item.binary)) -l -i")
+        }
 
         let folder = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Library/Caches/kinclaw/launch")

@@ -124,6 +124,39 @@ should not be unreachable to someone who has forgotten the hotkey: the
 Dock icon used to bounce and show nothing. `applicationShouldHandleReopen`
 now shows the panel, which also makes `open -a KinClawMac` work.
 
+### Added — a Web tab: a browser in the panel, and the page handed to the agent
+
+The two panes beside Claude Desktop's conversation, as far as they make sense
+here: a browser, and your own shell in the Term tab.
+
+- **Tabs, an address bar, back and forward.** Pages live in
+  `WKWebsiteDataStore.default()`, so a sign-in lasts across launches, and the
+  web views are held outside the view tree the way the terminals are — a tab
+  survives a trip through Cowork and back with its scroll position and its
+  half-filled form. A link asking for a window of its own gets a tab of its
+  own. A typed word that is not an address goes to the kernel's own
+  `SEARXNG_ENDPOINT`, so the browser searches the index `web_search` searches;
+  DuckDuckGo when there is none.
+- **给 agent 看这页** hands the page over: the text this browser rendered —
+  after the JavaScript, behind the sign-in — written to a file under
+  `~/Library/Caches/kinclaw/pages/` and attached to the chat, with the URL on
+  a line of its own for a soul that would rather fetch it with kinbrowser. The
+  panel switches to Cowork for it, where the agent can read a path; Chat keeps
+  Chat, where it cannot.
+- Not a replacement for Safari: no downloads, no extensions, no bookmarks, and
+  nothing here drives the browser but you. The agent reads what you send it.
+
+### Added — your own shell in the Term tab
+
+The Term tab ran agents; the terminal button in its tab strip now opens a tab
+running your login shell — `zsh -l -i`, in the folder that tab is pointed at,
+no host and no model. Half of what a terminal beside the conversation is for
+is the command you would otherwise have gone to another window to run.
+
+An agent tab still needs a model picked and still says so; a shell tab has no
+machine or model menu, because it talks to neither. And "no agent installed" is
+no longer the Term tab's empty state: the shell is always here.
+
 ### Changed — the panel is an ordinary window, not always on top
 
 The panel floated above every app, which suited a quick question and not a
