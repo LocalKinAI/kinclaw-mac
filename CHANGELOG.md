@@ -117,6 +117,30 @@ tells the model to answer rather than recap.
   SSE, and both kernels read that as a reply with nothing in it. Fixed
   in kinclaw and kincode.
 
+### Added — the companion draws her own pictures
+
+Her art has been stock until now: a Pexels search, somebody else's
+photograph, and whatever it happens to show. A diffusion server answers
+the other way round — you say what you want and it makes that, which is
+the difference between a picture *of* a cafe and a picture of *her* in
+one.
+
+- **A generate row in the art picker.** Type what to draw, press 生成,
+  and it lands in whichever group is selected — so a picture made under
+  「开心」 is one she shows when she is happy, matched by mood and by the
+  words in its own filename, exactly like a downloaded one.
+- **`image_generate`, the eighth panel tool.** The agent can draw
+  without being handed a picker: prompt, optional mood, size, steps,
+  seed. It answers with where the file landed.
+- **Somebody else's GPU.** It talks to OllamaDiffuser's REST API, so the
+  server is wherever the memory is — the address is one field in the
+  picker and defaults to the box (`192.168.0.21:8000`). Measured there
+  with Boogu-Image-Turbo: **14–16s for a 768×768 at 4 steps**.
+- **A server that fails mid-generation still answers 200**, with a small
+  error image it drew itself. So the client checks that what came back
+  is a real image of a plausible size, and says to read the server's log
+  rather than writing a broken PNG into her folder.
+
 ### Changed — clicking the icon summons the panel
 
 ⌥⌘K is still the way in, but an app whose only surface is a hotkey panel

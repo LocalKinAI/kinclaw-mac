@@ -699,6 +699,12 @@ struct CompanionArtPicker: View {
     /// pool, otherwise a state or mood.
     @State private var group = ""
     @AppStorage(CompanionArt.pexelsKeyKey) private var pexelsKey = ""
+    /// Making a picture rather than finding one.
+    @ObservedObject private var diffuser = DiffuserClient.shared
+    @State private var drawPrompt = ""
+    @State private var drawNote: String?
+    @State private var drawn: URL?
+    @AppStorage(DiffuserClient.hostKey) private var diffuserHost = DiffuserClient.defaultHost
 
     private let suggestions = ["柴犬 puppy", "kitten", "golden retriever", "portrait", "cat sleeping", "landscape"]
 
@@ -768,6 +774,9 @@ struct CompanionArtPicker: View {
             }
 
             Divider().opacity(0.2)
+            makeRow
+
+            Divider().opacity(0.2)
             HStack {
                 Text("已有 \(art.count) 个")
                     .font(.system(size: 10)).foregroundColor(.secondary)
@@ -816,6 +825,75 @@ struct CompanionArtPicker: View {
         }
         .buttonStyle(.plain)
         .help("\(c.title)\n\(c.credit)")
+    }
+
+    /// Make one instead of finding one.
+    ///
+    /// Stock search answers "a photograph of a cafe"; a diffuser answers "her,
+    /// in that cafe, in the afternoon". Same destination folder as the
+    /// downloads, so the companion picks it up by mood the same way.
+    @ViewBuilder
+    private var makeRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "wand.and.stars")
+                    .font(.system(size: 10))
+                    .foregroundColor(.purple)
+                TextField("画一张：a quiet cafe in afternoon light…", text: $drawPrompt)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { draw() }
+                Button(diffuser.busy ? "画中…" : "生成") { draw() }
+                    .controlSize(.small)
+                    .disabled(diffuser.busy || drawPrompt.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            HStack(spacing: 6) {
+                if let drawn {
+                    // Straight to the picture, because the first thing anyone
+                    // wants after "生成" is to look at it.
+                    Button {
+                        NSWorkspace.shared.activateFileViewerSelecting([drawn])
+                    } label: {
+                        Label(drawn.lastPathComponent, systemImage: "photo")
+                            .font(.system(size: 10))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.green)
+                }
+                if let drawNote {
+                    Text(drawNote)
+                        .font(.system(size: 10))
+                        .foregroundColor(.orange)
+                        .lineLimit(2)
+                }
+                Spacer()
+                TextField("出图服务地址", text: $diffuserHost)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 10))
+                    .frame(width: 170)
+                    .help("OllamaDiffuser 的地址，默认是盒子：\(DiffuserClient.defaultHost)")
+            }
+        }
+    }
+
+    private func draw() {
+        let prompt = drawPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty else { return }
+        drawNote = nil
+        let folder = group.isEmpty ? CompanionArt.folder
+                                   : CompanionArt.folder.appendingPathComponent(group)
+        Task {
+            do {
+                let file = try await diffuser.generate(prompt: prompt, into: folder)
+                drawn = file
+                drawPrompt = ""
+                art.reload()
+            } catch {
+                drawn = nil
+                drawNote = error.localizedDescription
+            }
+        }
     }
 
     private func runSearch() {

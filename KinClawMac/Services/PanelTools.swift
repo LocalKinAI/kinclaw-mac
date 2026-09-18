@@ -92,6 +92,30 @@ enum PanelTools {
             ],
         ],
         [
+            "name": "image_generate",
+            "description": """
+                Draw a picture from a description, on the user's own diffusion \
+                server, and save it where the KinClaw companion keeps her art. \
+                Use it when they ask for an image — a scene, a portrait, a \
+                background — rather than describing one in words. Takes about \
+                15 seconds. The answer is where the file landed.
+                """,
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "prompt": ["type": "string",
+                               "description": "What to draw, in English — the models were trained on it."],
+                    "mood": ["type": "string",
+                             "description": "Save it under one of the companion's moods (开心/温柔/好奇/困/担心) or states (idle/listening/thinking/speaking) so she shows it then. Default: the rotating pool."],
+                    "width": ["type": "integer", "description": "Pixels wide (default 768)."],
+                    "height": ["type": "integer", "description": "Pixels tall (default 768)."],
+                    "steps": ["type": "integer", "description": "Denoising steps (default 4, which is what the turbo models want)."],
+                    "seed": ["type": "integer", "description": "Fixed seed, to repeat a picture."],
+                ],
+                "required": ["prompt"],
+            ],
+        ],
+        [
             "name": "terminal_read",
             "description": """
                 Read what a terminal in the KinClaw panel is showing — the \
@@ -123,6 +147,7 @@ enum PanelTools {
         case "terminal_read": return terminalRead(args)
         case "avatar_outfits": return (wardrobe(), false)
         case "avatar_wear":  return wear(args)
+        case "image_generate": return await draw(args)
         default:              return ("这个面板没有叫 \(name) 的工具", true)
         }
     }
@@ -193,6 +218,36 @@ enum PanelTools {
         }
         if text.isEmpty { return ("这个终端目前是空的", false) }
         return (text, false)
+    }
+
+    // MARK: Drawing
+
+    private static func draw(_ args: [String: Any]) async -> (String, Bool) {
+        guard let prompt = (args["prompt"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !prompt.isEmpty else {
+            return ("image_generate 需要 prompt", true)
+        }
+        // A mood or state name puts it in that folder, which is what makes the
+        // companion show it at the right moment rather than in the rotation.
+        let mood = (args["mood"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let folder = mood.isEmpty ? CompanionArt.folder
+                                  : CompanionArt.folder.appendingPathComponent(mood)
+        let client = DiffuserClient.shared
+        do {
+            let file = try await client.generate(
+                prompt: prompt, into: folder,
+                steps: args["steps"] as? Int ?? 4,
+                width: args["width"] as? Int ?? 768,
+                height: args["height"] as? Int ?? 768,
+                seed: args["seed"] as? Int
+            )
+            let where_ = mood.isEmpty ? "陪伴模式的图片池" : "「\(mood)」那一组"
+            return ("画好了，存到\(where_)：\(file.path)", false)
+        } catch {
+            let status = await client.refresh()
+            let hint = status.reachable ? "" : "（出图服务在 \(DiffuserClient.host)，看看它在不在）"
+            return ("画不出来：\(error.localizedDescription)\(hint)", true)
+        }
     }
 
     // MARK: Her clothes
