@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<!--
+  The companion's body: a VRM character, rendered on a transparent canvas so
+  the panel's glass — or, in the desktop pet window, the desktop — shows
+  through.
+
+  VRM is the format because it is the one the characters exist in: VRoid Hub
+  publishes tens of thousands of them with clothes and hair as separate
+  purchasable parts, and Desktop Mate and Grok's Ani are both VRM underneath.
+  So "change her clothes" is a file, not a modelling job.
+
+  Everything here is local: three.js, its glTF loader and @pixiv/three-vrm are
+  vendored beside this file. A companion that needs a CDN is a companion that
+  stops working on a plane.
+
+  Swift drives it through `window.kin` — load, expression, mouth, look — and
+  reads `window.kin.status()` to know what happened. Which is also how it is
+  tested: no screenshot, just the numbers the scene reports.
+-->
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>KinClaw companion stage</title>
+<style>
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+  canvas { display: block; width: 100%; height: 100%; }
+  #err { position: absolute; inset: auto 12px 12px 12px; font: 12px -apple-system, sans-serif;
+         color: #ffb4b4; white-space: pre-wrap; }
+</style>
+<script type="importmap">
+{ "imports": { "three": "./three.module.js" } }
+</script>
+</head>
+<body>
+<div id="err"></div>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from './loaders/GLTFLoader.js';
+import { VRMLoaderPlugin, VRMUtils } from './three-vrm.module.min.js';
+
+const state = {
+  ready: false,
+  model: '',
+  error: '',
+  expressions: [],
+  mouth: 0,
+  talking: false,
+  expression: '',
+  frames: 0,
+};
+
+const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setClearAlpha(0);
+document.body.appendChild(renderer.domElement);
+
+// Size from the element, not from the window: a host can report an inner size
+// of 0 while laying the page out perfectly well (measured — one preview does),
+// and a renderer sized from that draws nothing.
+function measure() {
+  const w = Math.max(renderer.domElement.clientWidth || document.documentElement.clientWidth
+    || window.innerWidth, 1);
+  const h = Math.max(renderer.domElement.clientHeight || document.documentElement.clientHeight
+    || window.innerHeight, 1);
+  return [w, h];
+}
+
+function resize() {
+  const [w, h] = measure();
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h, false);
+}
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(30, window.innerWidth / window.innerHeight, 0.05, 40);
+camera.position.set(0, 1.3, 2.2);
+
+// Soft front light plus fill: a VRM's toon materials look flat under one lamp
+// and blown out under a bright one.
+const key = new THREE.DirectionalLight(0xffffff, 1.6);
+key.position.set(0.6, 2.0, 2.2);
+scene.add(key);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x8899aa, 1.1));
+
+const loader = new GLTFLoader();
+loader.register((parser) => new VRMLoaderPlugin(parser));
+
+let vrm = null;
+const look = new THREE.Object3D();          // what the eyes follow
+look.position.set(0, 1.35, 1.6);
+scene.add(look);
+
+/// Arms down, elbows a little bent. A VRM's normalised humanoid rig rests in a
+/// T-pose, which is why this is a fixed pose and not an offset: every model
+/// starts from the same place, so one set of angles works for all of them.
+function relax(v) {
+  const set = (name, x, y, z) => {
+    const bone = v.humanoid?.getNormalizedBoneNode(name);
+    if (bone) bone.rotation.set(x, y, z);
+  };
+  set('leftUpperArm', 0.05, 0, -1.22);
+  set('rightUpperArm', 0.05, 0, 1.22);
+  set('leftLowerArm', 0, -0.25, -0.18);
+  set('rightLowerArm', 0, 0.25, 0.18);
+  set('leftHand', 0, 0, -0.1);
+  set('rightHand', 0, 0, 0.1);
+}
+
+/// Frame the whole character, head a little above centre — the composition
+/// Desktop Mate uses, and the one that survives a narrow panel.
+function frame(v) {
+  const box = new THREE.Box3().setFromObject(v.scene);
+  const height = Math.max(box.max.y - box.min.y, 0.5);
+  const centre = (box.max.y + box.min.y) / 2;
+  const fov = THREE.MathUtils.degToRad(camera.fov);
+  const distance = (height * 0.62) / Math.tan(fov / 2);
+  camera.position.set(0, centre + height * 0.06, distance);
+  camera.lookAt(0, centre, 0);
+  look.position.set(0, box.max.y - height * 0.08, distance * 0.7);
+}
+
+const kin = {
+  /// Load a .vrm. Resolves to the status, so Swift can tell a model that
+  /// loaded from one that failed without polling.
+  async load(url) {
+    state.error = '';
+    try {
+      const gltf = await loader.loadAsync(url);
+      const next = gltf.userData.vrm;
+      if (!next) throw new Error('这个文件里没有 VRM 数据');
+      if (vrm) {
+        scene.remove(vrm.scene);
+        VRMUtils.deepDispose(vrm.scene);
+      }
+      VRMUtils.removeUnnecessaryVertices(gltf.scene);
+      VRMUtils.combineSkeletons(gltf.scene);
+      next.scene.traverse((o) => { o.frustumCulled = false; });
+      scene.add(next.scene);
+      vrm = next;
+      vrm.lookAt && (vrm.lookAt.target = look);
+      relax(vrm);
+      frame(vrm);
+      state.ready = true;
+      state.model = url;
+      state.expressions = vrm.expressionManager
+        ? vrm.expressionManager.expressions.map((e) => e.expressionName)
+        : [];
+      return this.status();
+    } catch (e) {
+      state.error = String(e && e.message ? e.message : e);
+      state.ready = false;
+      document.getElementById('err').textContent = state.error;
+      return this.status();
+    }
+  },
+
+  /// One of the VRM standard expressions — happy, sad, angry, relaxed,
+  /// surprised — at a weight. Anything the model does not have is ignored
+  /// rather than treated as an error: expression sets vary per model.
+  expression(name, weight = 1) {
+    if (!vrm?.expressionManager) return false;
+    for (const e of vrm.expressionManager.expressions) {
+      const n = e.expressionName;
+      if (['happy', 'sad', 'angry', 'relaxed', 'surprised'].includes(n)) {
+        vrm.expressionManager.setValue(n, n === name ? weight : 0);
+      }
+    }
+    state.expression = name;
+    return true;
+  },
+
+  /// How open the mouth is, 0…1. Driven from the voice's level while a reply
+  /// is being spoken; decays on its own, so a dropped update closes the mouth
+  /// instead of leaving it open.
+  mouth(level) {
+    state.mouth = Math.max(0, Math.min(1, Number(level) || 0));
+    return state.mouth;
+  },
+
+  talking(on) { state.talking = !!on; return state.talking; },
+
+  /// Where the eyes go, in screen terms: -1…1 across, -1…1 up.
+  look(x, y) {
+    look.position.x = (Number(x) || 0) * 0.6;
+    look.position.y = look.userData.base + (Number(y) || 0) * 0.25;
+    return true;
+  },
+
+  status() {
+    return {
+      ready: state.ready, model: state.model, error: state.error,
+      expressions: state.expressions, expression: state.expression,
+      mouth: state.mouth, talking: state.talking, frames: state.frames,
+      size: measure(),
+    };
+  },
+};
+look.userData.base = look.position.y;
+window.kin = kin;
+
+// Blink, breath, and a mouth that follows the voice. Small amounts on purpose:
+// a character that moves a lot reads as a toy, and this one sits next to a
+// conversation for an hour.
+let nextBlink = 1.5, blink = 0;
+const clock = new THREE.Clock();
+function tick() {
+  const dt = Math.min(clock.getDelta(), 0.1);
+  const t = clock.elapsedTime;
+  if (vrm) {
+    nextBlink -= dt;
+    if (nextBlink <= 0) { blink = 0.18; nextBlink = 2.2 + Math.random() * 3.4; }
+    if (blink > 0) {
+      blink -= dt;
+      vrm.expressionManager?.setValue('blink', Math.sin(Math.max(blink, 0) / 0.18 * Math.PI));
+    } else {
+      vrm.expressionManager?.setValue('blink', 0);
+    }
+
+    const chest = vrm.humanoid?.getNormalizedBoneNode('chest')
+      ?? vrm.humanoid?.getNormalizedBoneNode('spine');
+    if (chest) chest.rotation.x = Math.sin(t * 1.1) * 0.012;
+    const head = vrm.humanoid?.getNormalizedBoneNode('head');
+    if (head) {
+      head.rotation.y = Math.sin(t * 0.37) * 0.05;
+      head.rotation.z = Math.sin(t * 0.29) * 0.02;
+    }
+
+    // Talking: the level opens the mouth, and a little wobble on top keeps a
+    // steady level from looking like a held note.
+    const wobble = state.talking ? 0.12 + 0.1 * Math.sin(t * 11) : 0;
+    const open = Math.max(0, Math.min(1, state.mouth * 0.8 + wobble));
+    vrm.expressionManager?.setValue('aa', open);
+    state.mouth *= 0.86;
+
+    vrm.update(dt);
+  }
+  state.frames++;
+  renderer.render(scene, camera);
+  requestAnimationFrame(tick);
+}
+tick();
+
+window.addEventListener('resize', resize);
+new ResizeObserver(resize).observe(document.documentElement);
+resize();
+
+// The eyes follow the pointer when it is over the panel: the one interaction
+// that makes a character feel present rather than played back.
+window.addEventListener('pointermove', (e) => {
+  const [w, h] = measure();
+  kin.look((e.clientX / w) * 2 - 1, -((e.clientY / h) * 2 - 1));
+});
+</script>
+</body>
+</html>

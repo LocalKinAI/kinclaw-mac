@@ -35,7 +35,15 @@ targets:
     type: application
     platform: macOS
     sources:
-      - KinClawMac
+      # The VRM stage is a folder reference on purpose: its loader imports
+      # '../utils/BufferGeometryUtils.js', so Xcode's usual flattening of
+      # resources into Contents/Resources breaks the page. As a folder it is
+      # copied with its shape intact.
+      - path: KinClawMac
+        excludes:
+          - "Resources/vrm/**"
+      - path: KinClawMac/Resources/vrm
+        type: folder
     dependencies:
       - package: KeyboardShortcuts
       - package: SwiftTerm

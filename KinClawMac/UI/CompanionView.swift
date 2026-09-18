@@ -11,6 +11,11 @@ import AppKit
 /// you look at while it runs.
 struct CompanionView: View {
     @ObservedObject var art: CompanionArt
+    /// The 3D companion, when there is a model for her. Reached directly
+    /// rather than passed in: this view already takes twenty parameters, and
+    /// the stage is a singleton because she has to outlive the view.
+    @ObservedObject private var vrm = VRMStage.shared
+    @ObservedObject private var vrmServer = VRMServerBox.shared
 
     /// Live inputs from the panel's existing voice objects.
     let isListening: Bool
@@ -141,6 +146,14 @@ struct CompanionView: View {
                     .allowsHitTesting(false)
                     .transition(.opacity)
             }
+            // The 3D companion. Above the picture, hit-testing on: her eyes
+            // follow the pointer, which is the one interaction that makes a
+            // character feel present rather than played back.
+            if let base = vrmServer.base {
+                VRMStageView(base: base, onReady: { vrm.attach($0) })
+                    .ignoresSafeArea()
+                    .transition(.opacity)
+            }
             VStack {
                 topBar
                 Spacer()
@@ -221,9 +234,19 @@ struct CompanionView: View {
             // the same picture and just changes the halo.
             if art.hasGroups { pick() }
         }
-        .onChange(of: mood) { _, _ in
+        .onChange(of: mood) { _, new in
             if art.hasGroups { pick() }
+            vrm.express(new)
         }
+        // Her mouth follows the voice's level while a reply is being spoken;
+        // the stage decays it on its own, so a dropped update closes it.
+        .onChange(of: audioLevel) { _, level in
+            vrm.voice(level: level * 1.4, speaking: isSpeaking)
+        }
+        .onChange(of: isSpeaking) { _, speaking in
+            vrm.voice(level: speaking ? audioLevel * 1.4 : 0, speaking: speaking)
+        }
+        .onAppear { vrmServer.startIfWanted() }
         // The subject changing is the strongest reason to change the
         // picture — and the only one that makes the background about
         // the conversation rather than about the voice.
@@ -308,6 +331,7 @@ struct CompanionView: View {
             voiceMenu
             themeMenu
             avatarMenu
+            wardrobeMenu
             Spacer()
             Button(action: onExit) {
                 Image(systemName: "xmark")
@@ -321,6 +345,75 @@ struct CompanionView: View {
             .help("离开陪伴模式 (Esc)")
         }
         .padding(12)
+    }
+
+    /// The 3D companion and her clothes: a folder of VRM models, and which one
+    /// she is wearing. Desktop Mate's outfit switch and Grok's "switch to a
+    /// summer dress" are the same move underneath — a VRM carries its clothes
+    /// baked in, so an outfit is a file.
+    private var wardrobeMenu: some View {
+        let outfits = VRMWardrobe.outfits
+        let wearing = VRMWardrobe.chosen
+        return Menu {
+            Toggle(isOn: Binding(
+                get: { vrmServer.base != nil },
+                set: { on in
+                    VRMWardrobe.isEnabled = on
+                    if on { vrmServer.startIfWanted() } else { vrmServer.stop() }
+                }
+            )) {
+                Label("3D 形象", systemImage: "person.crop.square.badge.video")
+            }
+            .disabled(outfits.isEmpty)
+            if !outfits.isEmpty {
+                Divider()
+                ForEach(outfits) { outfit in
+                    Button {
+                        vrm.wear(outfit)
+                        if vrmServer.base == nil {
+                            VRMWardrobe.isEnabled = true
+                            vrmServer.startIfWanted()
+                        }
+                    } label: {
+                        if outfit.id == wearing?.id {
+                            Label(outfit.name, systemImage: "checkmark")
+                        } else {
+                            Text(outfit.name)
+                        }
+                    }
+                }
+            }
+            Divider()
+            Button("打开模型文件夹…") {
+                NSWorkspace.shared.open(VRMWardrobe.ensureFolder())
+            }
+            Button("去 VRoid Hub 找模型…") {
+                NSWorkspace.shared.open(VRMWardrobe.sourceURL)
+            }
+            if outfits.isEmpty {
+                Text("把 .vrm 放进 ~/.kinclaw/avatars/ 就能选了")
+                    .foregroundColor(.secondary)
+            }
+            if let note = vrm.note {
+                Divider()
+                Text(note).foregroundColor(.secondary)
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: vrmServer.base != nil ? "figure.stand" : "figure.stand.dress")
+                    .font(.system(size: 10))
+                Text(vrmServer.base != nil ? (wearing?.name ?? "3D") : "3D 形象")
+                    .font(.system(size: 11))
+            }
+            .foregroundColor(vrmServer.base != nil ? .pink.opacity(0.9) : .white.opacity(0.6))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Capsule().fill(.black.opacity(0.35)))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("她的形象和衣服：~/.kinclaw/avatars/ 里的 VRM 模型")
     }
 
     /// Pick a voice by ear: every change speaks the sample line, so

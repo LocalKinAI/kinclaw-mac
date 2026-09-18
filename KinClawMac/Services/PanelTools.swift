@@ -66,6 +66,32 @@ enum PanelTools {
             "inputSchema": ["type": "object", "properties": [String: Any]()],
         ],
         [
+            "name": "avatar_outfits",
+            "description": """
+                List the outfits the KinClaw companion has — the VRM models in \
+                the user's wardrobe folder — and say which one she is wearing \
+                and whether she is on screen right now.
+                """,
+            "inputSchema": ["type": "object", "properties": [String: Any]()],
+        ],
+        [
+            "name": "avatar_wear",
+            "description": """
+                Change what the KinClaw companion is wearing, by outfit name — \
+                a partial name is enough. Use it when the user asks her to \
+                change clothes or to be someone else. Call avatar_outfits first \
+                if you do not know what she owns.
+                """,
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "outfit": ["type": "string",
+                               "description": "An outfit name from avatar_outfits; part of one is enough."],
+                ],
+                "required": ["outfit"],
+            ],
+        ],
+        [
             "name": "terminal_read",
             "description": """
                 Read what a terminal in the KinClaw panel is showing — the \
@@ -95,6 +121,8 @@ enum PanelTools {
         case "browser_tabs":  return (BrowserTabs.shared.summary(), false)
         case "terminal_tabs": return (AgentTerminalSessions.shared.summary(), false)
         case "terminal_read": return terminalRead(args)
+        case "avatar_outfits": return (wardrobe(), false)
+        case "avatar_wear":  return wear(args)
         default:              return ("这个面板没有叫 \(name) 的工具", true)
         }
     }
@@ -165,6 +193,37 @@ enum PanelTools {
         }
         if text.isEmpty { return ("这个终端目前是空的", false) }
         return (text, false)
+    }
+
+    // MARK: Her clothes
+
+    private static func wardrobe() -> String {
+        let outfits = VRMWardrobe.outfits
+        guard !outfits.isEmpty else {
+            return "衣柜是空的。把 .vrm 模型放进 \(VRMWardrobe.folder.path)（VRoid Hub 上能下），"
+                + "她就有衣服可以换了。"
+        }
+        let wearing = VRMWardrobe.chosen?.id
+        let onScreen = VRMServerBox.shared.base != nil
+        let list = outfits.map { "\($0.id == wearing ? "→" : " ") \($0.name)" }.joined(separator: "\n")
+        return list + "\n\n" + (onScreen ? "她现在在屏幕上（陪伴模式）。"
+                                           : "陪伴模式没开，所以换了要等下次见面才看得到。")
+    }
+
+    private static func wear(_ args: [String: Any]) -> (String, Bool) {
+        guard let wanted = (args["outfit"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !wanted.isEmpty else {
+            return ("avatar_wear 需要一个 outfit 名字", true)
+        }
+        guard let outfit = VRMWardrobe.match(wanted) else {
+            let names = VRMWardrobe.outfits.map(\.name)
+            return names.isEmpty
+                ? ("衣柜是空的（\(VRMWardrobe.folder.path) 里没有 .vrm）", true)
+                : ("没有叫「\(wanted)」的，她有的是：" + names.joined(separator: "、"), true)
+        }
+        VRMStage.shared.wear(outfit)
+        let onScreen = VRMServerBox.shared.base != nil
+        return ("换成「\(outfit.name)」了" + (onScreen ? "。" : "，等陪伴模式打开就能看到。"), false)
     }
 
     /// A tab by its 1-based number, as the list tools print them, falling back

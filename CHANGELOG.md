@@ -124,6 +124,43 @@ should not be unreachable to someone who has forgotten the hotkey: the
 Dock icon used to bounce and show nothing. `applicationShouldHandleReopen`
 now shows the panel, which also makes `open -a KinClawMac` work.
 
+### Added — the companion has a body: a 3D character, and clothes she can change
+
+Companion mode was a picture that changed with her mood. It can now be a VRM
+character standing in the panel — the format Desktop Mate and Grok's Ani both
+use underneath, which is the point: VRoid Hub publishes tens of thousands of
+characters and outfits in it, so "change her clothes" is a file rather than a
+modelling job.
+
+- **A wardrobe, not a costume system.** Drop `.vrm` files in
+  `~/.kinclaw/avatars/` and the 3D menu in companion mode lists them. A VRM
+  carries its clothes baked in, so an outfit *is* a model — which is also how
+  Desktop Mate's DLC costumes and VRoid Hub's paid outfits arrive. The app
+  ships no character: they are somebody's work, licensed per model.
+- **She reacts to the conversation already in place.** The `[情绪·主题]` tag
+  that picks the art now also picks her face, mapped onto the five VRM standard
+  expressions — happy, relaxed, surprised, sad — and the voice's own level
+  opens her mouth while a reply is being spoken. Blink, breath and eyes that
+  follow the pointer come from the stage itself.
+- **Asking works.** Two more panel MCP tools, `avatar_outfits` and
+  `avatar_wear`, so "换条裙子" reaches the wardrobe the way it reaches Ani's.
+  Names match loosely; the answer says whether she is on screen to see it.
+- **Local, like everything else.** three.js, its glTF loader and
+  `@pixiv/three-vrm` are vendored in the bundle (2.3 MB) rather than fetched:
+  a companion that needs a CDN is a companion that stops working on a plane.
+  They are a folder reference in the project on purpose — Xcode flattens
+  resources, and the glTF loader imports `../utils/BufferGeometryUtils.js`.
+- **Measured**, on the stage page with a sample model: loads and renders,
+  reports the eighteen expressions the model carries, `happy` closes her eyes
+  into a smile and `mouth(0.9)` opens her mouth, and the scene sizes itself
+  from its element — a host that reports an inner size of 0 (one preview does)
+  used to leave the canvas blank.
+
+Not yet: an idle animation. She stands in a relaxed pose the stage poses her
+into, which beats the T-pose a VRM arrives in but is not Desktop Mate's sway.
+VRM animation files (`.vrma`) are the next step, along with the transparent
+always-on-top window that would put her on the desktop rather than in a panel.
+
 ### Added — the agent can open a page and read your terminal
 
 The panel now offers the kernel five tools of its own, over MCP: `browser_open`,
