@@ -115,16 +115,32 @@ enum VRMWardrobe {
         try? fm.createDirectory(at: stage, withIntermediateDirectories: true)
         // three ships as two files that import each other by name, so both
         // have to be here under the names they expect.
-        for name in ["stage.html", "three.module.js", "three.core.js",
-                     "three-vrm.module.min.js", "loaders", "utils"] {
+        // Only ever a link of our own is replaced. Whatever else is sitting
+        // under one of these names — a module somebody dropped in by hand, a
+        // folder of their own — is theirs, and is left exactly where it is.
+        func link(_ name: String, to target: URL) {
             let dst = stage.appendingPathComponent(name)
-            try? fm.removeItem(at: dst)
-            try? fm.createSymbolicLink(at: dst, withDestinationURL: source.appendingPathComponent(name))
+            if let kind = try? fm.attributesOfItem(atPath: dst.path)[.type] as? FileAttributeType {
+                guard kind == .typeSymbolicLink else { return }
+                try? fm.removeItem(at: dst)
+            }
+            try? fm.createSymbolicLink(at: dst, withDestinationURL: target)
         }
-        let models = stage.appendingPathComponent("models")
-        try? fm.removeItem(at: models)
-        try? fm.createSymbolicLink(at: models, withDestinationURL: ensureFolder())
+        for name in ["stage.html", "three.module.js", "three.core.js", "three-vrm.module.min.js",
+                     "three-vrm-animation.module.min.js", "loaders", "utils"] {
+            link(name, to: source.appendingPathComponent(name))
+        }
+        link("models", to: ensureFolder())
+        // Her places, so the stage can draw the one she is walking around in:
+        // its focus follows her, which only the page can do.
+        link("scenes", to: CompanionArt.folder.appendingPathComponent("scenes"))
         return stage
+    }
+
+    /// The path the stage loads a scene's file from.
+    static func stagePath(scene: String, file: String) -> String {
+        let folder = scene.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? scene
+        return "scenes/\(folder)/\(file)"
     }
 }
 
@@ -166,4 +182,32 @@ final class VRMServerBox: ObservableObject {
 final class CompanionPresence: ObservableObject {
     static let shared = CompanionPresence()
     @Published var onScreen = false
+
+    /// The last few reply openings, as they arrived.
+    ///
+    /// Every guess about why the background will not move has come down to
+    /// what she actually wrote at the start of a reply, and nothing kept it.
+    /// What last called the 3D companion up to the lens or let her go, newest
+    /// first. Diagnostics only.
+    private(set) var wantedLog: [String] = []
+    func noteWanted(_ what: String) {
+        let time = Date().formatted(date: .omitted, time: .standard)
+        wantedLog.insert("\(time) \(what)", at: 0)
+        wantedLog = Array(wantedLog.prefix(10))
+    }
+
+    /// Raw, including the ones that are not tags at all.
+    private(set) var tags: [String] = []
+
+    func noteTag(_ note: String) {
+        tags.insert(note, at: 0)
+        tags = Array(tags.prefix(10))
+    }
+
+    /// The art the panel is actually showing from.
+    ///
+    /// It belongs to the view — a `@StateObject` that lives as long as the
+    /// panel does — so a tool that made its own copy would move a companion
+    /// nobody is looking at. Weak, because the view owns it.
+    weak var art: CompanionArt?
 }

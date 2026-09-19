@@ -128,6 +128,29 @@ final class CompanionArt: ObservableObject {
         }
     }
 
+    /// Places that are the same footage under two names.
+    ///
+    /// A scene is a folder, and nothing checks that what is in the folder is
+    /// the place on its label. Two folders with one picture in them look, from
+    /// the chair, exactly like a switch that does not work — she goes to the
+    /// park and the kitchen is still on screen — and no amount of reading the
+    /// decision code finds it, because the decision was right. Bytes are cheap
+    /// to compare, so the tools say so.
+    static func twinScenes() -> [(String, String)] {
+        let root = folder.appendingPathComponent("scenes")
+        var seen: [Data: String] = [:]
+        var twins: [(String, String)] = []
+        for name in scenesOnDisk() {
+            let dir = root.appendingPathComponent(name)
+            for file in ["still.png", "wait.mp4"] {
+                guard let bytes = try? Data(contentsOf: dir.appendingPathComponent(file)) else { continue }
+                if let first = seen[bytes] { twins.append((first, name)) } else { seen[bytes] = name }
+                break
+            }
+        }
+        return twins
+    }
+
     static var defaultFolder: URL {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".kinclaw/companion")
     }
@@ -277,17 +300,57 @@ final class CompanionArt: ObservableObject {
     ///         wait.mp4     she looks at you, smiling, waiting
     ///         talk.mp4     she speaks, same place, same clothes
     ///         still.png    the frame both were animated from
+    ///         plate.png    the same place with nobody in it — what the 3D
+    ///                      companion stands in front of
     ///         about.txt    words the conversation might use for this place
     struct Scene: Equatable, Identifiable {
         let name: String
         let wait: URL?
         let talk: URL?
+        /// The place without her. The clips have the generated woman in
+        /// them, and a 3D character in front of those is two people.
+        var plate: URL? = nil
+        /// The same place from further back, at eye level, with ground in the
+        /// lower half — somewhere to walk, where the plate is only somewhere
+        /// to stand.
+        var wide: URL? = nil
+
+        /// Out of doors, as far as its own words say. It decides how far away
+        /// she may wander: down a path until she is small, but not through
+        /// the back wall of a kitchen. Wrong in the safe direction — a place
+        /// not recognised is a room.
+        var isOutdoors: Bool {
+            let open: Set<String> = ["park", "beach", "forest", "street", "market", "mountain", "snow", "garden",
+                "field", "lake", "river", "sea", "seaside", "desert", "road", "trail", "rain", "square", "bridge",
+                "meadow", "harbor", "harbour", "campsite", "camp", "公园", "海边", "沙滩", "夜市", "雨天", "森林",
+                "街", "山", "湖", "田野", "草地", "花园"]
+            return !open.isDisjoint(with: words + names)
+        }
+        /// Topic words, for a reply's subject tag: kitchen, coffee, 咖啡.
         let words: [String]
+        /// What a person calls the place out loud: 厨房, kitchen. Kept apart
+        /// from `words` because those are loose on purpose — 早上 and 晚上 are
+        /// fine as hints from a tag, and would teleport her around the house
+        /// if they were matched against everything the user says.
+        let names: [String]
         var id: String { name }
 
         func clip(for state: String) -> URL? {
             state == "speaking" ? (talk ?? wait) : (wait ?? talk)
         }
+
+        /// Whether there is anything to show here. A place is two different
+        /// sets of files depending on who is standing in it: clips of her for
+        /// the filmed companion, an empty plate for the 3D one.
+        func usable(in3D: Bool) -> Bool {
+            in3D ? plate != nil : (wait != nil || talk != nil)
+        }
+    }
+
+    /// The 3D companion is the one on screen, so places are plates rather
+    /// than clips. Set by the view, which is the only thing that knows.
+    var stage3D = false {
+        didSet { if stage3D != oldValue { objectWillChange.send() } }
     }
 
     /// Which scene she goes back to. Empty means the first one found.
@@ -300,11 +363,18 @@ final class CompanionArt: ObservableObject {
     /// and she goes home: one reply that mentions nothing is normal in the
     /// middle of a topic, three in a row means the topic moved on.
     private var repliesAwayFromHome = 0
-    /// The state at the previous ask. A reply is one *transition* into
-    /// speaking, not every call made while she speaks — the art is chosen
-    /// again for each sentence's mood, and counting those would send her
-    /// home in the middle of answering.
-    private var lastAskedState = ""
+
+    /// How many replies in a row have named nowhere. Two and she goes home.
+    var repliesAwayFromHomeCount: Int { repliesAwayFromHome }
+    /// The last few clips the picker handed out, newest first, one entry per
+    /// change. Diagnostics only: when she will not leave a place, the question
+    /// is always what was actually put on screen, and nothing else in the
+    /// chain records it.
+    private(set) var shown: [String] = []
+    /// What the last ask returned. "Which file is she showing" has no other
+    /// answer from outside the view, and it is the question that separates a
+    /// selection that did not change from a picture that did not.
+    private(set) var lastPicked: URL?
 
     var mainScene: Scene? {
         let wanted = UserDefaults.standard.string(forKey: Self.mainSceneKey) ?? ""
@@ -329,47 +399,303 @@ final class CompanionArt: ObservableObject {
             }
             let about = (try? String(contentsOf: dir.appendingPathComponent("about.txt"),
                                      encoding: .utf8)) ?? ""
+            // Line one: the place's names, comma-separated, as spoken.
+            let firstLine = about.components(separatedBy: .newlines).first ?? ""
+            let spoken = firstLine.contains(",") || firstLine.contains("，")
+                ? firstLine.components(separatedBy: CharacterSet(charactersIn: ",，、"))
+                    .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+                    .filter { !$0.isEmpty }
+                : []
             let words = (about + " " + name).lowercased()
                 .components(separatedBy: CharacterSet.alphanumerics.inverted)
-                .filter { $0.count >= 3 && !Self.stopWords.contains($0) }
-            let scene = Scene(name: name, wait: find("wait"), talk: find("talk"), words: words)
-            if scene.wait != nil || scene.talk != nil { found.append(scene) }
+                // Two characters is a word in Chinese — 厨房, 海边 — and a
+                // three-character floor threw every one of them away, so a
+                // scene could never be reached by its own name.
+                .filter { word in
+                    guard !Self.stopWords.contains(word) else { return false }
+                    return word.allSatisfy(\.isASCII) ? word.count >= 3 : word.count >= 2
+                }
+            let plate = files.first { $0.lowercased().hasPrefix("plate") && !Self.isVideo(dir.appendingPathComponent($0))
+                                      && Self.isMedia(dir.appendingPathComponent($0)) }
+                .map { dir.appendingPathComponent($0) }
+            let wide = files.first { $0.lowercased().hasPrefix("wide") && !Self.isVideo(dir.appendingPathComponent($0))
+                                     && Self.isMedia(dir.appendingPathComponent($0)) }
+                .map { dir.appendingPathComponent($0) }
+            let scene = Scene(name: name, wait: find("wait"), talk: find("talk"), plate: plate, wide: wide,
+                              words: words, names: spoken + [name.lowercased()])
+            if scene.wait != nil || scene.talk != nil || scene.plate != nil { found.append(scene) }
         }
         scenes = found
-        if scene == nil || !found.contains(where: { $0.name == scene?.name }) {
-            scene = mainScene
+        assignKeys()
+        // A place she was waiting for has landed: she walks in. The builder
+        // names the folder after the word that asked for it, so this is an
+        // exact match — a loose one would have matched before anything was
+        // built, and there would have been nothing to wait for.
+        if let wanted = awaiting,
+           let built = found.first(where: { $0.name.lowercased() == wanted && $0.usable(in3D: stage3D) }) {
+            awaiting = nil
+            repliesAwayFromHome = 0
+            scene = built
+            return
+        }
+        // Re-read where she is rather than keep the copy from the last scan:
+        // a place is usable the moment its wait clip lands, and the talk clip
+        // that arrives a minute later is only in the new copy.
+        let here = found.first { $0.name == scene?.name } ?? mainScene
+        if here != scene { scene = here }
+    }
+
+    // MARK: - What the model is told
+
+    /// The one English word the model writes for each place, keyed by scene
+    /// name. A spoken name from `about.txt` that is a single English word —
+    /// "park", "beach" — else the folder's own name when she had the place
+    /// built ("forest"), else the first topic word nobody else has claimed.
+    private(set) var keys: [String: String] = [:]
+
+    private func assignKeys() {
+        var byScene: [String: String] = [:]
+        var taken = Set<String>()
+        func single(_ w: String) -> Bool { w.count >= 3 && w.allSatisfy { $0.isASCII && $0.isLetter } }
+        for s in scenes {
+            let candidates = s.names.filter(single) + s.words.filter(single)
+            if let key = candidates.first(where: { !taken.contains($0) }) {
+                taken.insert(key)
+                byScene[s.name] = key
+            }
+        }
+        keys = byScene
+    }
+
+    /// One line sent under the user's words: where she is, which places she
+    /// has, and what is being built.
+    ///
+    /// Without it the model tags blind. It cannot know she has a park and no
+    /// forest, so its subject is a guess matched against word lists, and the
+    /// only switch that works reliably is the user saying "去公园" out loud.
+    /// With it the tag names a real place, and the picture follows the
+    /// conversation by itself — tired, and she is on the sofa; hungry, the
+    /// kitchen — which is the whole point of her having places.
+    func placesCue(building: String?) -> String? {
+        guard !scenes.isEmpty, let here = scene ?? mainScene else { return nil }
+        let list = scenes.compactMap { s in keys[s.name].map { "\($0)=\(s.name)" } }
+        guard !list.isEmpty else { return nil }
+        let home = mainScene?.name ?? here.name
+        var line = here.name == home
+            ? "(场景线索:你现在在「\(here.name)」,这是主场景。"
+            : "(场景线索:你现在在「\(here.name)」,主场景是「\(home)」。"
+        line += "你有的地方:\(list.joined(separator: "、"))。"
+        // The rule rides along with the list. In the soul alone it lost to the
+        // soul's own older examples — a story about a dog came back tagged
+        // `dog`, which is a four-minute build of a place that is not a place.
+        line += "主题词只写地方:这一句落在哪个地方就写等号左边那个词;还在聊这儿的事就接着写这儿;"
+              + "这儿的话题聊完了就回主场景;真去了单子外的新地方才写新词;聊的是东西不是地方就不换地方。"
+        if let b = building ?? awaiting {
+            line += "「\(b)」正在造,还没好:造好之前你就留在这儿,别换地方、别回主场景、也别要别的新地方;造好了画面自己切过去。"
+        }
+        return line + ")"
+    }
+
+    /// Long enough to name a place: three characters of English, two of
+    /// Chinese — 厨房 is two, and the old three-character rule meant she could
+    /// never be sent anywhere by its Chinese name.
+    static func longEnough(_ subject: String) -> Bool {
+        subject.allSatisfy(\.isASCII) ? subject.count >= 3 : subject.count >= 2
+    }
+
+    /// Move her to a named place, or back to the main one with "".
+    ///
+    /// The conversation moves her by subject; this is for being told
+    /// directly — "go to the park" — and for finding out whether a scene
+    /// switch works at all when the subject matching is in question.
+    @discardableResult
+    func goTo(_ name: String) -> Scene? {
+        let wanted = name.trimmingCharacters(in: .whitespaces)
+        if wanted.isEmpty { scene = mainScene; repliesAwayFromHome = 0; repeatsHere = 0; return scene }
+        guard let found = scenes.first(where: { $0.name == wanted })
+            ?? scenes.first(where: { $0.name.localizedCaseInsensitiveContains(wanted) })
+            ?? scenes.first(where: { $0.words.contains(where: { $0.hasPrefix(wanted.lowercased()) }) })
+        else { return nil }
+        scene = found
+        repliesAwayFromHome = 0
+        repeatsHere = 0
+        // Told to go, she goes — and the half of the place this companion
+        // needs is made behind her if it is missing.
+        if !found.usable(in3D: stage3D) {
+            CompanionCharacter.shared.wantScene(found.name, plateOnly: stage3D)
+        }
+        return found
+    }
+
+    /// What she would match for a subject, without moving her. The tool that
+    /// reports this is how "why did she not go to the park" gets answered.
+    func sceneMatching(_ subject: String) -> Scene? {
+        let s = subject.trimmingCharacters(in: .whitespaces).lowercased()
+        guard Self.longEnough(s) else { return nil }
+        // The word she was told to use for a place is that place, whatever
+        // else it happens to be a prefix of.
+        if let named = keys.first(where: { $0.value == s })?.key {
+            return scenes.first { $0.name == named }
+        }
+        return scenes.first { $0.words.contains(s) }
+            ?? scenes.first { $0.words.contains { $0.hasPrefix(s) || s.hasPrefix($0) } }
+    }
+
+    // MARK: - Where the conversation puts her
+    //
+    // Two events decide it, and the picker only reads the result.
+    //
+    // It used to be decided inside the picker, at the moment her state
+    // turned to "speaking", from the subject of the reply's tag. Both halves
+    // of that failed in practice. The tag: a model follows its own history,
+    // so once one reply said `[温柔·beach]` every reply did — three in a row,
+    // measured — and she lived at the beach whatever the soul's rules said.
+    // The moment: twelve consecutive asks came through without one
+    // "speaking" among them, so the decision point simply never arrived.
+    //
+    // Now what the *user* says moves her directly, before the model has
+    // answered at all, and a tag only moves her when it changes — while one
+    // that names the place she is already in keeps her there.
+
+    /// A place the conversation asked for that does not exist yet. It is
+    /// being built in the background, and until it lands she stays in the
+    /// scene she is in — not the main one. When it lands she goes there,
+    /// unless the user has taken her somewhere else in the meantime.
+    private(set) var awaiting: String?
+    /// Replies in a row that did nothing but name the place she is already
+    /// in. The user naming it starts the count again.
+    private var repeatsHere = 0
+    /// The user already said where, this turn.
+    private var heardPlaceThisTurn = false
+    /// The previous reply's subject. A repeat carries no information.
+    private var lastReplySubject = ""
+
+    /// What the user just said. If it names one of her places she goes there
+    /// now; "回家" and "go home" send her to the main one.
+    @discardableResult
+    func hear(_ utterance: String) -> Scene? {
+        guard !scenes.isEmpty else { return nil }
+        let text = utterance.lowercased()
+        if ["回家", "回去吧", "回主场景", "go home", "back home"].contains(where: text.contains) {
+            heardPlaceThisTurn = true
+            awaiting = nil
+            repeatsHere = 0
+            return goTo("")
+        }
+        for candidate in scenes {
+            let hit = candidate.names.contains { name in
+                // Chinese has no spaces, so containment; English by whole
+                // word, or "sea" would fire on "season".
+                name.allSatisfy(\.isASCII)
+                    ? text.range(of: "\\b" + NSRegularExpression.escapedPattern(for: name) + "\\b",
+                                 options: .regularExpression) != nil
+                    : text.contains(name)
+            }
+            if hit {
+                heardPlaceThisTurn = true
+                repliesAwayFromHome = 0
+                repeatsHere = 0
+                // She has the place, but not the half of it this companion
+                // needs — clips made while she was 3D, or a plate never made
+                // because she never was. Ordered, and she waits where she is.
+                if !candidate.usable(in3D: stage3D) {
+                    awaiting = CompanionCharacter.shared.wantScene(candidate.name, plateOnly: stage3D)
+                        ? candidate.name.lowercased() : nil
+                    return nil
+                }
+                if candidate.name != scene?.name { scene = candidate }
+                awaiting = nil
+                return candidate
+            }
+        }
+        return nil
+    }
+
+    /// A reply's tag arrived — or the reply turned out to have none, which
+    /// is "" and counts the same as a tag that names nowhere.
+    func replyTagged(subject raw: String) {
+        guard !scenes.isEmpty else { return }
+        let s = raw.trimmingCharacters(in: .whitespaces).lowercased()
+        defer { heardPlaceThisTurn = false; lastReplySubject = s }
+        // The user said where; whatever the model tagged, they win.
+        if heardPlaceThisTurn { return }
+        // While a place is on order she stays exactly where she is: no tag
+        // moves her and nothing counts toward going home. A wait that changes
+        // the picture twice is not a wait, and the new place should cut in
+        // from the room the conversation was actually in. Only the user's own
+        // words move her meanwhile. The builder going idle without the place
+        // having landed means it gave up; then nothing is coming and the
+        // ordinary rules apply again.
+        if awaiting != nil {
+            if CompanionCharacter.shared.building != nil { return }
+            awaiting = nil
+        }
+        // Only a subject that *changed* can move her. A model repeats its
+        // last tag for as long as the history shows it, and a repeat must not
+        // drag her back to a place the user has since led her away from.
+        let fresh = Self.longEnough(s) && s != lastReplySubject
+        if Self.longEnough(s), let match = sceneMatching(s) {
+            // A repeat that names where she already is, though, is the model
+            // saying "still here". Counting it as a reply about nowhere sent
+            // her home in the middle of a conversation about the leaves.
+            if match.name == (scene ?? mainScene)?.name {
+                // Believed for a while, not forever. A small local brain
+                // repeats its last tag until the history scrolls away, and
+                // "she went to the beach once and lived there" is the bug
+                // this file has been fixed for more times than any other.
+                // Six replies is a long visit; past that a repeat counts as
+                // a reply about nowhere, and two of those take her home.
+                repeatsHere += 1
+                if repeatsHere <= 6 || match.name == mainScene?.name {
+                    repliesAwayFromHome = 0
+                    return
+                }
+            } else if fresh {
+                repliesAwayFromHome = 0
+                repeatsHere = 0
+                if match.usable(in3D: stage3D) {
+                    scene = match
+                } else if CompanionCharacter.shared.wantScene(match.name, plateOnly: stage3D) {
+                    awaiting = match.name.lowercased()
+                }
+                return
+            }
+        }
+        if fresh {
+            // Somewhere she has never been: made once, in the background,
+            // while she waits where she is. Remembered only when the builder
+            // took the order — it makes one place at a time.
+            // The reply that orders a place is not a reply about nowhere.
+            if CompanionCharacter.shared.wantScene(s, plateOnly: stage3D) { awaiting = s; return }
+        }
+        repliesAwayFromHome += 1
+        if repliesAwayFromHome >= 2, let home = mainScene, home.name != scene?.name {
+            scene = home
+            repliesAwayFromHome = 0
+            repeatsHere = 0
         }
     }
 
-    /// The clip for this moment, when she lives in scenes.
-    ///
-    /// The subject moves her: a reply about the sea goes to the sea if there
-    /// is a sea, and anything that names nowhere counts towards going home.
-    /// Nothing here picks at random — a place that changes on its own reads
-    /// as a slideshow, not as somebody's evening.
+    /// The clip for this moment, when she lives in scenes. Reads where she
+    /// is; does not decide it.
     func sceneArt(for state: String, subject: String) -> URL? {
         guard !scenes.isEmpty else { return nil }
-        let s = subject.trimmingCharacters(in: .whitespaces).lowercased()
-        let startedReplying = state == "speaking" && lastAskedState != "speaking"
-        lastAskedState = state
-        if s.count >= 3,
-           let match = scenes.first(where: { $0.words.contains(where: { $0.hasPrefix(s) || s.hasPrefix($0) }) }) {
-            if match.name != scene?.name { scene = match }
-            repliesAwayFromHome = 0
-        } else if startedReplying {
-            // A place she does not have is worth making, once, in the
-            // background — she waits where she is until it exists.
-            if s.count >= 3 {
-                Task { @MainActor in CompanionCharacter.shared.wantScene(s) }
-            }
-            // Counted per reply, and a reply is what "speaking" marks.
-            repliesAwayFromHome += 1
-            if repliesAwayFromHome >= 2, let home = mainScene, home.name != scene?.name {
-                scene = home
-                repliesAwayFromHome = 0
-            }
+        let here = scene ?? mainScene
+        // The 3D companion stands in front of the empty place. Without a
+        // plate yet she gets the clip, which is wrong in the way it always
+        // was — two of her — and is replaced the moment the plate lands.
+        let clip = stage3D ? (here?.plate ?? here?.clip(for: state)) : here?.clip(for: state)
+        // Only changes: the microphone opening and closing asks several times
+        // a second for the same clip, and twelve of those told nobody whether
+        // she had ever been shown talking.
+        let label = clip.map { $0.deletingLastPathComponent().lastPathComponent
+                             + "/" + $0.deletingPathExtension().lastPathComponent } ?? "—"
+        if shown.first?.hasSuffix(" " + label) != true {
+            let time = Date().formatted(date: .omitted, time: .standard)
+            shown.insert("\(time) \(label)", at: 0)
+            shown = Array(shown.prefix(16))
         }
-        return (scene ?? mainScene)?.clip(for: state)
+        return clip
     }
 
     /// True when any group has art beyond the rotating pool — the view
@@ -398,12 +724,17 @@ final class CompanionArt: ObservableObject {
     func art(for state: String, mood: CompanionMood?, subject: String, fallback: URL?) -> URL? {
         // Scenes win when she has any: staying in one place through a whole
         // exchange is the difference between a companion and a slideshow.
-        if let inScene = sceneArt(for: state, subject: subject) { return inScene }
-        if let m = bestMatch(for: subject, mood: mood) { return m }
+        if let inScene = sceneArt(for: state, subject: subject) {
+            lastPicked = inScene
+            return inScene
+        }
+        if let m = bestMatch(for: subject, mood: mood) { lastPicked = m; return m }
         let stateArt = groups[state]?.randomElement()
         let moodArt = mood.flatMap { groups[$0.rawValue]?.randomElement() }
         let preferred = state == "speaking" ? (moodArt ?? stateArt) : (stateArt ?? moodArt)
-        return preferred ?? fallback ?? pool.randomElement() ?? groups.values.first?.first
+        let answer = preferred ?? fallback ?? pool.randomElement() ?? groups.values.first?.first
+        lastPicked = answer
+        return answer
     }
 
     /// The file whose keywords best fit the subject, or nil when

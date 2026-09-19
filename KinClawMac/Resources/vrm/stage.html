@@ -23,7 +23,12 @@
 <title>KinClaw companion stage</title>
 <style>
   html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
-  canvas { display: block; width: 100%; height: 100%; }
+  canvas { display: block; width: 100%; height: 100%; position: relative; }
+  /* The place she is walking in. Drawn here rather than by the panel because
+     its focus follows her: sharp while she is out in it, soft when she comes
+     up to the lens — and only the page knows where she is. */
+  #plate { position: absolute; inset: -3%; background: center / cover no-repeat;
+           opacity: 0; transition: opacity 0.8s ease; will-change: filter, transform; }
   #err { position: absolute; inset: auto 12px 12px 12px; font: 12px -apple-system, sans-serif;
          color: #ffb4b4; white-space: pre-wrap; }
 </style>
@@ -32,11 +37,14 @@
 </script>
 </head>
 <body>
+<div id="plate"></div>
 <div id="err"></div>
 <script type="module">
 import * as THREE from 'three';
 import { GLTFLoader } from './loaders/GLTFLoader.js';
 import { VRMLoaderPlugin, VRMUtils } from './three-vrm.module.min.js';
+import { VRMAnimationLoaderPlugin, createVRMAnimationClip, VRMLookAtQuaternionProxy }
+  from './three-vrm-animation.module.min.js';
 
 /// The five VRM standard mouth shapes, in the order a vowel chart puts them.
 const VISEMES = ['aa', 'ih', 'ou', 'ee', 'oh'];
@@ -47,6 +55,10 @@ const state = {
   error: '',
   expressions: [],
   mouth: 0,
+  clip: null,
+  clipEnds: 0,
+  dance: false,
+  lookProxy: null,
   visemes: { aa: 0, ih: 0, ou: 0, ee: 0, oh: 0 },
   viseme: '',
   talking: false,
@@ -86,12 +98,31 @@ camera.position.set(0, 1.3, 2.2);
 const key = new THREE.DirectionalLight(0xffffff, 1.6);
 key.position.set(0.6, 2.0, 2.2);
 scene.add(key);
-scene.add(new THREE.HemisphereLight(0xffffff, 0x8899aa, 1.1));
+const hemi = new THREE.HemisphereLight(0xffffff, 0x8899aa, 1.1);
+scene.add(hemi);
 
 const loader = new GLTFLoader();
 loader.register((parser) => new VRMLoaderPlugin(parser));
 
 let vrm = null;
+/// What moves when she walks. The model hangs under it, so its own root keeps
+/// the half-turn a VRM 0.x needs and the mixer keeps its root.
+const actor = new THREE.Group();
+scene.add(actor);
+/// Something dark under her feet. A figure drawn over a photograph floats
+/// until it casts something on the floor of it.
+const shadow = (() => {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d');
+  const grad = g.createRadialGradient(64, 64, 4, 64, 64, 62);
+  grad.addColorStop(0, 'rgba(0,0,0,0.55)'); grad.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = grad; g.fillRect(0, 0, 128, 128);
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1),
+    new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false }));
+  m.rotation.x = -Math.PI / 2; m.position.y = 0.004; m.visible = false; m.renderOrder = -1;
+  actor.add(m);
+  return m;
+})();
 const look = new THREE.Object3D();          // what the eyes follow
 look.position.set(0, 1.35, 1.6);
 scene.add(look);
@@ -112,17 +143,93 @@ function relax(v) {
   set('rightHand', 0, 0, 0.1);
 }
 
-/// Frame the whole character, head a little above centre — the composition
-/// Desktop Mate uses, and the one that survives a narrow panel.
+/// 'full' frames the whole character, head a little above centre — the
+/// composition Desktop Mate uses, and the one that survives a narrow panel.
+///
+/// 'portrait' is waist up, and is for when she stands in one of her places.
+/// The plates behind her are what is left of a waist-up photograph once the
+/// person is taken out: a counter at elbow height, a horizon at the
+/// shoulders. A whole figure in front of that is a doll held up to a
+/// postcard; the same figure cropped where the photograph was cropped is
+/// somebody standing in the room.
+let framing = 'full';
+
+/// Where she is in the place, and what she is up to in it.
+///
+/// Ground coordinates: x across the shot, z along it, the mark at the origin
+/// — where she stands to talk, waist up to the fixed camera — and the place
+/// itself stretching away down −z. Facing the camera is yaw 0.
+const world = {
+  horizon: 0.5,            // where the plate's horizon sits, 0 top … 1 bottom
+  height: 1.5,             // hers, measured when the model loads
+  yaw: 0,                  // which way she faces
+  target: null,            // where she is walking to, {x, z, then}
+  gait: 0,                 // 0 standing … 1 walking, eased
+  phase: 0,                // where in the stride
+  attend: true,            // wanted at the mark, facing the lens
+  alive: true,             // wanders and plays when not wanted
+  next: 4,                 // seconds until she next thinks of something
+  act: null,               // a bit of play under way, {name, t, length}
+  blur: 0,
+  // How far into the place she goes. Nearer than `near` her feet are below
+  // the frame; much past `far` she is a dot.
+  near: 4.2, far: 10.5,
+};
+
+/// A point in the place: `depth` metres beyond the mark, `across` −1…1 of
+/// the way to the edge of the shot at that depth.
+function spot(depth, across) {
+  const lens = THREE.MathUtils.degToRad(camera.fov);
+  const away = camera.position.z + depth;
+  const half = Math.tan(lens / 2) * away * camera.aspect;
+  return { x: across * half * 0.72, z: -depth };
+}
+
+const ACTS = {
+  wave: 2.6, stretch: 3.4, spin: 1.6, jump: 1.3, pick: 3.2, look: 3.6, dance: 5.5,
+};
+
 function frame(v) {
+  // Measured at the mark, facing front: the box is in world space, and a
+  // figure that is ten metres away when it is measured frames an empty shot.
+  const [at, turn] = [actor.position.clone(), actor.rotation.y];
+  actor.position.set(0, 0, 0); actor.rotation.y = 0; actor.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(v.scene);
+  actor.position.copy(at); actor.rotation.y = turn;
   const height = Math.max(box.max.y - box.min.y, 0.5);
-  const centre = (box.max.y + box.min.y) / 2;
   const fov = THREE.MathUtils.degToRad(camera.fov);
-  const distance = (height * 0.62) / Math.tan(fov / 2);
-  camera.position.set(0, centre + height * 0.06, distance);
-  camera.lookAt(0, centre, 0);
-  look.position.set(0, box.max.y - height * 0.08, distance * 0.7);
+  if (framing === 'scene') {
+    // One fixed camera for the whole place, and she is what moves. It sits
+    // where the portrait camera would — waist up when she stands at the
+    // mark — so walking up to talk and wandering off are one continuous
+    // shot. Wider than the portrait lens because the plates are: a place
+    // photographed at 24mm and a figure rendered at 50mm do not share a
+    // floor. `horizon` is where the plate's horizon sits (0 top … 1 bottom);
+    // pitching the camera to match is what puts her feet on its ground.
+    world.height = height;
+    camera.fov = 40;
+    const lens = THREE.MathUtils.degToRad(camera.fov);
+    const span = height * 0.56;
+    const distance = (span / 2) / Math.tan(lens / 2);
+    camera.position.set(0, box.max.y + height * 0.05 - span / 2, distance);
+    camera.rotation.set((world.horizon - 0.5) * lens, 0, 0);
+    camera.updateProjectionMatrix();
+    look.position.set(0, box.max.y - height * 0.08, distance * 0.7);
+  } else if (framing === 'portrait') {
+    const span = height * 0.52;                       // how much of her is in shot
+    const centre = box.max.y + height * 0.05 - span / 2;   // a little air above the head
+    const distance = (span / 2) / Math.tan(fov / 2);
+    camera.position.set(0, centre, distance);
+    camera.lookAt(0, centre, 0);
+    look.position.set(0, box.max.y - height * 0.08, distance * 0.7);
+  } else {
+    const centre = (box.max.y + box.min.y) / 2;
+    const distance = (height * 0.62) / Math.tan(fov / 2);
+    camera.position.set(0, centre + height * 0.06, distance);
+    camera.lookAt(0, centre, 0);
+    look.position.set(0, box.max.y - height * 0.08, distance * 0.7);
+  }
+  look.userData.base = look.position.y;
 }
 
 const kin = {
@@ -135,16 +242,27 @@ const kin = {
       const next = gltf.userData.vrm;
       if (!next) throw new Error('这个文件里没有 VRM 数据');
       if (vrm) {
-        scene.remove(vrm.scene);
+        actor.remove(vrm.scene);
         VRMUtils.deepDispose(vrm.scene);
       }
       VRMUtils.removeUnnecessaryVertices(gltf.scene);
       VRMUtils.combineSkeletons(gltf.scene);
+      // VRM 0.x characters face -Z and 1.0 ones face +Z, so a 0.x model
+      // loaded as-is stands with its back to you. This rotates the old ones
+      // into the new convention; on a 1.0 model it does nothing.
+      VRMUtils.rotateVRM0(next);
       next.scene.traverse((o) => { o.frustumCulled = false; });
-      scene.add(next.scene);
+      actor.position.set(0, 0, 0); actor.rotation.set(0, 0, 0);
+      actor.add(next.scene);
       vrm = next;
+      mixer = null;                      // the old one animated the old model
       vrm.lookAt && (vrm.lookAt.target = look);
       relax(vrm);
+      // The hips bone rests at hip height, not at zero: every bounce, crouch
+      // and jump is an offset from here. Written straight into position.y,
+      // a two-centimetre bob puts her waist on the floor.
+      const hipsBone = vrm.humanoid?.getNormalizedBoneNode('hips');
+      state.hipsRest = hipsBone ? hipsBone.position.y : 0;
       frame(vrm);
       state.ready = true;
       state.model = url;
@@ -178,6 +296,49 @@ const kin = {
   /// How open the mouth is, 0…1. Driven from the voice's level while a reply
   /// is being spoken; decays on its own, so a dropped update closes the mouth
   /// instead of leaving it open.
+  /// Play a .vrma, or the built-in dance when given "dance".
+  ///
+  /// Motion files come from BOOTH (VRoid's own shop gives seven away) and
+  /// live in `~/.kinclaw/vrm/motions/`. The built-in one needs no file at
+  /// all — it is bones on sines, which is not choreography but is a person
+  /// enjoying herself, and it is here so that "dance for me" does something
+  /// on a machine with no motion library.
+  async motion(name, loops = 1) {
+    if (!vrm) return false;
+    if (name === 'dance' || name === '') { state.dance = name === 'dance'; state.clip = null; return true; }
+    try {
+      const url = 'motions/' + name.replace(/[^A-Za-z0-9_.-]/g, '');
+      const gltf = await motionLoader.loadAsync(url);
+      const animation = gltf.userData.vrmAnimations?.[0];
+      if (!animation) throw new Error('no VRM animation in ' + name);
+      if (!vrm.lookAt?.applier) { /* some models have no lookAt; the clip copes */ }
+      if (!state.lookProxy) {
+        state.lookProxy = new VRMLookAtQuaternionProxy(vrm.lookAt);
+        state.lookProxy.name = 'lookAtQuaternionProxy';
+        vrm.scene.add(state.lookProxy);
+      }
+      const clip = createVRMAnimationClip(animation, vrm);
+      mixer = mixer ?? new THREE.AnimationMixer(vrm.scene);
+      mixer.stopAllAction();
+      const action = mixer.clipAction(clip);
+      action.setLoop(loops <= 0 ? THREE.LoopRepeat : THREE.LoopRepeat, Math.max(1, loops));
+      action.clampWhenFinished = true;
+      action.reset().play();
+      state.clip = name;
+      state.dance = false;
+      state.clipEnds = performance.now() / 1000 + clip.duration * Math.max(1, loops);
+      return true;
+    } catch (e) {
+      state.error = String(e);
+      return false;
+    }
+  },
+  stopMotion() {
+    mixer?.stopAllAction();
+    state.clip = null;
+    state.dance = false;
+    return true;
+  },
   mouth(level) {
     state.mouth = Math.max(0, Math.min(1, Number(level) || 0));
     return state.mouth;
@@ -202,11 +363,120 @@ const kin = {
     return true;
   },
 
+  /// Put her in a place she can walk around in, or (null) take her out.
+  ///
+  /// `plate` is a wide, eye-level picture of the place with visible ground;
+  /// `horizon` where its horizon is; `tone` as for `light`. The page draws
+  /// the plate itself, because its focus follows her.
+  place(where) {
+    const el = document.getElementById('plate');
+    if (!where || !where.plate) {
+      el.style.opacity = 0;
+      state.place = null;
+      return this.framing(where && where.portrait ? 'portrait' : 'full');
+    }
+    world.horizon = Number.isFinite(where.horizon) ? where.horizon : 0.5;
+    // A room has a back wall; a beach does not. Past it she is a small woman
+    // standing inside the cupboards.
+    world.far = Math.max(world.near + 0.8, Number.isFinite(where.far) ? where.far : 6.5);
+    const swap = () => { el.style.backgroundImage = `url("${where.plate}")`; el.style.opacity = 1; };
+    // A new place fades through, rather than the old one snapping to it
+    // under her feet.
+    if (state.place && state.place !== where.plate) { el.style.opacity = 0; setTimeout(swap, 450); } else swap();
+    state.place = where.plate;
+    if (where.tone) this.light(where.tone);
+    shadow.visible = true;
+    world.next = 3 + Math.random() * 3;
+    return this.framing('scene');
+  },
+
+  /// Walk to a point in the place. `depth` metres beyond the mark (0 is the
+  /// mark itself), `across` −1 left … 1 right. `then` is what to do on
+  /// arrival: 'face' the camera, or the name of something to play.
+  walk(depth, across = 0, then = 'face', asked = true) {
+    if (framing !== 'scene') return false;
+    // Asked for by name — "go and look over there" — it is not undone by the
+    // next sound in the room calling her back to the lens.
+    if (asked) world.hold = performance.now() + 14000;
+    const d = Math.max(0, Math.min(world.far, Number(depth) || 0));
+    const to = d < 0.3 ? { x: 0, z: 0 } : spot(Math.max(d, world.near), Math.max(-1, Math.min(1, across)));
+    world.target = { ...to, then };
+    world.act = null;
+    return true;
+  },
+
+  /// A bit of play, where she stands: wave, stretch, spin, jump, pick, look,
+  /// dance.
+  play(name, asked = true) {
+    if (!ACTS[name]) return false;
+    if (asked) world.hold = performance.now() + (ACTS[name] + 2) * 1000;
+    world.act = { name, t: 0, length: ACTS[name] };
+    world.target = null;
+    return true;
+  },
+
+  /// Wanted at the mark (somebody is talking to her) or free to roam.
+  attend(on) {
+    world.attend = !!on;
+    if (framing !== 'scene') return world.attend;
+    if (world.attend) {
+      if (performance.now() > (world.hold || 0)) this.walk(0, 0, 'face', false);
+    } else { world.next = 1.5 + Math.random() * 2.5; }
+    return world.attend;
+  },
+
+  /// Whether she wanders and plays by herself when nobody wants her.
+  live(on) { world.alive = !!on; return world.alive; },
+
+  /// 'portrait' when she is standing in a place, 'full' otherwise.
+  framing(mode) {
+    framing = ['portrait', 'scene'].includes(mode) ? mode : 'full';
+    if (framing !== 'scene') {
+      camera.fov = 30; camera.rotation.set(0, 0, 0); camera.updateProjectionMatrix();
+      actor.position.set(0, 0, 0); actor.rotation.set(0, 0, 0);
+      shadow.visible = false;
+    }
+    if (vrm) frame(vrm);
+    return framing;
+  },
+
+  /// Light her the way the place is lit. `tone` is what Swift measured off
+  /// the plate: r/g/b the average colour, level its brightness (0…1), side
+  /// where the light is coming from (−1 left … 1 right). null puts the
+  /// studio lights back.
+  ///
+  /// Only the hue is taken from the colour — normalised, so a dark place
+  /// tints her without turning her grey — and the brightness moves the
+  /// intensity inside a range where a toon material still reads: a night
+  /// market dims her, it does not black her out.
+  light(tone) {
+    state.light = tone || null;
+    if (!tone) {
+      key.color.set(0xffffff); key.intensity = 1.6; key.position.set(0.6, 2.0, 2.2);
+      hemi.color.set(0xffffff); hemi.groundColor.set(0x8899aa); hemi.intensity = 1.1;
+      return 'studio';
+    }
+    const peak = Math.max(tone.r, tone.g, tone.b, 0.001);
+    const hue = new THREE.Color(tone.r / peak, tone.g / peak, tone.b / peak);
+    const level = Math.min(1, Math.max(0, tone.level));
+    key.color.set(0xffffff).lerp(hue, 0.5);
+    key.intensity = 0.85 + 0.95 * level;
+    key.position.set(1.6 * Math.max(-1, Math.min(1, tone.side || 0)), 2.0, 2.2);
+    hemi.color.set(0xffffff).lerp(hue, 0.65);
+    hemi.groundColor.copy(hue).multiplyScalar(0.5);
+    hemi.intensity = 0.7 + 0.5 * level;
+    return 'placed';
+  },
+
   status() {
     return {
+      framing, light: state.light || null, place: state.place || null,
+      where: { x: +actor.position.x.toFixed(2), depth: +(-actor.position.z).toFixed(2),
+               walking: world.gait > 0.5, act: world.act?.name || null, attend: world.attend },
       ready: state.ready, model: state.model, error: state.error,
       expressions: state.expressions, expression: state.expression,
-      mouth: state.mouth, viseme: state.viseme,
+      mouth: state.mouth, viseme: state.viseme, tickErrors: state.tickErrors || 0,
+      clip: state.clip, dance: state.dance,
       talking: state.talking, frames: state.frames,
       size: measure(),
     };
@@ -218,9 +488,213 @@ window.kin = kin;
 // Blink, breath, and a mouth that follows the voice. Small amounts on purpose:
 // a character that moves a lot reads as a toy, and this one sits next to a
 // conversation for an hour.
+let mixer = null;
+/// A loader of its own for motions: the model loader's plugins parse VRM
+/// files, and this one parses animations.
+const motionLoader = new GLTFLoader();
+motionLoader.register((parser) => new VRMAnimationLoaderPlugin(parser));
+
 let nextBlink = 1.5, blink = 0;
+/// A glance away and how long is left of it. See the idle block below.
+let glance = null, glanceIn = 6;
 const clock = new THREE.Clock();
+
+const turnTo = (from, to) => {
+  let d = (to - from) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d < -Math.PI) d += Math.PI * 2;
+  return d;
+};
+const ease = (u) => u * u * (3 - 2 * u);
+/// 0 → 1 → 0 over an act, with flat shoulders so a pose is held, not touched.
+const hold = (u, edge = 0.25) => ease(Math.min(1, Math.min(u, 1 - u) / edge));
+
+/// Her life in a place: deciding where to go, going there, and what she gets
+/// up to when she arrives. Runs after the standing idle has posed her, so
+/// everything here is laid over a body that is already breathing.
+function liveInPlace(dt, t, bone) {
+  // A VRM 0.x is modelled facing −Z and a 1.0 facing +Z, and the normalised
+  // rig keeps that: the same rotation swings a leg forward on one and back
+  // on the other. `fwd` is the sign of an x-rotation that carries a hanging
+  // limb forward; `down` the sign of the z-rotation that lowers the left arm.
+  const old = vrm.meta?.metaVersion === '0';
+  const fwd = old ? 1 : -1, down = old ? 1 : -1;
+  const h = world.height;
+
+  // ── thinking ────────────────────────────────────────────────────────
+  if (!world.target && !world.act) {
+    const fromMark = Math.hypot(actor.position.x, actor.position.z);
+    if (world.attend) {
+      if (fromMark > 0.12 && performance.now() > (world.hold || 0)) kin.walk(0, 0, 'face', false);
+    } else if (world.alive) {
+      world.next -= dt;
+      if (world.next <= 0) {
+        world.next = 4 + Math.random() * 7;
+        const pick = (list) => list[Math.floor(Math.random() * list.length)];
+        if (fromMark < 1 || Math.random() < 0.5) {
+          // Mostly the near half of the place: far away she is small, and a
+          // companion who spends the evening as a dot is not company.
+          const reach = Math.random() < 0.75 ? 0.5 : 1;
+          const depth = world.near + Math.random() * (world.far - world.near) * reach;
+          kin.walk(depth, Math.random() * 2 - 1,
+                   pick(['face', 'face', 'look', 'wave', 'stretch', 'pick', 'spin', 'jump', 'dance']), false);
+        } else {
+          kin.play(pick(Object.keys(ACTS)), false);
+        }
+      }
+    }
+  }
+
+  // ── going ───────────────────────────────────────────────────────────
+  let want = Math.atan2(camera.position.x - actor.position.x, camera.position.z - actor.position.z);
+  let moving = false, speed = 0;
+  if (world.target) {
+    const dx = world.target.x - actor.position.x, dz = world.target.z - actor.position.z;
+    const left = Math.hypot(dx, dz);
+    if (left < 0.06) {
+      const then = world.target.then;
+      world.target = null;
+      if (ACTS[then]) kin.play(then, false);
+    } else {
+      want = Math.atan2(dx, dz);
+      // Turn first, then go: setting off sideways is how a game character
+      // moves, not a person.
+      if (Math.abs(turnTo(world.yaw, want)) < 0.6) {
+        moving = true;
+        speed = 1.1 * world.gait * Math.min(1, left / 0.5 + 0.2);
+        actor.position.x += Math.sin(world.yaw) * speed * dt;
+        actor.position.z += Math.cos(world.yaw) * speed * dt;
+      }
+    }
+  }
+  const step = turnTo(world.yaw, want);
+  world.yaw += Math.sign(step) * Math.min(Math.abs(step), 3.4 * dt);
+  world.gait += ((moving ? 1 : 0) - world.gait) * Math.min(1, dt * 5);
+
+  // ── the stride ──────────────────────────────────────────────────────
+  // Cadence comes from distance covered, not from the clock: a stride is as
+  // long as the legs make it, so the feet stay where they were put instead
+  // of skating over the floor of the photograph.
+  const g = world.gait;
+  const A = 0.46, legLength = h * 0.47;
+  world.phase += (speed / (4 * legLength * Math.sin(A))) * Math.PI * 2 * dt;
+  const L = Math.sin(world.phase), lift = Math.cos(world.phase);
+  const limbs = {
+    leftUpperLeg:  fwd * A * L * g,   rightUpperLeg:  -fwd * A * L * g,
+    leftLowerLeg: -fwd * 1.05 * Math.max(0, lift) * g,
+    rightLowerLeg: -fwd * 1.05 * Math.max(0, -lift) * g,
+    leftFoot:  fwd * 0.25 * Math.max(0, lift) * g,
+    rightFoot: fwd * 0.25 * Math.max(0, -lift) * g,
+  };
+  for (const [name, x] of Object.entries(limbs)) { const b = bone(name); if (b) b.rotation.set(x, 0, 0); }
+  const hips = bone('hips');
+  if (hips) {
+    hips.position.y = state.hipsRest + -0.03 * h * L * L * g;
+    hips.rotation.y = -0.13 * L * g;
+    hips.rotation.x = -fwd * 0.04 * g;                // leaning into it a little
+  }
+  const spine = bone('spine'); if (spine) spine.rotation.y = 0.1 * L * g;
+  for (const [name, side] of [['leftUpperArm', 1], ['rightUpperArm', -1]]) {
+    const b = bone(name);
+    if (b) b.rotation.x = b.rotation.x * (1 - g) + (-fwd * 0.5 * L * side) * g;
+  }
+  for (const [name, side] of [['leftLowerArm', 1], ['rightLowerArm', -1]]) {
+    const b = bone(name);
+    if (b) b.rotation.y = -side * (0.3 + 0.25 * Math.max(0, -L * side)) * g;
+  }
+
+  // ── playing ─────────────────────────────────────────────────────────
+  let spin = 0;
+  state.dance = false;
+  if (world.act) {
+    const act = world.act;
+    act.t += dt;
+    const u = Math.min(1, act.t / act.length), k = hold(u);
+    const arm = (name, side, z, x = 0) => {
+      const b = bone(name);
+      if (b) { b.rotation.z = b.rotation.z * (1 - k) + down * side * z * k; b.rotation.x = b.rotation.x * (1 - k) + x * k; }
+    };
+    const crouch = (deep) => {
+      for (const side of ['left', 'right']) {
+        const up = bone(side + 'UpperLeg'), low = bone(side + 'LowerLeg'), foot = bone(side + 'Foot');
+        if (up) up.rotation.x = fwd * 1.15 * deep;
+        if (low) low.rotation.x = -fwd * 2.1 * deep;
+        if (foot) foot.rotation.x = fwd * 0.75 * deep;
+      }
+      if (hips) hips.position.y = state.hipsRest + -h * 0.27 * deep;
+    };
+    const chest = bone('chest') ?? bone('spine'), head = bone('head');
+    if (act.name === 'wave') {
+      arm('rightUpperArm', -1, -0.85);
+      const fore = bone('rightLowerArm');
+      if (fore) fore.rotation.z = fore.rotation.z * (1 - k) + down * -1 * (-1.1 + 0.4 * Math.sin(act.t * 9)) * k;
+      if (head) head.rotation.z += 0.08 * k;
+    } else if (act.name === 'stretch') {
+      arm('leftUpperArm', 1, -1.35); arm('rightUpperArm', -1, -1.35);
+      if (chest) chest.rotation.x += fwd * 0.16 * k;
+      if (head) head.rotation.x += fwd * 0.22 * k;
+      for (const side of ['left', 'right']) { const f = bone(side + 'Foot'); if (f) f.rotation.x = -fwd * 0.3 * k; }
+      if (hips) hips.position.y = state.hipsRest + 0.035 * h * k;
+    } else if (act.name === 'spin') {
+      spin = Math.PI * 2 * ease(u);
+      arm('leftUpperArm', 1, 0.55); arm('rightUpperArm', -1, 0.55);
+      if (hips) hips.position.y = state.hipsRest + 0.05 * h * Math.sin(u * Math.PI);
+    } else if (act.name === 'jump') {
+      const air = u > 0.32 && u < 0.72 ? Math.sin((u - 0.32) / 0.4 * Math.PI) : 0;
+      crouch((u <= 0.32 ? ease(u / 0.32) : u >= 0.72 ? 1 - ease((u - 0.72) / 0.28) : 0) * 0.42);
+      if (hips && air > 0) hips.position.y = state.hipsRest + 0.26 * h * air;
+      arm('leftUpperArm', 1, 1.2 - 2.3 * air); arm('rightUpperArm', -1, 1.2 - 2.3 * air);
+    } else if (act.name === 'pick') {
+      // Down to something on the ground, a look at it, and up again.
+      crouch(k * 0.92);
+      if (chest) chest.rotation.x -= fwd * 0.35 * k;
+      if (head) head.rotation.x -= fwd * 0.3 * k;
+      arm('rightUpperArm', -1, 0.9, fwd * 0.9 * k);
+    } else if (act.name === 'look') {
+      const sweep = Math.sin(u * Math.PI * 2) * k;
+      if (head) head.rotation.y = 0.75 * sweep;
+      if (chest) chest.rotation.y = 0.3 * sweep;
+      arm('rightUpperArm', -1, -0.55, fwd * 0.5 * k);        // a hand up against the light
+      const fore = bone('rightLowerArm'); if (fore) fore.rotation.y = 1.5 * k;
+    } else if (act.name === 'dance') {
+      state.dance = true;
+    }
+    if (u >= 1) { world.act = null; world.next = 2 + Math.random() * 5; }
+  }
+
+  actor.rotation.y = world.yaw + spin;
+
+  // ── eyes, shadow, focus ─────────────────────────────────────────────
+  // Where she is going while she walks, the lens when she is not.
+  const eye = h * 0.92;
+  if (g > 0.4) {
+    look.position.set(actor.position.x + Math.sin(world.yaw) * 3, eye, actor.position.z + Math.cos(world.yaw) * 3);
+  } else if (!glance) {
+    look.position.set(camera.position.x, camera.position.y, camera.position.z);
+  }
+  const rise = hips ? Math.max(0, hips.position.y - state.hipsRest) / h : 0;      // the shadow thins as she leaves the ground
+  shadow.scale.set(h * 0.5 * (1 - rise), h * 0.26 * (1 - rise), 1);
+  // Out in the place it is sharp around her; at the lens it falls away behind
+  // her, as it would for a camera focused a metre off.
+  const depth = -actor.position.z;
+  const blur = Math.max(0, 5.5 - depth * 1.6);
+  if (Math.abs(blur - world.blur) > 0.05) {
+    world.blur += (blur - world.blur) * Math.min(1, dt * 3);
+    document.getElementById('plate').style.filter = `blur(${world.blur.toFixed(1)}px)`;
+  }
+}
+
 function tick() {
+  try {
+    renderFrame();
+  } catch (e) {
+    state.error = 'tick: ' + (e && e.message ? e.message : String(e));
+    state.tickErrors = (state.tickErrors || 0) + 1;
+  }
+  requestAnimationFrame(tick);
+}
+
+function renderFrame() {
   const dt = Math.min(clock.getDelta(), 0.1);
   const t = clock.elapsedTime;
   if (vrm) {
@@ -233,13 +707,118 @@ function tick() {
       vrm.expressionManager?.setValue('blink', 0);
     }
 
-    const chest = vrm.humanoid?.getNormalizedBoneNode('chest')
-      ?? vrm.humanoid?.getNormalizedBoneNode('spine');
-    if (chest) chest.rotation.x = Math.sin(t * 1.1) * 0.012;
-    const head = vrm.humanoid?.getNormalizedBoneNode('head');
+    // A motion file owns the body while it plays: the procedural idle below
+    // would fight it bone for bone. The face keeps its own life — blinking
+    // and the mouth are expressions, not bones.
+    if (state.clip && mixer) {
+      mixer.update(dt);
+      if (performance.now() / 1000 > state.clipEnds) { kin.stopMotion(); }
+      vrm.update(dt);
+      state.frames++;
+      renderer.render(scene, camera);
+      return;
+    }
+
+    // Standing still, alive.
+    //
+    // Two sines and a blink is a statue with a tic: the loop is short enough
+    // to notice, and noticing is what turns a person back into a widget. So
+    // the idle is built out of things that do not line up — breath at its own
+    // rate, a weight shift that wanders, and a glance away every so often
+    // that returns on its own. Nothing here is large; it is the
+    // *unpredictability* that reads as alive, not the amplitude.
+    const bone = (n) => vrm.humanoid?.getNormalizedBoneNode(n);
+    const chest = bone('chest') ?? bone('spine');
+    const breath = Math.sin(t * 1.05) * 0.012 + Math.sin(t * 0.43) * 0.004;
+    if (chest) chest.rotation.x = breath;
+
+    // Weight on one foot, then the other, on a slow wander rather than a
+    // metronome: three sines whose periods share no common multiple.
+    const sway = Math.sin(t * 0.21) * 0.6 + Math.sin(t * 0.13 + 1.7) * 0.3
+               + Math.sin(t * 0.07 + 0.4) * 0.1;
+    const hips = bone('hips');
+    if (hips) {
+      hips.rotation.z = sway * 0.035;
+      hips.position.x = sway * 0.012;
+      hips.position.y = state.hipsRest;      // whatever bounced her last has ended
+      hips.rotation.x = 0; hips.rotation.y = 0;
+    }
+    for (const [name, scale] of [['spine', -0.5], ['upperChest', -0.3]]) {
+      const b = bone(name);
+      if (b) b.rotation.z = sway * 0.035 * scale;
+    }
+    // Arms down, first of all.
+    //
+    // A VRM ships in its rest pose, which is a T: arms straight out to the
+    // sides. Anything that only *adds* a little sway to that keeps the T,
+    // which is what happened — she stood on the desktop with her arms out
+    // like a scarecrow. So the pose is the base, and the life goes on top:
+    // upper arms down by about 1.2 radians, a little elbow bend, and then the
+    // sway and the gesture.
+    const rest = 1.2, bend = 0.12;
+    const gesture = state.talking ? 0.08 + 0.05 * Math.sin(t * 2.3) : 0;
+    for (const [name, side] of [['leftUpperArm', 1], ['rightUpperArm', -1]]) {
+      const b = bone(name);
+      if (b) {
+        b.rotation.z = side * (rest - gesture + 0.02 * sway);
+        b.rotation.x = 0.06 * Math.sin(t * 0.31 + (side > 0 ? 0 : 1.1));
+      }
+    }
+    for (const [name, side] of [['leftLowerArm', 1], ['rightLowerArm', -1]]) {
+      const b = bone(name);
+      if (b) b.rotation.z = side * (bend + gesture * 0.5);
+    }
+
+    // A glance away, now and then, that comes back by itself. Looking at one
+    // point forever is the tell that nobody is home.
+    glanceIn -= dt;
+    if (glanceIn <= 0) {
+      glance = { x: (Math.random() - 0.5) * 1.4, y: (Math.random() - 0.5) * 0.5,
+                 left: 0.8 + Math.random() * 1.4 };
+      glanceIn = 4 + Math.random() * 7;
+    }
+    if (glance) { glance.left -= dt; if (glance.left <= 0) glance = null; }
+
+    const head = bone('head');
     if (head) {
-      head.rotation.y = Math.sin(t * 0.37) * 0.05;
-      head.rotation.z = Math.sin(t * 0.29) * 0.02;
+      const away = glance ? glance.x : 0;
+      head.rotation.y = Math.sin(t * 0.37) * 0.04 + away * 0.25;
+      head.rotation.z = Math.sin(t * 0.29) * 0.02 + sway * 0.02;
+      head.rotation.x = (glance ? glance.y : 0) * 0.15 + breath * 0.4;
+    }
+    if (glance && look) {
+      // The eyes go with the glance, then find you again when it ends.
+      look.position.x = glance.x * 0.5;
+      look.position.y = look.userData.base + glance.y * 0.3;
+    }
+
+    if (framing === 'scene') liveInPlace(dt, t, bone);
+
+    // The built-in dance: a bounce, a hip sway at half that rate, arms up and
+    // swinging, head nodding with the beat. 112 bpm because it is the tempo
+    // most people sway at without being asked.
+    if (state.dance) {
+      const beat = t * (112 / 60) * Math.PI;
+      const bounce = Math.abs(Math.sin(beat)) * 0.06;
+      const hipsB = bone('hips');
+      if (hipsB) {
+        hipsB.position.y = state.hipsRest + -bounce * 0.6;
+        hipsB.rotation.z = Math.sin(beat / 2) * 0.12;
+        hipsB.rotation.y = Math.sin(beat / 4) * 0.25;
+      }
+      for (const [name, side] of [['leftUpperArm', 1], ['rightUpperArm', -1]]) {
+        const b = bone(name);
+        if (b) {
+          b.rotation.z = side * (0.9 + Math.sin(beat + (side > 0 ? 0 : Math.PI)) * 0.5);
+          b.rotation.x = Math.sin(beat / 2) * 0.3;
+        }
+      }
+      for (const [name, side] of [['leftLowerArm', 1], ['rightLowerArm', -1]]) {
+        const b = bone(name);
+        if (b) b.rotation.z = side * (0.8 + Math.sin(beat) * 0.4);
+      }
+      const headB = bone('head');
+      if (headB) headB.rotation.x = Math.sin(beat) * 0.08;
     }
 
     // Talking. With a viseme track the five shapes are driven straight and
@@ -267,7 +846,6 @@ function tick() {
   }
   state.frames++;
   renderer.render(scene, camera);
-  requestAnimationFrame(tick);
 }
 tick();
 

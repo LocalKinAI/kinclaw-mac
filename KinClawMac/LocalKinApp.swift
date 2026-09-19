@@ -80,6 +80,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         //    its MCP servers as it starts, and this is one of them.
         PanelBridge.shared.start()
 
+        // If she was standing on the desktop when the app last quit, she is
+        // standing there now. After the singleton exists, not inside it —
+        // the overlay's own view observes it.
+        CompanionOverlay.shared.restoreIfWanted()
+
         // One-shot migration: if the user has chat history saved
         // under the old UserDefaults `chat_<slug>` keys, rewrite as
         // session JSONs in ~/.kinclaw/sessions/ and clear the keys.
@@ -106,6 +111,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                 NotificationCenter.default.post(name: .kinclawEnterCompanion, object: nil)
             }
+        }
+        NotificationCenter.default.addObserver(forName: .kinclawOpenCompanion, object: nil,
+                                               queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.menuBar.onCompanion?() }
         }
         menuBar.onOpenSettings  = { [weak self] in self?.openSettingsWindow() }
         menuBar.onQuit          = { NSApp.terminate(nil) }
@@ -357,4 +366,7 @@ extension Notification.Name {
     /// which fill it over minutes in the background — without this the
     /// companion keeps showing what was there when she opened.
     static let kinclawCompanionArtGrew = Notification.Name("kinclaw.companionArtGrew")
+    /// A tool asked for the companion to be on screen. Same road as the
+    /// menubar item: show the panel, then let it switch itself over.
+    static let kinclawOpenCompanion = Notification.Name("kinclaw.openCompanion")
 }

@@ -213,6 +213,108 @@ enum PanelTools {
             ],
         ],
         [
+            "name": "character_probe",
+            "description": """
+                Diagnostic: ask the art picker what it would show for a given \
+                state and subject, without waiting for a real reply. Answers \
+                with the file it chose and where she ended up. Use it when \
+                the background is not changing and it is not clear whether \
+                the choice or the display is at fault.
+                """,
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "state": ["type": "string", "description": "idle / listening / thinking / speaking."],
+                    "subject": ["type": "string", "description": "The subject keyword a reply would carry, e.g. market."],
+                    "say": ["type": "string", "description": "Simulate the user saying this (runs the same matching a real utterance gets)."],
+                    "tag": ["type": "string", "description": "Simulate a reply whose tag carries this subject; \"-\" for a reply with no tag."],
+                ],
+                "required": [],
+            ],
+        ],
+        [
+            "name": "character_go",
+            "description": """
+                Move her to one of her places by name, or back to the main \
+                one with an empty name. Use it when the user names somewhere \
+                she has — "go to the park", "back to the kitchen". The answer \
+                says where she is and which words each place answers to, \
+                which is also how to find out why a place did not come up.
+                """,
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "scene": ["type": "string",
+                              "description": "A scene name (厨房/海边/公园…), a word it answers to, or \"\" for the main scene."],
+                ],
+                "required": ["scene"],
+            ],
+        ],
+        [
+            "name": "avatar_stage",
+            "description": """
+                What the 3D stage is doing: whether a model is loaded, what \
+                went wrong if it did, how many expressions the model has, and \
+                the size of the canvas it is drawing into. Ask this when she \
+                should be on screen and is not.
+                """,
+            "inputSchema": ["type": "object", "properties": [:]],
+        ],
+        [
+            "name": "avatar_move",
+            "description": """
+                Make the 3D companion move. In one of her places she can walk \
+                around in it — `walk`: "come" (up to the user), "near", "far", \
+                "left", "right", "around" — and play where she stands — \
+                `play`: wave, stretch, spin, jump, pick (crouch to pick \
+                something up), look (look around), dance. `motion` plays a \
+                .vrma file, "dance" the built-in dance, "" stops. Use it when \
+                the user asks her to come over, go and look at something, \
+                jump, wave, dance, or stop. She also wanders and plays by \
+                herself when nobody is talking to her.
+                """,
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "walk": ["type": "string", "description": "come | near | far | left | right | around"],
+                    "play": ["type": "string", "description": "wave | stretch | spin | jump | pick | look | dance"],
+                    "motion": ["type": "string",
+                               "description": "\"dance\", a .vrma file name from ~/.kinclaw/vrm/motions/, or \"\" to stop."],
+                    "loops": ["type": "integer", "description": "How many times to play a file (default 1)."],
+                ],
+            ],
+        ],
+        [
+            "name": "companion_open",
+            "description": """
+                Show the panel in companion mode — the picture of her and the \
+                voice, no transcript. Use it when the user asks to see her, \
+                or to talk face to face. It is also how a scene change gets \
+                looked at from outside: without the companion on screen there \
+                is nothing to look at.
+                """,
+            "inputSchema": ["type": "object", "properties": [:] as [String: Any]],
+        ],
+        [
+            "name": "avatar_desktop",
+            "description": """
+                Put the 3D companion on the desktop as a floating figure in \
+                front of every window, or bring her back into the panel. \
+                Use it when the user asks for her to be on their desktop, to \
+                stand in the corner, or to get out of the way. `through` \
+                makes her ignore the mouse, so clicks land on whatever is \
+                behind her.
+                """,
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "on": ["type": "boolean", "description": "true puts her on the desktop, false brings her back into the panel."],
+                    "through": ["type": "boolean", "description": "Mouse passes through her (she becomes scenery). Optional."],
+                ],
+                "required": ["on"],
+            ],
+        ],
+        [
             "name": "video_status",
             "description": """
                 How the clips are coming along: what is still filming, what \
@@ -255,6 +357,14 @@ enum PanelTools {
         case "image_generate": return await draw(args)
         case "video_generate": return film(args)
         case "video_status": return (DiffuserClient.shared.videoReport, false)
+        case "avatar_desktop": return desktop(args)
+        case "companion_open":
+            NotificationCenter.default.post(name: .kinclawOpenCompanion, object: nil)
+            return ("陪伴模式打开了", false)
+        case "avatar_move":    return move(args)
+        case "avatar_stage":   return (await stageReport(), false)
+        case "character_go":   return goToScene(args)
+        case "character_probe": return probe(args)
         case "character_show":   return (who(), false)
         case "character_new":    return newCharacter(args)
         case "character_adopt":  return adopt(args)
@@ -394,6 +504,143 @@ enum PanelTools {
         return ("开拍了，\(Int(seconds)) 秒的片子，几分钟后落在\(where_)：\(file.path)（用 video_status 看进度）", false)
     }
 
+    // MARK: The probe
+
+    private static func probe(_ args: [String: Any]) -> (String, Bool) {
+        guard let art = CompanionPresence.shared.art else {
+            return ("陪伴模式还没开过（⇧⌘M），拿不到她的素材", true)
+        }
+        if art.scenes.isEmpty { art.reload() }
+        // The two events, exactly as the conversation delivers them.
+        if let said = args["say"] as? String {
+            let before = art.scene?.name ?? "（没定）"
+            let heard = art.hear(said)
+            return ("用户说「\(said)」→ \(heard.map { "听出了「\($0.name)」" } ?? "没提到她有的地方")"
+                  + "｜场景：\(before) → \(art.scene?.name ?? "（没定）")", false)
+        }
+        if let tag = args["tag"] as? String {
+            let before = art.scene?.name ?? "（没定）"
+            art.replyTagged(subject: tag == "-" ? "" : tag)
+            return ("回复标签 \(tag == "-" ? "（无）" : tag)｜场景：\(before) → \(art.scene?.name ?? "（没定）")"
+                  + "｜没提地方 \(art.repliesAwayFromHomeCount)/2", false)
+        }
+        let state = (args["state"] as? String) ?? "idle"
+        let subject = (args["subject"] as? String) ?? ""
+        let before = art.scene?.name ?? "（没定）"
+        let picked = art.art(for: state, mood: nil, subject: subject, fallback: nil)
+        let after = art.scene?.name ?? "（没定）"
+        let name = picked.map { $0.deletingLastPathComponent().lastPathComponent + "/" + $0.lastPathComponent }
+        return ("state=\(state) subject=\(subject.isEmpty ? "—" : subject)\n"
+              + "场景：\(before) → \(after)\n"
+              + "选中的文件：\(name ?? "没有")", false)
+    }
+
+    // MARK: Where she is
+
+    private static func goToScene(_ args: [String: Any]) -> (String, Bool) {
+        guard let wanted = args["scene"] as? String else {
+            return ("character_go 需要 scene", true)
+        }
+        guard let art = CompanionPresence.shared.art else {
+            return ("陪伴模式还没开过（⇧⌘M），还拿不到她的场景", true)
+        }
+        art.reload()
+        guard !art.scenes.isEmpty else { return ("她还没有场景", true) }
+        let moved = art.goTo(wanted)
+        var lines: [String] = []
+        if let moved {
+            lines.append("她在「\(moved.name)」了")
+        } else {
+            lines.append("没有叫「\(wanted)」的地方")
+        }
+        lines.append("她的场景和对应的词：")
+        for scene in art.scenes {
+            let mark = scene.name == art.scene?.name ? "→ " : "  "
+            lines.append("\(mark)\(scene.name)：\(scene.words.prefix(8).joined(separator: " "))")
+        }
+        if let cue = art.placesCue(building: CompanionCharacter.shared.building) {
+            lines.append("这一轮她会被告知：" + cue)
+        }
+        for (first, second) in CompanionArt.twinScenes() {
+            lines.append("⚠️「\(second)」和「\(first)」是同一份素材——去了也看不出换了地方")
+        }
+        return (lines.joined(separator: "\n"), moved == nil)
+    }
+
+    // MARK: The stage, when nobody is on screen
+
+    private static func stageReport() async -> String {
+        let status = await VRMStage.shared.snapshot()
+        if status.isEmpty { return "3D 那一层没有在跑" }
+        var lines: [String] = []
+        let ready = (status["ready"] as? Bool) ?? false
+        lines.append("页面就绪：\(ready ? "是" : "否")")
+        lines.append("模型：\((status["model"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "没加载")")
+        if let error = status["error"] as? String, !error.isEmpty { lines.append("错误：\(error)") }
+        if let bridge = status["bridge"] as? String { lines.append("桥这一侧：" + bridge) }
+        let calls = CompanionPresence.shared.wantedLog
+        if !calls.isEmpty { lines.append("谁在叫她（新→旧）：" + calls.prefix(6).joined(separator: "  ")) }
+        if let where_ = status["where"] as? [String: Any], status["place"] is String {
+            let depth = where_["depth"] as? Double ?? 0
+            let doing = (where_["act"] as? String) ?? ((where_["walking"] as? Bool) == true ? "在走" : "站着")
+            lines.append(String(format: "在场景里：离镜头 %.1f 米｜%@｜%@", depth, doing,
+                                (where_["attend"] as? Bool) == true ? "有人找她" : "自己玩"))
+        }
+        if let framing = status["framing"] as? String {
+            let lit = status["light"] is [String: Any] ? "跟着场景" : "棚灯"
+            let shot = ["portrait": "半身（站在场景前）", "scene": "场景机位（她在里面走）"][framing] ?? "全身"
+            lines.append("取景：\(shot)｜灯光：\(lit)")
+        }
+        if let expressions = status["expressions"] as? [Any] { lines.append("表情数：\(expressions.count)") }
+        if let size = status["size"] as? [Any], size.count == 2 {
+            lines.append("画布：\(size[0]) × \(size[1])")
+        }
+        if let frames = status["frames"] { lines.append("已渲染帧：\(frames)") }
+        lines.append("在桌面上：\(CompanionOverlay.shared.isOn ? "是" : "否")")
+        return lines.joined(separator: "\n")
+    }
+
+    // MARK: Moving
+
+    private static func move(_ args: [String: Any]) -> (String, Bool) {
+        if let where_ = args["walk"] as? String, !where_.isEmpty {
+            let answer = VRMStage.shared.walk(where_.lowercased())
+            return (answer, !answer.hasPrefix("她"))
+        }
+        if let name = args["play"] as? String, !name.isEmpty {
+            let answer = VRMStage.shared.play(name.lowercased())
+            return (answer, answer != "好")
+        }
+        guard let motion = args["motion"] as? String else {
+            return ("avatar_move 需要 walk、play 或 motion 之一", true)
+        }
+        let answer = VRMStage.shared.move(motion, loops: args["loops"] as? Int ?? 1)
+        let files = VRMStage.motions
+        let list = files.isEmpty
+            ? "。动作文件夹是空的：BOOTH 上 VRoid 官方送七个免费的 .vrma，放进 ~/.kinclaw/vrm/motions/ 就能放"
+            : "。现有动作：" + files.joined(separator: "、")
+        return (answer + list, answer == "3D 形象没开")
+    }
+
+    // MARK: On the desktop
+
+    private static func desktop(_ args: [String: Any]) -> (String, Bool) {
+        guard let on = args["on"] as? Bool else { return ("avatar_desktop 需要 on", true) }
+        let overlay = CompanionOverlay.shared
+        if on, VRMServerBox.shared.base == nil {
+            // She needs the 3D stage to stand anywhere: the video looks are
+            // rectangles, and a rectangle floating over the desktop is a
+            // video player, not somebody in the room.
+            if AvatarStage.isEnabled { AvatarStage.isEnabledSetting = false }
+            VRMWardrobe.isEnabled = true
+            VRMServerBox.shared.startIfWanted()
+        }
+        on ? overlay.show() : overlay.hide()
+        if let through = args["through"] as? Bool { overlay.setClickThrough(through) }
+        if !on { return ("收回面板了", false) }
+        return ("她站到桌面上了\(overlay.clickThrough ? "（鼠标穿透）" : "，可以拖着走")", false)
+    }
+
     // MARK: Who she is
 
     private static func who() -> String {
@@ -422,9 +669,23 @@ enum PanelTools {
             let main = UserDefaults.standard.string(forKey: CompanionArt.mainSceneKey) ?? ""
             let named = scenes.map { $0 == main ? "\($0)（主场景）" : $0 }
             lines.append("她的场景：" + named.joined(separator: "、"))
-            lines.append("聊到没有的地方，她会留在主场景，同时后台造那个场景（约三分钟）")
+            lines.append("聊到没有的地方，她留在当前场景，同时后台造那个地方（约三分钟），造好了自己切过去")
         }
         if let building = her.building { lines.append("正在造场景：\(building)") }
+        // Where she is right now, and how close she is to going home — the
+        // two numbers that answer "why is she still at the beach".
+        if let art = CompanionPresence.shared.art, !art.scenes.isEmpty {
+            lines.append("她此刻在：\(art.scene?.name ?? "（还没定）")"
+                       + "｜没提到地方的回复数：\(art.repliesAwayFromHomeCount)/2")
+            let tags = CompanionPresence.shared.tags
+            if !tags.isEmpty {
+                lines.append("她最近几条回复的开头：")
+                for tag in tags.prefix(6) { lines.append("   " + tag) }
+            }
+            if !art.shown.isEmpty {
+                lines.append("最近放过的片段（新→旧）：" + art.shown.joined(separator: "  "))
+            }
+        }
         // What the last operation said, because a caller that started one
         // minutes ago has nowhere else to read it.
         if her.busy { lines.append("正在忙：\(her.note ?? "…")") }

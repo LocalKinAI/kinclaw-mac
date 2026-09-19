@@ -16,6 +16,7 @@ struct CompanionView: View {
     /// the stage is a singleton because she has to outlive the view.
     @ObservedObject private var vrm = VRMStage.shared
     @ObservedObject private var vrmServer = VRMServerBox.shared
+    @ObservedObject private var overlay = CompanionOverlay.shared
     @ObservedObject private var lookMaker = RealLookMaker.shared
 
     /// Live inputs from the panel's existing voice objects.
@@ -23,6 +24,9 @@ struct CompanionView: View {
     let isThinking: Bool
     let isSpeaking: Bool
     let audioLevel: Double
+    /// The recorder has heard a voice in the current recording, as opposed to
+    /// the microphone merely being open.
+    var isHearingSpeech: Bool = false
     /// Last thing said, shown small and briefly — useful when the room
     /// is loud enough that you missed it, invisible the rest of the time.
     let caption: String
@@ -79,6 +83,10 @@ struct CompanionView: View {
     @State private var rotate: Timer?
     /// When the picture last changed — the floor under how often it can.
     @State private var lastPick: Date?
+    /// The pending "nobody needs you, go and play" after an exchange ends.
+    @State private var wander: DispatchWorkItem?
+    @State private var lastPickState = ""
+    @State private var lastPickScene: String?
     /// A still gets a slow push-in and drift over its time on screen,
     /// alternating direction picture to picture, so the background is
     /// never quite static even before there are clips.
@@ -147,7 +155,9 @@ struct CompanionView: View {
             // The 3D companion. Above the picture, hit-testing on: her eyes
             // follow the pointer, which is the one interaction that makes a
             // character feel present rather than played back.
-            if let base = vrmServer.base {
+            // Not while she is on the desktop: one web view for the
+            // character, or two copies of the model animating in parallel.
+            if let base = vrmServer.base, !overlay.isOn {
                 VRMStageView(base: base, onReady: { vrm.attach($0) })
                     .ignoresSafeArea()
                     .transition(.opacity)
@@ -221,17 +231,50 @@ struct CompanionView: View {
         .background(Color.black)
         .onAppear {
             art.reload()
-            pick()
+            enterStage(stage3D)
+            let later = DispatchWorkItem { vrm.attend(false) }
+            wander = later
+            DispatchQueue.main.asyncAfter(deadline: .now() + 9, execute: later)
             rotate = Timer.scheduledTimer(withTimeInterval: 45, repeats: true) { _ in
                 Task { @MainActor in pick() }
             }
         }
         .onDisappear { rotate?.invalidate(); rotate = nil }
+        // Somebody is talking to her, or she is about to answer: she comes up
+        // to the lens. A few seconds after the exchange ends she is free to
+        // wander off again — the same rhythm as the filmed companion's wait
+        // and talk clips, walked instead of cut.
+        .onChange(of: wanted) { _, now in
+            // Which of the three called her, for the diagnostics: a companion
+            // who never wanders off is being called by something.
+            let why = [isThinking ? "在想" : nil, isSpeaking ? "在说" : nil,
+                       isListening && isHearingSpeech ? "听见人声" : nil].compactMap { $0 }.joined(separator: "+")
+            CompanionPresence.shared.noteWanted(now ? "叫她：\(why)" : "放她走")
+            wander?.cancel()
+            if now {
+                vrm.attend(true)
+            } else {
+                let later = DispatchWorkItem { vrm.attend(false) }
+                wander = later
+                DispatchQueue.main.asyncAfter(deadline: .now() + 7, execute: later)
+            }
+        }
         .onChange(of: state) { _, _ in
             // Per-state art swaps immediately; a pool-only setup keeps
-            // the same picture and just changes the halo.
-            if art.hasGroups { pick() }
+            // the same picture and just changes the halo. Scenes are per-state
+            // art too: wait and talk are the two halves of one place.
+            if art.hasGroups || !art.scenes.isEmpty { pick() }
         }
+        // She moved — the user named a place, or a reply did. The picker only
+        // runs on these hooks, so without this one the decision is made and
+        // the old room stays on screen.
+        // The whole scene rather than its name: the same place gains a talk
+        // clip a minute after its wait clip, and a plate when the 3D
+        // companion first needs one, and each of those is a new picture.
+        .onChange(of: art.scene) { _, _ in pick() }
+        // Which companion is on screen decides what a place is made of.
+        .onChange(of: stage3D) { _, on in enterStage(on) }
+
         .onChange(of: mood) { _, new in
             if art.hasGroups { pick() }
             vrm.express(new)
@@ -413,6 +456,22 @@ struct CompanionView: View {
                             Text(outfit.name)
                         }
                     }
+                }
+            }
+            Divider()
+            // The panel is a window you summon; the desktop is where she can
+            // just be. Same character, same web view, moved.
+            Button(overlay.isOn ? "从桌面收回面板" : "放到桌面上（浮在最前面）") {
+                if !overlay.isOn, vrmServer.base == nil {
+                    if avatarBase != nil { onAvatarToggle(false) }
+                    VRMWardrobe.isEnabled = true
+                    vrmServer.startIfWanted()
+                }
+                overlay.toggle()
+            }
+            if overlay.isOn {
+                Button(overlay.clickThrough ? "让她接收点击" : "鼠标穿透（她只是画面）") {
+                    overlay.setClickThrough(!overlay.clickThrough)
                 }
             }
             Divider()
@@ -633,15 +692,61 @@ struct CompanionView: View {
         .frame(height: 190)
     }
 
+    /// Somebody is actually talking to her, or she is working on an answer.
+    /// Not "the microphone is open": in a voice conversation it is open all
+    /// evening, and a companion pinned to the lens by an open microphone
+    /// never gets to wander off at all. A voice in it is what counts.
+    private var wanted: Bool { isThinking || isSpeaking || (isListening && isHearingSpeech) }
+
+    /// The 3D companion is the one in the panel — not the filmed one, and
+    /// not while she is out on the desktop, where there is no room behind her.
+    private var stage3D: Bool { vrmServer.base != nil && !overlay.isOn }
+
+    /// Places are clips of her for the filmed companion and empty plates for
+    /// the 3D one. Coming on stage in 3D also has the plates made for every
+    /// place that predates her — once, eleven seconds apiece.
+    private func enterStage(_ in3D: Bool) {
+        art.stage3D = in3D
+        if in3D, !art.scenes.isEmpty { CompanionCharacter.shared.makePlates() }
+        // Not subject to the hold: the stage comes up a fraction of a second
+        // after the view appears, and a pick held back then leaves the filmed
+        // clip on screen behind the 3D companion — two of her — until
+        // something else happens to change.
+        lastPick = nil
+        pick()
+    }
+
     private func pick() {
         // Hold a picture for a few seconds whatever happens. Mood,
         // state and subject can all move within one reply, and a
         // background that crossfades three times in five seconds is a
         // slideshow, which is the failure mode this whole feature is
         // one step away from.
-        if let last = lastPick, Date().timeIntervalSince(last) < 4 { return }
+        // The hold is about pictures: three crossfades in five seconds is a
+        // slideshow. It is *not* about her state — in a scene, "she looks up
+        // and starts talking" is the one transition that has to be immediate,
+        // and holding it for four seconds is why the background looked stuck.
+        let stateChanged = state != lastPickState
+        lastPickState = state
+        // Nor is it about where she is: a scene change is the user's own
+        // request arriving, and is shown at once.
+        let moved = art.scene?.name != lastPickScene
+        lastPickScene = art.scene?.name
+        if !stateChanged, !moved, let last = lastPick, Date().timeIntervalSince(last) < 4 { return }
         let next = art.art(for: state, mood: mood, subject: subject,
                            fallback: art.pool.randomElement())
+        // She is framed and lit by what is behind her: waist up and in the
+        // place's light when that is one of her plates, full length under
+        // studio lights otherwise. Said here rather than from a change hook —
+        // the first pick happens before any hook is listening, and she stood
+        // full length in her own kitchen until something else moved.
+        // With a wide plate she has the whole place: the stage draws it and
+        // she walks around in it.
+        if stage3D, next != nil, next == art.scene?.plate {
+            vrm.place(in: art.scene)
+        } else {
+            vrm.place(plate: nil)
+        }
         guard next != current else { return }
         lastPick = Date()
         previous = current

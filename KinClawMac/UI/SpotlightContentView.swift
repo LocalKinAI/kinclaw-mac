@@ -32,6 +32,9 @@ struct SpotlightContentView: View {
     @State private var allAgents: [Agent] = []
     @State private var loadError: String?
     @State private var isLoadingAgents = true
+    /// How many times the local soul fetch has come back empty. The kernel
+    /// starts alongside the app, so the first answer is often "not yet".
+    @State private var soulAttempts = 0
     /// Set when the cloud /v1/agents fetch fails or returns nothing
     /// — shown in the picker so users see a real signal rather than
     /// a silently-empty section.
@@ -349,6 +352,7 @@ struct SpotlightContentView: View {
                               isThinking: recorder.isTranscribing || isStreaming,
                               isSpeaking: speaker.isSpeaking,
                               audioLevel: recorder.audioLevel,
+                              isHearingSpeech: recorder.hearingSpeech,
                               caption: companionCaption,
                               problem: companionProblem,
                               mood: companionMood,
@@ -404,6 +408,13 @@ struct SpotlightContentView: View {
         .frame(minWidth: 320, minHeight: 380)
         .onReceive(NotificationCenter.default.publisher(for: .kinclawEnterCompanion)) { _ in
             if !companionMode { enterCompanionMode() }
+        }
+        // A clip landed — a new place's first, or one more for the library.
+        // Only the picker sheet used to hear this, so a place she had built
+        // stayed invisible until the panel was reopened, and she never walked
+        // into it. The scan is what lets her arrive.
+        .onReceive(NotificationCenter.default.publisher(for: .kinclawCompanionArtGrew)) { _ in
+            companionArt.reload()
         }
         // The mic stays open while the agent talks so you can cut in.
         // Armed off isSpeaking rather than at each call site, so every
@@ -474,6 +485,8 @@ struct SpotlightContentView: View {
             }
         }
         companionArt.reload()
+        // The panel's tools act on this one, not a copy of their own.
+        CompanionPresence.shared.art = companionArt
         companionMood = nil
         companionSubject = ""
         avatarServer.startIfWanted()
@@ -655,6 +668,11 @@ struct SpotlightContentView: View {
                 resumeListeningIfConversing(extendSession: false)
             }
             Task { await loadAgents() }
+            // The panel's tools act on the art the panel is showing. Hooked
+            // up as soon as the panel exists, not on entering companion mode:
+            // a tool that has to be told "open companion mode first" before it
+            // can answer where she is, is a tool nobody can debug with.
+            CompanionPresence.shared.art = companionArt
             // Scan the sibling localkin checkout for private souls.
             // Cheap (one .git + one souls/private/ existence check
             // per candidate path), runs main-thread synchronously.
@@ -3188,6 +3206,23 @@ struct SpotlightContentView: View {
             selectedAgent = pickDefaultAgent(for: mode)
         }
         isLoadingAgents = false
+
+        // The kernel is usually still starting when the panel first appears —
+        // it is spawned at launch and takes a second or two to answer — and
+        // the local fetch simply came back empty, leaving a soul list that
+        // only filled in when something else happened to refresh it. Which is
+        // why the souls "needed a click" every time. So an empty local list
+        // is treated as "not yet" rather than "none", and asked again a few
+        // times before giving up.
+        if local.isEmpty, soulAttempts < 8 {
+            soulAttempts += 1
+            Task {
+                try? await Task.sleep(nanoseconds: 700_000_000)
+                await loadAgents()
+            }
+        } else if !local.isEmpty {
+            soulAttempts = 0
+        }
     }
 
     /// Pick the default agent surfaced when KinClaw Mac launches OR
@@ -3432,6 +3467,24 @@ struct SpotlightContentView: View {
         pendingVoiceCue = nil
         replyHead = ""
         replyHeadDecided = false
+        // The subject belongs to the reply that named it. `noteSubject` is
+        // only reached when a tag parses, so a reply without one used to
+        // leave the last subject standing — and the companion stayed where
+        // that subject had sent her. She went to the beach once and lived
+        // there. Cleared at the start of every reply; a tag sets it again.
+        companionSubject = ""
+        // What the user said moves her directly — before the model answers,
+        // and whatever it goes on to tag. "去夜市" should not depend on a
+        // language model remembering to write `·market`.
+        if companionMode {
+            companionArt.hear(text)
+            // And the model is told where she is and which places she has, so
+            // that the rest of the switching needs nobody to say "去": its tag
+            // names a real place, and the picture follows the conversation.
+            if let cue = companionArt.placesCue(building: CompanionCharacter.shared.building) {
+                forKernel += "\n" + cue
+            }
+        }
 
         if agent.isLocal {
             sendLocal(text: forKernel, assistantIndex: assistantIndex)
@@ -3547,6 +3600,8 @@ struct SpotlightContentView: View {
         guard let first = head.first else { return "" }
         guard first == "[" || first == "【" else {
             replyHeadDecided = true
+            CompanionPresence.shared.noteTag("没有标签：" + String(head.prefix(16)))
+            if companionMode { companionArt.replyTagged(subject: "") }
             defer { replyHead = "" }
             return replyHead
         }
@@ -3558,8 +3613,13 @@ struct SpotlightContentView: View {
             if let parsed = CompanionMood.parseTag(tag) {
                 companionMood = parsed.mood
                 noteSubject(parsed.subject)
+                if companionMode { companionArt.replyTagged(subject: parsed.subject) }
+                CompanionPresence.shared.noteTag(
+                    "[\(tag)] → 情绪 \(parsed.mood.rawValue)，主题 \(parsed.subject.isEmpty ? "—" : parsed.subject)")
                 return rest
             }
+            CompanionPresence.shared.noteTag("[\(tag)] 解析不了")
+            if companionMode { companionArt.replyTagged(subject: "") }
             // Some other stage direction — "[笑]", "[叹气]" — is not a mood
             // but is not something to read aloud either. Anything longer
             // is content that happened to start with a bracket.

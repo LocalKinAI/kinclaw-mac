@@ -23,7 +23,14 @@ class VoiceRecorder: NSObject, ObservableObject {
     private var silenceTimer: Timer?
     private var maxTimer: Timer?
     private var storedHostname: String = ""
-    private var hasSpeechStarted = false
+    private var hasSpeechStarted = false {
+        didSet { if hasSpeechStarted != oldValue { hearingSpeech = hasSpeechStarted } }
+    }
+    /// Somebody is actually speaking into this recording — a sustained run
+    /// above a threshold calibrated to the room, not a level on a meter. The
+    /// 3D companion comes up to the lens on this; a raw level would have her
+    /// answering to the refrigerator.
+    @Published private(set) var hearingSpeech = false
     /// A hot start is one where the user is already talking — they
     /// interrupted the agent. There is nothing to calibrate against
     /// and no question of whether there is speech.

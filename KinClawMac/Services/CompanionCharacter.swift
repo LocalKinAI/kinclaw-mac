@@ -253,45 +253,82 @@ final class CompanionCharacter: ObservableObject {
     /// up does not queue the same three minutes of work again.
     private var asked: Set<String> = []
 
-    /// Build a scene for a subject the conversation named and she has no
-    /// place for.
+    /// Build a place the conversation named — or the half of one that the
+    /// companion on screen is missing.
     ///
-    /// Returns at once. The scene takes about three minutes — one edit for
-    /// the still, two clips for waiting and for talking — and until it lands
-    /// she stays where she was, which is the whole point: a companion who
-    /// blanks out while a picture renders is worse than one who keeps talking
-    /// to you in her kitchen. When it lands she is simply there the next time
-    /// the subject comes up.
-    func wantScene(_ subject: String) {
+    /// A place is a still of her there, an empty plate of the same spot, and
+    /// two clips. The filmed companion needs the clips (about three minutes);
+    /// the 3D one stands in front of the plate and needs nothing filmed, so
+    /// with `plateOnly` a place she has never been is ready in about half a
+    /// minute. Whatever already exists is kept: asking for a place that has
+    /// clips and no plate makes the plate, and the other way round.
+    ///
+    /// Returns at once, true if there was something to make and it was taken
+    /// on. Until it lands she stays where she is — a companion who blanks out
+    /// while a picture renders is worse than one who keeps talking to you in
+    /// her kitchen — and each piece that lands is announced, so she can walk
+    /// in as soon as there is enough to show.
+    @discardableResult
+    func wantScene(_ subject: String, plateOnly: Bool = false) -> Bool {
         let name = subject.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard name.count >= 3, building == nil, !asked.contains(name),
-              let anchor = anchorURL else { return }
-        let folder = CompanionArt.folder.appendingPathComponent("scenes/\(name)")
-        guard !FileManager.default.fileExists(atPath: folder.path) else { return }
-        asked.insert(name)
+        // Three letters for an English word, two characters for 公园.
+        let longEnough = name.allSatisfy(\.isASCII) ? name.count >= 3 : name.count >= 2
+        let order = name + (plateOnly ? "/plate" : "/clips")
+        guard longEnough, building == nil, !asked.contains(order),
+              let anchor = anchorURL else { return false }
+        let fm = FileManager.default
+        // The folder on disk keeps its own spelling; a lowercased name must
+        // still find 「Forest」 if that is what somebody called it.
+        let scenes = CompanionArt.folder.appendingPathComponent("scenes")
+        let existing = ((try? fm.contentsOfDirectory(atPath: scenes.path)) ?? [])
+            .first { $0.lowercased() == name }
+        let folder = scenes.appendingPathComponent(existing ?? name)
+        let still = folder.appendingPathComponent("still.png")
+        let plate = folder.appendingPathComponent("plate.png")
+        func has(_ stem: String) -> Bool {
+            ((try? fm.contentsOfDirectory(atPath: folder.path)) ?? [])
+                .contains { $0.lowercased().hasPrefix(stem) && $0.lowercased().hasSuffix(".mp4") }
+        }
+        let wide = folder.appendingPathComponent("wide.png")
+        let needStill = !fm.fileExists(atPath: still.path)
+        let needPlate = !fm.fileExists(atPath: plate.path)
+        // Only the 3D companion walks, so only she needs somewhere to.
+        let needWide = plateOnly && !fm.fileExists(atPath: wide.path)
+        let roles = plateOnly ? [] : [
+            ("wait", "she looks at the camera, a soft smile, tiny natural movements"),
+            ("talk", "she talks to the camera, speaking naturally, mouth moving, small gestures"),
+        ].filter { !has($0.0) }
+        guard needStill || needPlate || needWide || !roles.isEmpty else { return false }
+        asked.insert(order)
         building = name
-        note = "在给「\(name)」造场景…（三分钟上下，先在原地陪着你）"
+        note = plateOnly ? "在给「\(name)」搭景…（半分钟上下，先在原地陪着你）"
+                         : "在给「\(name)」造场景…（三分钟上下，先在原地陪着你）"
 
         Task { @MainActor in
             defer { building = nil }
             let client = DiffuserClient.shared
             do {
-                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-                // The subject arrives as one English word — the reply's tag
-                // rule asks for exactly that — so it is a place, not a caption.
-                let made = try await client.edit(
-                    prompt: "keep this exact woman, same face. put her in a real \(name) scene, "
-                          + "waist up, natural light. \(sheet.style)",
-                    from: anchor, into: folder, seed: Self.seed(for: name))
-                let still = folder.appendingPathComponent("still.png")
-                try? FileManager.default.removeItem(at: still)
-                try FileManager.default.moveItem(at: made, to: still)
-                try? name.write(to: folder.appendingPathComponent("about.txt"),
-                                atomically: true, encoding: .utf8)
-                for (role, motion) in [
-                    ("wait", "she looks at the camera, a soft smile, tiny natural movements"),
-                    ("talk", "she talks to the camera, speaking naturally, mouth moving, small gestures"),
-                ] {
+                try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+                if needStill {
+                    // The subject arrives as one English word — the reply's tag
+                    // rule asks for exactly that — so it is a place, not a caption.
+                    let made = try await client.edit(
+                        prompt: "keep this exact woman, same face. put her in a real \(name) scene, "
+                              + "waist up, natural light. \(sheet.style)",
+                        from: anchor, into: folder, seed: Self.seed(for: name))
+                    try fm.moveItem(at: made, to: still)
+                    try? name.write(to: folder.appendingPathComponent("about.txt"),
+                                    atomically: true, encoding: .utf8)
+                }
+                if needPlate {
+                    try await makePlate(from: still, to: plate, in: folder, name: name)
+                    NotificationCenter.default.post(name: .kinclawCompanionArtGrew, object: nil)
+                }
+                if needWide {
+                    try await makeWide(from: plate, to: wide, in: folder, name: name)
+                    NotificationCenter.default.post(name: .kinclawCompanionArtGrew, object: nil)
+                }
+                for (role, motion) in roles {
                     _ = try await client.generateVideo(
                         prompt: motion, to: folder.appendingPathComponent("\(role).mp4"),
                         seconds: 4, width: 704, height: 704, from: still)
@@ -299,10 +336,101 @@ final class CompanionCharacter: ObservableObject {
                 }
                 note = "「\(name)」这个地方做好了"
             } catch {
-                // Leave the folder: a half-made scene has no wait or talk clip,
-                // so the scanner ignores it and nothing shows a broken place.
+                // Leave the folder: a half-made scene has nothing the scanner
+                // accepts, so it is ignored and nothing shows a broken place.
                 note = "造不出「\(name)」：\(error.localizedDescription)"
             }
+        }
+        return true
+    }
+
+    /// The same place with nobody in it.
+    ///
+    /// Edited from the scene's own still rather than drawn fresh, so it is
+    /// the *same* kitchen — the window, the mugs, the light — whichever
+    /// companion is standing in it. The still was a waist-up portrait, which
+    /// leaves a background at portrait distance and slightly out of focus:
+    /// what a camera would see behind somebody standing there.
+    private func makePlate(from still: URL, to plate: URL, in folder: URL, name: String) async throws {
+        let made = try await DiffuserClient.shared.edit(
+            prompt: "remove the woman from the photo completely. show only the empty place with "
+                  + "nobody in it, same place, same light, same camera angle, background slightly "
+                  + "out of focus. photograph",
+            from: still, into: folder, seed: Self.seed(for: name + " plate"))
+        // The instruction the edit was made with travels with the picture.
+        try? FileManager.default.moveItem(at: URL(fileURLWithPath: made.path + ".txt"),
+                                          to: URL(fileURLWithPath: plate.path + ".txt"))
+        try FileManager.default.moveItem(at: made, to: plate)
+    }
+
+    /// The place from further back, with ground to walk on.
+    ///
+    /// A plate is what is left of a waist-up portrait: a camera a metre and a
+    /// half from where she stood, and no floor anywhere in the frame. Nobody
+    /// can walk around in that. This pulls the camera back — eye level,
+    /// horizon across the middle, the floor filling the lower half and running
+    /// away from the lens — which is a shot a figure can be stood in at any
+    /// distance and still have her feet on something. Made from the plate so
+    /// it is the same place seen from further off.
+    private func makeWide(from plate: URL, to wide: URL, in folder: URL, name: String) async throws {
+        let made = try await DiffuserClient.shared.edit(
+            // "Keep its furniture" is not decoration. Asked only for an empty
+            // place with visible floor, the model obliges completely: the
+            // bedroom came back without a bed and the sofa scene without a
+            // sofa — two bare rooms, and nothing to say which was which.
+            prompt: "pull the camera far back to a wide full shot of this same place, with no people. "
+                  + "keep all of its furniture and objects exactly — everything that makes it this place "
+                  + "stays in the picture, further away now. camera at eye level looking straight ahead, "
+                  + "a clear stretch of open floor or ground in the foreground running away from the "
+                  + "camera, horizon at the middle of the picture, deep focus, everything sharp. "
+                  + "photograph, 24mm wide angle",
+            from: plate, into: folder, seed: Self.seed(for: name + " wide"))
+        try? FileManager.default.moveItem(at: URL(fileURLWithPath: made.path + ".txt"),
+                                          to: URL(fileURLWithPath: wide.path + ".txt"))
+        try FileManager.default.moveItem(at: made, to: wide)
+    }
+
+    /// True while `makePlates` is running.
+    private var platesRunning = false
+
+    /// Plates for every place that has a still and no plate — the places
+    /// she had before there was a 3D companion to stand in them. Eleven
+    /// seconds each, one at a time, in the background; each is announced as
+    /// it lands, so the room behind her empties while you watch.
+    func makePlates() {
+        guard !platesRunning, building == nil else { return }
+        let fm = FileManager.default
+        let root = CompanionArt.folder.appendingPathComponent("scenes")
+        let todo = CompanionArt.scenesOnDisk().filter { name in
+            let dir = root.appendingPathComponent(name)
+            return fm.fileExists(atPath: dir.appendingPathComponent("still.png").path)
+                && !(fm.fileExists(atPath: dir.appendingPathComponent("plate.png").path)
+                     && fm.fileExists(atPath: dir.appendingPathComponent("wide.png").path))
+        }
+        guard !todo.isEmpty else { return }
+        platesRunning = true
+        note = "在给 \(todo.count) 个地方拍空镜…"
+        Task { @MainActor in
+            defer { platesRunning = false }
+            var made = 0
+            for name in todo {
+                let dir = root.appendingPathComponent(name)
+                let plate = dir.appendingPathComponent("plate.png"), wide = dir.appendingPathComponent("wide.png")
+                do {
+                    if !fm.fileExists(atPath: plate.path) {
+                        try await makePlate(from: dir.appendingPathComponent("still.png"), to: plate, in: dir, name: name)
+                        NotificationCenter.default.post(name: .kinclawCompanionArtGrew, object: nil)
+                    }
+                    if !fm.fileExists(atPath: wide.path) {
+                        try await makeWide(from: plate, to: wide, in: dir, name: name)
+                        NotificationCenter.default.post(name: .kinclawCompanionArtGrew, object: nil)
+                    }
+                    made += 1
+                } catch {
+                    note = "「\(name)」的空镜没拍成：\(error.localizedDescription)"
+                }
+            }
+            if made == todo.count { note = "\(made) 个地方的空镜都好了" }
         }
     }
 

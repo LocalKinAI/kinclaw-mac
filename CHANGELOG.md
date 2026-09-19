@@ -208,6 +208,216 @@ in one place, so between them only her state changes.
   companion who cannot answer "where are you" from her own tools will
   make something up.
 
+### Added — she can stand on the desktop, and she moves
+
+- **Her, on the desktop, in front of everything.** A second window,
+  deliberately unlike the panel: no frame and no background, floating above
+  other apps, on every Space and stationary, off until asked for. Drag her
+  anywhere and the frame is remembered; 穿透 makes her ignore the mouse
+  entirely, which is what you want while typing behind her. A web view
+  swallows mouse events, so the window's own root view takes the hit and
+  starts the drag. Her eyes follow the pointer across the whole screen, not
+  only while it is over her. One web view exists for the character, so while
+  she is out there the panel does not draw the stage. `avatar_desktop` puts
+  her there from a tool.
+- **Motion files, and a dance that needs none.** `.vrma` animations play
+  through pixiv's `three-vrm-animation` (vendored, MIT) from
+  `~/.kinclaw/vrm/motions/`; "dance" is bones on sines at 112 bpm, so that
+  "dance for me" does something on a machine with no motion library.
+  `avatar_move` drives both.
+- **Standing still, alive.** Breath at its own rate, weight shifting on three
+  sines that share no common multiple, a glance away every few seconds that
+  comes back by itself — it is the unpredictability that reads as alive, not
+  the amplitude. Arms down first of all: a VRM rests in a T, and anything
+  that only adds sway to that keeps the T.
+- **`avatar_stage`, `character_go`, `character_probe`** answer "what is the
+  stage doing", "where is she and which words is each place reached by" and
+  "what would this utterance or this tag do to her" without anybody at the
+  keyboard.
+
+### Fixed
+
+- **VRM 0.x characters stood with their backs to you.** 0.x faces −Z and 1.0
+  faces +Z; `VRMUtils.rotateVRM0` turns the old ones round.
+- **One bad frame no longer stops her for good.** A null glance threw inside
+  the render loop and the loop never ran again, silently. Each frame is now
+  tried on its own, and the stage reports how many failed.
+- **The soul list needed a click every launch.** The kernel starts alongside
+  the app, so the first fetch often comes back empty — and empty was taken
+  to mean "none". It now means "not yet", and is asked again for a few
+  seconds.
+- **Where she is became a decision made by events, not by the picker.** It
+  used to be decided inside the art picker at the moment her state turned to
+  "speaking" — a moment that, measured, did not arrive in twelve consecutive
+  asks. What the user says and what a reply is tagged with now move her
+  directly; the picker only reads the result.
+
+### Changed — the places follow the conversation, and nobody has to say "去"
+
+The goal is one continuous film of her that directs itself: every place
+available, the picture going where the talk goes, clips chained so it never
+reads as a cut. What shipped the day before was a switch that obeyed
+commands, and for a day it did not even look like that.
+
+- **Two of the eight places held the wrong footage.** 公园 was a byte-for-byte
+  copy of the kitchen and 夜市 was a bookshop: the script that filled them
+  took the first picture in a mood folder without anyone looking at it. So
+  "去公园" moved her — every log said so — into a second kitchen, which from
+  the chair is a switch that does not work. Five rounds of fixing the
+  decision code could not find it, because the decision was right. Both
+  were reshot from the right stills, and `character_go` now warns when two
+  places hold identical bytes. The check that would have found it in a
+  minute was a contact sheet.
+- **She is told where she is.** Every companion turn carries one hidden
+  line under the user's words — where she is, which place is home, a
+  `key=place` list, and the rule that a tag's subject is a *place*. Without
+  it the model tagged blind and the only reliable switch was the user naming
+  a place out loud. With it, measured on kimi with nobody saying "去":
+  tired → `sofa`, raining → `rain`, goodnight → `bedroom`, a walk → `park`,
+  camping → `forest` (a place she lacks, so it gets built). The rule rides
+  in the line rather than only in the soul: from the soul alone, a story
+  about a dog came back tagged `dog`, which is a four-minute build of a
+  place that is not a place.
+- **A place on order is walked into when it lands.** The "a clip landed"
+  notification was only heard by the picker sheet, so a place she had built
+  stayed invisible until the panel was reopened and she never went there.
+  The panel listens now, remembers what was ordered, and she arrives with
+  the first clip; the talking clip joins a minute later, which is why the
+  scan re-reads where she is instead of keeping the last copy. While the
+  place is on order she stays in the scene she is in — the "two replies
+  about nowhere and she goes home" rule is suspended, because a wait that
+  changes the picture twice is not a wait, and the new place should cut in
+  from the room the conversation was actually in. The user naming somewhere
+  else in the meantime cancels the order; the builder giving up ends it.
+- **A tag naming where she already is means "still here".** Repeats used to
+  count as replies about nowhere, so she was sent home two replies into a
+  conversation about the leaves. Believed six times, not forever: a small
+  local brain repeats its last tag until the history scrolls away, and "she
+  went to the beach once and lived there" is the bug this file has been
+  fixed for more often than any other.
+- **The talk clip no longer depends on mood folders existing.** The state
+  hook only re-picked when there were groups, so a setup with scenes alone
+  would wait silently through every answer.
+- **Every clip loops without a seam, whoever made it.** A generated clip
+  ends somewhere other than where it began, and played end to start that is
+  a jump cut every four seconds. The first eight scenes had the seam
+  dissolved into the file by ffmpeg; a place she builds for herself has been
+  through no such thing, and the app has no ffmpeg to give it one. So the
+  seam became the player's job: two players take turns, and half a second
+  before one runs out the other starts from the top and fades in over it.
+- **`companion_open`** shows the panel in companion mode from a tool. It is
+  how she gets asked for by voice from another surface, and how a scene
+  change gets looked at from outside at all — the day's bug hid for as long
+  as it did partly because nothing but a person at the keyboard could put
+  her on screen. Verified with it: nine moves, nine right pictures,
+  including a forest ordered by a reply tag at 08:53 that she was standing
+  in at 08:55.
+- **The diagnostics log what was shown**, one entry per change with the
+  time, instead of every ask — the microphone opening and closing filled
+  twelve slots with `idle/listening` and said nothing about whether she had
+  ever been seen talking. `character_go` also prints the exact line she
+  will be told this turn.
+
+### Added — the 3D companion stands in her places
+
+Everything the filmed companion has — places, automatic switching, places
+built on demand — now works for the 3D one, and one part of it works much
+better.
+
+- **A place has an empty plate.** Every clip and still has the generated
+  woman in it, and a 3D character in front of those is two people. The edit
+  model takes her out of a scene's own still in about eleven seconds and
+  leaves the *same* kitchen — the window, the mugs, the light — as
+  `plate.png`. Because the stills were waist-up portraits, what is left is a
+  background at portrait distance and slightly out of focus: what a camera
+  would see behind somebody standing there. The first time the 3D companion
+  is on stage, plates are made for every place that predates her, one at a
+  time, and the room behind her empties while you watch.
+- **She is framed the way the plate was shot.** The stage framed the whole
+  figure, which suits a desktop and turns a scene into a doll held up to a
+  postcard. In a place she is cropped waist-up, where the photograph was.
+- **She is lit by the place.** Swift reads the plate down to eight columns by
+  four rows — average colour, brightness, which half is brighter — and the
+  stage tints its lights with the hue, moves their strength with the
+  brightness inside the range where a toon material still reads, and swings
+  the key light to the side the window is on. Orange and side-lit at the
+  beach, dim and warm at the night market, green in the forest.
+- **A new place takes twenty-four seconds instead of four minutes.** The 3D
+  companion needs nothing filmed: one edit for the still, one for the plate.
+  Measured from a reply tagged `library`, a place that did not exist, to her
+  standing in it. A place is now "usable" per companion — clips for the
+  filmed one, a plate for the 3D one — and whichever half is missing is what
+  gets ordered, so a place made in one mode completes itself the first time
+  it is wanted in the other.
+
+### Added — she walks around in her places, and plays
+
+Standing waist-up in front of a plate is a portrait. The plate is what is
+left of a portrait, too: a camera a metre and a half from where she stood,
+and no floor anywhere in the frame. There is nowhere in it to walk.
+
+- **A wide plate.** The edit model pulls the camera back from a place's
+  plate — eye level, horizon across the middle, floor filling the lower half
+  and running away from the lens — in about eleven seconds: the same kitchen
+  from the doorway, the park path to its vanishing point. Made for every
+  place the first time the 3D companion is on stage, and as the third step
+  of a new one (still, plate, wide: about thirty-five seconds).
+- **One fixed camera, and she is what moves.** It sits where the portrait
+  camera would, so at the mark she is waist up exactly as before, and
+  walking away she shrinks into the place with her feet on its floor —
+  talking and wandering are one continuous shot. 40° rather than 30°,
+  because a place photographed at 24mm and a figure rendered at 50mm do not
+  share a floor. A soft shadow under her feet does the rest of the
+  grounding, and thins when she jumps.
+- **A stride as long as her legs.** The walk is bones on sines, like the
+  dance, but its cadence comes from the distance covered rather than the
+  clock — so the feet stay where they were put instead of skating over the
+  floor of a photograph. She turns before she sets off. VRM 0.x and 1.0
+  rigs swing a leg forward with opposite signs; both are handled.
+- **Seven things to do**: wave, stretch, spin, jump, crouch to pick something
+  up, look around with a hand against the light, dance.
+- **Left alone, she lives there.** Nobody talking to her: she wanders, mostly
+  the near half of the place — far away she is a dot, and a companion who
+  spends the evening as a dot is not company — and plays where she ends up.
+  A voice, or an answer on the way, and she walks back up to the lens; seven
+  seconds after the exchange ends she is free again. It is the filmed
+  companion's wait/talk rhythm, walked instead of cut. "A voice" is the
+  recorder's own speech detection, newly published: an open microphone is
+  open all evening, and the raw level sits above any fixed threshold in a
+  room with a refrigerator in it.
+- **Focus follows her.** The page draws the wide plate itself, because only
+  it knows where she is: sharp around her out in the place, soft behind her
+  at the lens, as for a camera focused a metre off.
+- **How deep she may go depends on the place.** Out of doors — by the
+  place's own words — down the path until she is small; indoors not past
+  the back wall, or she is a small woman standing inside the cupboards. A
+  place not recognised is a room.
+- **`avatar_move` takes `walk` and `play`**, so "过来", "去那边看看" and
+  "跳一下" are things she can be asked. A commanded move holds for a few
+  seconds against the next sound in the room calling her back.
+- **The hips bone rests at hip height, not at zero.** Every bounce and
+  crouch is an offset from there; written straight into `position.y`, a
+  two-centimetre bob puts her waist on the floor. The dance had the same
+  flaw from the day before.
+- `prepareStage` links her scenes and the animation module into the served
+  folder, and now only ever replaces links of its own — whatever else is
+  sitting under one of those names is left where it is.
+
+### Fixed — the 3D companion never loaded at launch
+
+- **The stage was declared ready before it existed.** The page is an ES
+  module with a megabyte of imports, and `didFinish` can arrive before it
+  reaches the line that publishes `window.kin`. Every call from Swift is
+  guarded with `window.kin &&`, so the load did nothing and said nothing —
+  this side recorded her as wearing Vivi on a page that had never been asked
+  to load anybody. Ready now means `window.kin.load` is a function, polled
+  for; `avatar_stage` reports this side of the bridge as well, because from
+  the page alone "never asked" and "slow load" look the same.
+- **The switch to 3D was swallowed by the anti-slideshow hold.** The stage
+  server comes up a fraction of a second after the view's first pick, and
+  the second pick fell inside the four-second hold, leaving the filmed clip
+  behind the 3D figure until something else changed.
+
 ### Fixed — a half-made digital human took the screen with it
 
 - **A look needs both its files.** `AvatarStage` listed any folder with
@@ -386,8 +596,8 @@ modelling job.
 
 Not yet: an idle animation. She stands in a relaxed pose the stage poses her
 into, which beats the T-pose a VRM arrives in but is not Desktop Mate's sway.
-VRM animation files (`.vrma`) are the next step, along with the transparent
-always-on-top window that would put her on the desktop rather than in a panel.
+VRM animation files (`.vrma`) and the transparent always-on-top window that
+puts her on the desktop rather than in a panel both followed — see above.
 
 ### Added — the agent can open a page and read your terminal
 
