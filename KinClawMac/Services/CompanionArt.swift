@@ -92,6 +92,29 @@ final class CompanionArt: ObservableObject {
     /// The same, for wherever the art currently lives.
     static var folderTrouble: String? { unreachableVolume(folder) }
 
+    /// How many pictures and clips are on disk, without a view.
+    ///
+    /// The published `count` belongs to whoever is showing them; a tool that
+    /// answers "how many does she have" should not need one to exist.
+    static func countOnDisk() -> Int {
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: folder.path) else { return 0 }
+        var total = 0
+        for n in names where !n.hasPrefix(".") {
+            let url = folder.appendingPathComponent(n)
+            var isDir: ObjCBool = false
+            fm.fileExists(atPath: url.path, isDirectory: &isDir)
+            if isDir.boolValue {
+                guard groupKey(for: n) != nil,
+                      let inner = try? fm.contentsOfDirectory(atPath: url.path) else { continue }
+                total += inner.filter { !$0.hasPrefix(".") && isMedia(url.appendingPathComponent($0)) }.count
+            } else if isMedia(url) {
+                total += 1
+            }
+        }
+        return total
+    }
+
     static var defaultFolder: URL {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".kinclaw/companion")
     }

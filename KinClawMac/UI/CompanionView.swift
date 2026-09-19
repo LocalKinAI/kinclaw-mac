@@ -702,6 +702,10 @@ struct CompanionArtPicker: View {
     /// Making a picture rather than finding one.
     @ObservedObject private var diffuser = DiffuserClient.shared
     @State private var drawPrompt = ""
+    /// Her: the description, and what to put her in next.
+    @ObservedObject private var her = CompanionCharacter.shared
+    @State private var lookText = ""
+    @State private var sceneText = ""
     @State private var drawNote: String?
     @State private var drawn: URL?
     @AppStorage(DiffuserClient.hostKey) private var diffuserHost = DiffuserClient.defaultHost
@@ -774,6 +778,9 @@ struct CompanionArtPicker: View {
             }
 
             Divider().opacity(0.2)
+            herRow
+
+            Divider().opacity(0.2)
             makeRow
 
             Divider().opacity(0.2)
@@ -791,6 +798,11 @@ struct CompanionArtPicker: View {
         .padding(14)
         .frame(width: 380)
         .onAppear { art.reload() }
+        // The library grows in the background, a picture a minute; the picker
+        // should show that happening rather than a count from when it opened.
+        .onReceive(NotificationCenter.default.publisher(for: .kinclawCompanionArtGrew)) { _ in
+            art.reload()
+        }
     }
 
     private func thumb(_ c: CompanionArt.Candidate) -> some View {
@@ -825,6 +837,100 @@ struct CompanionArtPicker: View {
         }
         .buttonStyle(.plain)
         .help("\(c.title)\n\(c.credit)")
+    }
+
+    /// One woman, kept the same across every picture.
+    ///
+    /// Candidates are cheap (15s each) and the choice is permanent-ish, so
+    /// the strip is the important part of this panel: it is the only moment
+    /// anybody decides what she looks like. Everything after it is an edit of
+    /// the one picture that gets adopted.
+    @ViewBuilder
+    private var herRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "person.crop.square.badge.camera")
+                    .font(.system(size: 10)).foregroundColor(.pink)
+                Text("她是谁").font(.system(size: 11, weight: .medium))
+                if let anchor = her.anchorURL,
+                   let image = NSImage(contentsOf: anchor) {
+                    Image(nsImage: image)
+                        .resizable().scaledToFill()
+                        .frame(width: 26, height: 26)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                        .help("锚图：\(anchor.path)")
+                }
+                Spacer()
+                TextField("名字", text: Binding(
+                    get: { her.sheet.name },
+                    set: { her.rename($0) }))
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 10))
+                    .frame(width: 70)
+            }
+            HStack(spacing: 6) {
+                TextField("长什么样（英文）：mid-20s, long dark hair, soft features…",
+                          text: $lookText)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 10))
+                Button(her.busy ? "忙…" : "画候选") {
+                    her.makeCandidates(look: lookText.isEmpty ? her.sheet.look : lookText)
+                }
+                .controlSize(.small)
+                .disabled(her.busy || (lookText.isEmpty && her.sheet.look.isEmpty))
+            }
+            if !her.candidates.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(her.candidates, id: \.path) { url in
+                            if let image = NSImage(contentsOf: url) {
+                                Button { her.adopt(url) } label: {
+                                    Image(nsImage: image)
+                                        .resizable().scaledToFill()
+                                        .frame(width: 54, height: 54)
+                                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                                        .overlay(RoundedRectangle(cornerRadius: 5)
+                                            .stroke(her.anchorURL?.lastPathComponent == url.lastPathComponent
+                                                    ? Color.pink : Color.clear, lineWidth: 2))
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(her.busy)
+                                .help("点它定妆：过一次编辑，之后每张都是这张脸")
+                            }
+                        }
+                    }
+                }
+                .frame(height: 58)
+            }
+            if her.sheet.isReady {
+                HStack(spacing: 6) {
+                    TextField("换个场景（英文指令）：she is in a sunny kitchen…", text: $sceneText)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 10))
+                        .onSubmit { putHer() }
+                    Button("出场景") { putHer() }
+                        .controlSize(.small)
+                        .disabled(sceneText.trimmingCharacters(in: .whitespaces).isEmpty)
+                    Button("长一天") { her.growLibrary() }
+                        .controlSize(.small)
+                        .disabled(her.busy)
+                        .help("按八个生活场景各出一张，填进对应情绪的文件夹（一张一分钟上下）")
+                }
+            }
+            if let note = her.note {
+                Text(note)
+                    .font(.system(size: 10))
+                    .foregroundColor(note.contains("失败") || note.contains("先") ? .orange : .secondary)
+                    .lineLimit(2).truncationMode(.middle)
+            }
+        }
+    }
+
+    private func putHer() {
+        let instruction = sceneText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !instruction.isEmpty else { return }
+        let mood = group
+        Task { _ = await her.scene(instruction, mood: mood.isEmpty ? nil : mood) }
     }
 
     /// Make one instead of finding one.

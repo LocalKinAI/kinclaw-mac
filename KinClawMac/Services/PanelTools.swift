@@ -142,6 +142,77 @@ enum PanelTools {
             ],
         ],
         [
+            "name": "character_show",
+            "description": """
+                Who the companion is: her name, the description she was drawn \
+                from, whether an anchor portrait exists yet, and how many \
+                pictures she has. Read this before drawing her, so a scene is \
+                an edit of the same woman rather than a new stranger.
+                """,
+            "inputSchema": ["type": "object", "properties": [:]],
+        ],
+        [
+            "name": "character_new",
+            "description": """
+                Draw candidate portraits of a new companion from one \
+                description, each with a different seed, on the text-to-image \
+                server. About 15 seconds each. Nothing is adopted yet — the \
+                answer lists the candidates, and character_adopt picks one. \
+                Use this only when asked for a new companion or a different \
+                look; changing scene or clothes is character_scene.
+                """,
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "look": ["type": "string",
+                             "description": "What she looks like, in English: age range, hair, build, the way she dresses. One sentence. An adult, fictional person — never a real or named individual."],
+                    "count": ["type": "integer", "description": "How many candidates (default 4, max 8)."],
+                ],
+                "required": ["look"],
+            ],
+        ],
+        [
+            "name": "character_adopt",
+            "description": """
+                Make one candidate the anchor: every later picture of her is \
+                an edit of it, which is what keeps her the same person. Takes \
+                one normalising pass through the edit server (about a minute) \
+                so the anchor is rendered by the model that will draw the \
+                scenes.
+                """,
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "index": ["type": "integer", "description": "Which candidate, 1-based, as character_show lists them."],
+                    "raw": ["type": "boolean", "description": "Skip the normalising pass (use when the edit server is down). Default false."],
+                ],
+                "required": ["index"],
+            ],
+        ],
+        [
+            "name": "character_scene",
+            "description": """
+                Put her somewhere else, or in something else: a kitchen in the \
+                morning, a red coat, a night market. This edits her anchor on \
+                the edit server, so it is the same woman — the instruction is \
+                what changes around her ("change her coat to a red one"), not \
+                a description of a person. About a minute. Optionally animates \
+                the result, which then runs as a background job.
+                """,
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "instruction": ["type": "string",
+                                    "description": "What to change, in English, as an instruction."],
+                    "mood": ["type": "string",
+                             "description": "File it under one of her moods (开心/温柔/好奇/困/担心) or states (idle/listening/thinking/speaking) so she shows it then."],
+                    "clip": ["type": "boolean", "description": "Also animate it (image-to-video, minutes). Default false."],
+                    "seconds": ["type": "number", "description": "Clip length if clip is true (default 4)."],
+                ],
+                "required": ["instruction"],
+            ],
+        ],
+        [
             "name": "video_status",
             "description": """
                 How the clips are coming along: what is still filming, what \
@@ -184,6 +255,10 @@ enum PanelTools {
         case "image_generate": return await draw(args)
         case "video_generate": return film(args)
         case "video_status": return (DiffuserClient.shared.videoReport, false)
+        case "character_show":   return (who(), false)
+        case "character_new":    return newCharacter(args)
+        case "character_adopt":  return adopt(args)
+        case "character_scene":  return await putHer(args)
         default:              return ("这个面板没有叫 \(name) 的工具", true)
         }
     }
@@ -298,14 +373,102 @@ enum PanelTools {
         // Ten seconds is the point past which a clip stops being a background
         // loop and starts being a wait.
         let seconds = min(max(args["seconds"] as? Double ?? 4, 1), 10)
+        // A source picture makes this image-to-video: the clip is that
+        // picture moving, rather than somebody new who matches the words.
+        var source: URL?
+        if let path = (args["image"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !path.isEmpty {
+            let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                return ("找不到要动起来的那张图：\(url.path)", true)
+            }
+            source = url
+        }
         let file = DiffuserClient.shared.startVideo(
             prompt: prompt, into: folder, seconds: seconds,
             width: args["width"] as? Int ?? 704,
             height: args["height"] as? Int ?? 480,
-            seed: args["seed"] as? Int
+            seed: args["seed"] as? Int, from: source
         )
         let where_ = mood.isEmpty ? "陪伴模式的图片池" : "「\(mood)」那一组"
         return ("开拍了，\(Int(seconds)) 秒的片子，几分钟后落在\(where_)：\(file.path)（用 video_status 看进度）", false)
+    }
+
+    // MARK: Who she is
+
+    private static func who() -> String {
+        let her = CompanionCharacter.shared
+        her.load()
+        var lines: [String] = []
+        let name = her.sheet.name.isEmpty ? "（还没名字）" : her.sheet.name
+        lines.append("名字：\(name)")
+        lines.append("外貌：\(her.sheet.look.isEmpty ? "（还没设定）" : her.sheet.look)")
+        if let anchor = her.anchorURL, FileManager.default.fileExists(atPath: anchor.path) {
+            lines.append("锚图：\(anchor.path) —— 每张都从这张编辑，所以是同一个人")
+        } else {
+            lines.append("锚图：还没有。先 character_new 画候选，再 character_adopt 定妆")
+        }
+        if !her.candidates.isEmpty {
+            lines.append("候选（character_adopt 用序号）：")
+            for (i, c) in her.candidates.enumerated() {
+                lines.append("  \(i + 1). \(c.lastPathComponent)")
+            }
+        }
+        lines.append("她现在有 \(CompanionArt.countOnDisk()) 张图/片")
+        // What the last operation said, because a caller that started one
+        // minutes ago has nowhere else to read it.
+        if her.busy { lines.append("正在忙：\(her.note ?? "…")") }
+        else if let note = her.note { lines.append("上一步：\(note)") }
+        lines.append("服务：画 \(DiffuserClient.host)｜改 \(DiffuserClient.editHost)｜拍 \(DiffuserClient.videoHost)")
+        if let trouble = CompanionArt.folderTrouble { lines.append("⚠︎ \(trouble)") }
+        return lines.joined(separator: "\n")
+    }
+
+    private static func newCharacter(_ args: [String: Any]) -> (String, Bool) {
+        guard let look = (args["look"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !look.isEmpty else {
+            return ("character_new 需要 look：一句英文的外貌描述", true)
+        }
+        let count = min(max(args["count"] as? Int ?? 4, 1), 8)
+        CompanionCharacter.shared.makeCandidates(look: look, count: count)
+        return ("在画 \(count) 张候选，每张约 15 秒。画完用 character_show 看序号，character_adopt 定妆。", false)
+    }
+
+    private static func adopt(_ args: [String: Any]) -> (String, Bool) {
+        let her = CompanionCharacter.shared
+        her.load()
+        guard let index = args["index"] as? Int,
+              index >= 1, index <= her.candidates.count else {
+            return ("序号超出范围：现在有 \(her.candidates.count) 张候选", true)
+        }
+        let candidate = her.candidates[index - 1]
+        if args["raw"] as? Bool == true {
+            her.adoptRaw(candidate)
+            return ("用了第 \(index) 张当锚图（没过定妆）", false)
+        }
+        her.adopt(candidate)
+        return ("在定妆第 \(index) 张（一次编辑，约一分钟）。之后 character_scene 就都是她了。", false)
+    }
+
+    private static func putHer(_ args: [String: Any]) async -> (String, Bool) {
+        guard let instruction = (args["instruction"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines), !instruction.isEmpty else {
+            return ("character_scene 需要 instruction", true)
+        }
+        let mood = (args["mood"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let her = CompanionCharacter.shared
+        switch await her.scene(instruction, mood: mood) {
+        case .failure(let error):
+            return ("改不出来：\(error.localizedDescription)", true)
+        case .success(let file):
+            var answer = "有了：\(file.path)"
+            if args["clip"] as? Bool == true {
+                let seconds = min(max(args["seconds"] as? Double ?? 4, 1), 10)
+                let clip = her.clip(from: file, seconds: seconds, mood: mood)
+                answer += "\n还在把它拍成 \(Int(seconds)) 秒的片子（图生视频，所以还是她）：\(clip.path)（video_status 看进度）"
+            }
+            return (answer, false)
+        }
     }
 
     // MARK: Her clothes

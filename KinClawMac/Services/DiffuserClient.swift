@@ -27,6 +27,14 @@ final class DiffuserClient: ObservableObject {
     static let videoHostKey = "kinclaw.diffuser.video.host"
     static let defaultVideoHost = "http://192.168.0.21:8001"
 
+    /// And a third: editing an existing picture is a different model again.
+    /// Text-to-image models cannot do it at all — Boogu, Krea, ERNIE, Lens and
+    /// Ideogram ship only a txt2img path — so "her, but in a cafe" needs
+    /// FLUX.1-Kontext, which takes the picture as its input and keeps the face.
+    /// That is the whole trick behind a companion who stays the same person.
+    static let editHostKey = "kinclaw.diffuser.edit.host"
+    static let defaultEditHost = "http://192.168.0.21:8002"
+
     /// What the server says it has loaded, and whether it answered at all.
     struct Status: Equatable {
         var reachable = false
@@ -59,6 +67,111 @@ final class DiffuserClient: ObservableObject {
             UserDefaults.standard.set(
                 newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: videoHostKey)
         }
+    }
+
+    static var editHost: String {
+        get {
+            let stored = UserDefaults.standard.string(forKey: editHostKey) ?? ""
+            return stored.isEmpty ? defaultEditHost : stored
+        }
+        set {
+            UserDefaults.standard.set(
+                newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: editHostKey)
+        }
+    }
+
+    // MARK: - Multipart
+
+    /// One multipart body. Text parts and file parts, in the order given.
+    ///
+    /// Written out by hand because URLSession has no multipart of its own and
+    /// the alternative is a dependency for forty lines.
+    private static func multipart(fields: [String: String],
+                                  files: [(name: String, url: URL)]) throws -> (String, Data) {
+        let boundary = "kinclaw-\(UUID().uuidString)"
+        var body = Data()
+        for (name, value) in fields {
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n"
+                .data(using: .utf8)!)
+            body.append("\(value)\r\n".data(using: .utf8)!)
+        }
+        for file in files {
+            let data = try Data(contentsOf: file.url)
+            let type = file.url.pathExtension.lowercased() == "png" ? "image/png" : "image/jpeg"
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("""
+                Content-Disposition: form-data; name="\(file.name)"; \
+                filename="\(file.url.lastPathComponent)"\r\n\
+                Content-Type: \(type)\r\n\r\n
+                """.data(using: .utf8)!)
+            body.append(data)
+            body.append("\r\n".data(using: .utf8)!)
+        }
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+        return (boundary, body)
+    }
+
+    // MARK: - Changing one
+
+    /// Edit `source` by instruction and write the result into `folder`.
+    ///
+    /// This is the same person in a different place, wearing something else,
+    /// at another time of day — which is a different operation from drawing a
+    /// person who matches a description, and the reason a companion made of
+    /// text-to-image calls is a different woman in every picture.
+    ///
+    /// Kontext wants an instruction rather than a caption: "change her coat to
+    /// a red one", not "a woman in a red coat".
+    @discardableResult
+    func edit(prompt: String, from source: URL, into folder: URL,
+              steps: Int? = nil, guidance: Double? = nil, seed: Int? = nil,
+              timeout: TimeInterval = 900) async throws -> URL {
+        guard let url = Self.url("api/generate/img2img", on: Self.editHost) else {
+            throw Failure.message("改图服务地址不对：\(Self.editHost)")
+        }
+        let cleaned = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { throw Failure.message("要改成什么样？指令是空的") }
+        guard FileManager.default.fileExists(atPath: source.path) else {
+            throw Failure.message("找不到要改的那张图：\(source.path)")
+        }
+        if let trouble = CompanionArt.unreachableVolume(folder) {
+            throw Failure.message("改好了，但存不下：" + trouble)
+        }
+
+        busy = true
+        defer { busy = false }
+
+        var fields = ["prompt": cleaned]
+        if let steps { fields["num_inference_steps"] = String(steps) }
+        if let guidance { fields["guidance_scale"] = String(guidance) }
+        if let seed { fields["seed"] = String(seed) }
+        let (boundary, body) = try Self.multipart(fields: fields,
+                                                  files: [(name: "image", url: source)])
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = timeout
+        request.setValue("multipart/form-data; boundary=\(boundary)",
+                         forHTTPHeaderField: "Content-Type")
+        request.httpBody = body
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard code == 200 else {
+            throw Failure.message("改图失败（HTTP \(code)）：\(Self.editHost)")
+        }
+        guard data.count > 20_000, NSImage(data: data) != nil else {
+            throw Failure.message("改图服务返回的不是一张正常的图（\(data.count) 字节），看它的日志")
+        }
+
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let file = folder.appendingPathComponent(Self.fileName(for: cleaned))
+        try data.write(to: file)
+        try? cleaned.write(to: file.appendingPathExtension("txt"),
+                           atomically: true, encoding: .utf8)
+        lastImage = file
+        return file
     }
 
     private static func url(_ path: String, on base: String? = nil) -> URL? {
@@ -174,12 +287,12 @@ final class DiffuserClient: ObservableObject {
     @discardableResult
     func generateVideo(prompt: String, into folder: URL, seconds: Double = 4,
                        width: Int = 704, height: Int = 480,
-                       seed: Int? = nil, mode: String? = nil,
+                       seed: Int? = nil, mode: String? = nil, from image: URL? = nil,
                        timeout: TimeInterval = 1800) async throws -> URL {
         let name = Self.fileName(for: prompt).replacingOccurrences(of: ".png", with: ".mp4")
         return try await generateVideo(prompt: prompt, to: folder.appendingPathComponent(name),
                                        seconds: seconds, width: width, height: height,
-                                       seed: seed, mode: mode, timeout: timeout)
+                                       seed: seed, mode: mode, from: image, timeout: timeout)
     }
 
     /// The same, into a file whose name the caller already knows — which is
@@ -187,7 +300,7 @@ final class DiffuserClient: ObservableObject {
     @discardableResult
     func generateVideo(prompt: String, to file: URL, seconds: Double = 4,
                        width: Int = 704, height: Int = 480,
-                       seed: Int? = nil, mode: String? = nil,
+                       seed: Int? = nil, mode: String? = nil, from image: URL? = nil,
                        timeout: TimeInterval = 1800) async throws -> URL {
         guard let url = Self.url("api/generate/video", on: Self.videoHost) else {
             throw Failure.message("视频服务地址不对：\(Self.videoHost)")
@@ -199,24 +312,23 @@ final class DiffuserClient: ObservableObject {
         // what says so. Blocking the picture button that long would be a
         // worse lie than no spinner at all.
 
-        // Multipart because the endpoint also takes a reference image and an
-        // audio track; neither is sent here, and the parts are all text.
+        // An image turns this into image-to-video, which is the only way a
+        // clip is the same person as the picture: LTX animates what it is
+        // given rather than inventing someone who matches the words.
         var fields: [String: String] = [
             "prompt": cleaned, "seconds": String(seconds),
             "width": String(width), "height": String(height),
         ]
         if let seed { fields["seed"] = String(seed) }
         if let mode { fields["mode"] = mode }
-
-        let boundary = "kinclaw-\(UUID().uuidString)"
-        var body = Data()
-        for (name, value) in fields {
-            body.append("--\(boundary)\r\n".data(using: .utf8)!)
-            body.append("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n"
-                .data(using: .utf8)!)
-            body.append("\(value)\r\n".data(using: .utf8)!)
+        var files: [(name: String, url: URL)] = []
+        if let image {
+            guard FileManager.default.fileExists(atPath: image.path) else {
+                throw Failure.message("找不到要动起来的那张图：\(image.path)")
+            }
+            files.append((name: "image", url: image))
         }
-        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+        let (boundary, body) = try Self.multipart(fields: fields, files: files)
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -287,7 +399,7 @@ final class DiffuserClient: ObservableObject {
     @discardableResult
     func startVideo(prompt: String, into folder: URL, seconds: Double = 4,
                     width: Int = 704, height: Int = 480,
-                    seed: Int? = nil, mode: String? = nil) -> URL {
+                    seed: Int? = nil, mode: String? = nil, from image: URL? = nil) -> URL {
         let cleaned = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         let name = Self.fileName(for: cleaned).replacingOccurrences(of: ".png", with: ".mp4")
         let file = folder.appendingPathComponent(name)
@@ -298,7 +410,7 @@ final class DiffuserClient: ObservableObject {
             do {
                 _ = try await generateVideo(prompt: cleaned, to: file, seconds: seconds,
                                             width: width, height: height,
-                                            seed: seed, mode: mode)
+                                            seed: seed, mode: mode, from: image)
                 finish(file, error: nil)
             } catch {
                 finish(file, error: error.localizedDescription)

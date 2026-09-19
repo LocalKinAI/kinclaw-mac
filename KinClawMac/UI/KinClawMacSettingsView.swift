@@ -313,6 +313,13 @@ private struct BackendSettingsTab: View {
     @AppStorage(OllamaCatalog.hostKey) private var ollamaHost = ""
     @AppStorage(CompanionArt.folderKey) private var companionFolder = ""
     @AppStorage(CompanionArt.pexelsKeyKey) private var pexelsKey = ""
+    /// Three addresses because OllamaDiffuser serves one model per process,
+    /// and the three things she needs are three models: draw her (a
+    /// text-to-image turbo), change her (an instruction editor, which is the
+    /// only way she stays the same person), film her (LTX-2).
+    @AppStorage(DiffuserClient.hostKey) private var diffuserHost = ""
+    @AppStorage(DiffuserClient.editHostKey) private var diffuserEditHost = ""
+    @AppStorage(DiffuserClient.videoHostKey) private var diffuserVideoHost = ""
 
     // Kincode (Code mode kernel — Stage 1 / 5).
     @AppStorage("kinclaw.kincode.autostart") private var kincodeAutostart = true
@@ -496,6 +503,19 @@ private struct BackendSettingsTab: View {
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: 260)
                 }
+                SettingsRow(label: "Draw") {
+                    TextField(DiffuserClient.defaultHost, text: $diffuserHost)
+                        .textFieldStyle(.roundedBorder).frame(maxWidth: 260)
+                }
+                SettingsRow(label: "Change") {
+                    TextField(DiffuserClient.defaultEditHost, text: $diffuserEditHost)
+                        .textFieldStyle(.roundedBorder).frame(maxWidth: 260)
+                }
+                SettingsRow(label: "Film") {
+                    TextField(DiffuserClient.defaultVideoHost, text: $diffuserVideoHost)
+                        .textFieldStyle(.roundedBorder).frame(maxWidth: 260)
+                }
+                SettingsCaption("Three OllamaDiffuser servers, because one process serves one model: a turbo text-to-image to draw her (~15s), FLUX.1-Kontext to change her scene or clothes while keeping her face, and LTX-2 to film her (~20s per second of video). Empty means the defaults above.")
                 SettingsCaption("⇧⌘M turns the panel into a picture and a voice. Art comes from this folder: files at the top level rotate; subfolders named idle / listening / thinking / speaking, or 开心 / 温柔 / 好奇 / 困 / 担心, are used when the companion is in that state or mood (every reply carries one). Short mp4 / mov loops work anywhere a picture does. \"Go get a few\" inside companion mode searches Wikimedia Commons, which needs no account; a free key from pexels.com/api swaps in a better-looking source.")
             }
 

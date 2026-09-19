@@ -353,4 +353,8 @@ extension Notification.Name {
     /// Posted by the menubar item so companion mode can be entered from
     /// outside the SwiftUI tree that owns its state.
     static let kinclawEnterCompanion = Notification.Name("kinclaw.enterCompanion")
+    /// Her art folder gained a picture or a clip. Posted by the generators,
+    /// which fill it over minutes in the background — without this the
+    /// companion keeps showing what was there when she opened.
+    static let kinclawCompanionArtGrew = Notification.Name("kinclaw.companionArtGrew")
 }

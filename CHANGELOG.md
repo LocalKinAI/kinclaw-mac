@@ -141,6 +141,60 @@ one.
   is a real image of a plausible size, and says to read the server's log
   rather than writing a broken PNG into her folder.
 
+### Added — she is one person, not a new one in every picture
+
+A companion built out of text-to-image calls is a different woman each
+time: the same prompt and the same seed drift the moment the scene
+changes, and a four-step turbo model drifts hardest. So her identity
+does not live in the prompt any more. It lives in one file.
+
+- **An anchor portrait, and everything else is an edit of it.** Draw
+  candidates from one description (~15s each, cheap enough to be picky),
+  adopt one, and from then on "her in a kitchen" and "her in a red coat"
+  are *instruction edits* of that picture. Identity comes from the input
+  image, which is the only thing that actually holds it.
+- **Three models, three jobs**, because a text-to-image model cannot
+  edit at all — Boogu, Krea, ERNIE, Lens and Ideogram ship only a
+  txt2img path in mflux. Measured end to end on the box: a turbo model
+  draws her (**14s**), FLUX.2 klein 4B changes her scene or clothes
+  while keeping her face (**10–22s**), LTX-2 films her (**83s** for four
+  seconds). Three addresses in Settings, because OllamaDiffuser serves
+  one model per process. FLUX.1-Kontext does the same editing job at
+  181s from twice the download, which is why klein won.
+- **A normalising pass when a candidate is adopted.** Without it the
+  anchor is one model's rendering and every scene is another's, so her
+  skin and the light change between pictures even though her face does
+  not. The candidate goes through the editor once — "same woman, neutral
+  background" — and *that* is the anchor. 20s.
+- **Her scenes use a seed made from the instruction**, not a random one.
+  The same request gives the same picture — "her in the kitchen" is a
+  thing she has, not a dice roll — and big random seeds are where an
+  editor was caught returning undenoised latents: FLUX.1-Kontext int8
+  drew the portrait at seed 1234 and coloured static at 473366517, same
+  weights and prompt.
+- **A day, in two minutes.** 「长一天」 fills the mood folders with eight
+  ordinary scenes; measured, eight edits took **130s**.
+- **Clips are image-to-video**, from a scene picture rather than from
+  words, so the person who moves is the person in the picture.
+  `video_generate` takes an `image` path for this, and the clip lands in
+  the same mood folder — where an mp4 is already a moving background.
+- **「长一天」** fills the mood folders with eight ordinary scenes —
+  morning kitchen, autumn park, rainy window, a bus stop in the rain —
+  each filed under the mood it belongs to, so the companion's existing
+  matcher shows the right one when the conversation turns that way.
+- **Four more panel tools** (`character_show`, `character_new`,
+  `character_adopt`, `character_scene`), so the agent can introduce her,
+  dress her and film her without being handed a picker.
+- **Her sheet and anchor live in the art folder** under a dot-prefixed
+  name: the rotation skips it, and pointing the folder at an external
+  disk takes her with it.
+
+Real-time generation is not on the table and the design says so: 15s a
+picture and ~20s per second of video. What works instead is a library
+that grows in the background and a conversation that *picks* from it
+instantly, with a generation queued only for something she has never
+been asked for before.
+
 ### Added — and she films her own backgrounds
 
 An mp4 in her art folder has been a moving background since the Pexels
