@@ -141,6 +141,66 @@ one.
   is a real image of a plausible size, and says to read the server's log
   rather than writing a broken PNG into her folder.
 
+### Added — she lives in scenes, and the scene stays put while she talks
+
+The flat mood folders answer "what fits this feeling", which is right for
+photographs and wrong for a person: waiting in a kitchen and answering
+from a night market is two different evenings. A scene holds both clips
+in one place, so between them only her state changes.
+
+    <art folder>/scenes/<name>/
+        wait.mp4     she looks at you, smiling, waiting
+        talk.mp4     she speaks — same place, same clothes
+        still.png    the frame both were animated from
+        about.txt    words the conversation might use for this place
+
+- **She waits, she answers, she goes back to waiting** — all in one
+  place. Eight scenes came out of one anchor: kitchen (the main one),
+  beach, park, study, night market, sofa, bedroom, a bus stop in the
+  rain, sixteen seamless loops in all.
+- **The conversation moves her.** A reply's subject keyword against each
+  scene's own words; two replies that name nowhere and she goes home to
+  the main scene. Counted on the *transition* into speaking, not on
+  every call — the art is chosen again for each sentence's mood, and
+  counting those sent her home in the middle of answering.
+- **A place she has never been gets made while she waits in the one she
+  is in.** `wantScene` takes the subject, edits her anchor into that
+  place, films a waiting clip and a talking clip, and the scene simply
+  exists the next time the subject comes up — about three minutes. A
+  companion who blanks out while a picture renders is worse than one who
+  keeps talking to you in her kitchen.
+- **`character_show` says where she is and where she can be**, because a
+  companion who cannot answer "where are you" from her own tools will
+  make something up.
+
+### Fixed — a half-made digital human took the screen with it
+
+- **A look needs both its files.** `AvatarStage` listed any folder with
+  an `01.mp4`, which is what an interrupted preparation leaves behind —
+  and the mouth data is what the runtime reads, so the companion went
+  black and stayed there with her own pictures hidden behind the layer
+  that had failed.
+- **`RealLookMaker` had never once run to the end.** It handed the first
+  preparation script `root/data`, which makes `root/data/data`, where
+  the second script never looked. The ffmpeg check upstream of it had
+  been failing for longer, so nobody had reached the bug.
+- **Matting failure falls back instead of stopping.** It needs a torch
+  and a torchvision that agree plus `rvm_resnet50.pth`; without them the
+  first step dies on `torchvision::nms does not exist`, so it is tried
+  and then retried without.
+- **The four-hundred-key state-dict error is now one sentence.** DH_live's
+  published weights are a year older than its code — the reference
+  feature went from 6480 numbers to 80 at their 2.0 upgrade — so a look
+  you build yourself cannot be read by the shipped runtime. A look may
+  now carry its own `runtime/`, which is how the two generations sit
+  side by side.
+- **ffmpeg, found where it actually works.** A Homebrew ffmpeg can be
+  installed and still not run: this Mac's came from a third-party tap,
+  wants a libass that has moved on, and brew refuses to touch the tap at
+  all, so neither reinstall nor upgrade fixes it. The avatar service's
+  own venv gets a static build from `imageio-ffmpeg`, and that is looked
+  at first.
+
 ### Added — she is one person, not a new one in every picture
 
 A companion built out of text-to-image calls is a different woman each

@@ -38,7 +38,7 @@ final class RealLookMaker: ObservableObject {
 
     /// The avatar service's checkout — the same one AvatarStage draws the
     /// shipped looks from, one level up from its web assets.
-    static var repo: URL? {
+    nonisolated static var repo: URL? {
         AvatarStage.source?.deletingLastPathComponent().deletingLastPathComponent()
     }
 
@@ -46,7 +46,18 @@ final class RealLookMaker: ObservableObject {
     /// Homebrew in it — the same hole the Term tab fell down with `env: node`,
     /// and here it would be `ffmpeg: not found` inside somebody's Python.
     nonisolated static var searchPath: String {
-        AgentLauncher.childPath(for: "/opt/homebrew/bin/ffmpeg")
+        var places: [String] = []
+        // The avatar service's own venv first. A Homebrew ffmpeg can be
+        // installed and still not run — on this Mac it came from a
+        // third-party tap, wants a libass that has moved on, and brew now
+        // refuses to touch the tap at all, so neither reinstall nor upgrade
+        // fixes it. `pip install imageio-ffmpeg` in that venv puts a static
+        // build there that has no system libraries to lose.
+        if let repo = repo {
+            places.append(repo.appendingPathComponent(".venv/bin").path)
+        }
+        places.append(AgentLauncher.childPath(for: "/opt/homebrew/bin/ffmpeg"))
+        return places.joined(separator: ":")
     }
 
     /// Whether ffmpeg can run at all, as a sentence to show, or nil when it is
@@ -110,21 +121,41 @@ final class RealLookMaker: ObservableObject {
 
     private nonisolated static func run(repo: URL, video: URL, root: URL) async -> Outcome {
         let fm = FileManager.default
-        let data = root.appendingPathComponent("data")
-        try? fm.createDirectory(at: data, withIntermediateDirectories: true)
+        try? fm.createDirectory(at: root, withIntermediateDirectories: true)
         let python = python(in: repo)
 
-        // 1. Keypoints and a matted video. --matting removes the background,
-        //    which is the difference between a figure standing in the panel and
-        //    a rectangle of somebody's living room.
-        let step1 = shell(python, ["data_preparation_mini.py", video.path, data.path, "--matting"],
+        // Both scripts take the same folder: the first writes `data/` inside
+        // it, the second reads that and writes `assets/`. Handing the first
+        // one `root/data` made `root/data/data`, which the second could never
+        // find — so this path had never once run to the end.
+        //
+        // --matting removes the background, which is the difference between a
+        // figure standing in the panel and a rectangle of somebody's living
+        // room. It needs torch and torchvision that agree with each other and
+        // rvm_resnet50.pth; without them the first step dies on
+        // `torchvision::nms does not exist`, so it is attempted and then
+        // retried without.
+        var step1 = shell(python, ["data_preparation_mini.py", video.path, root.path, "--matting"],
                           cwd: repo)
+        if step1.code != 0, step1.output.contains("torchvision") || step1.output.contains("rvm") {
+            step1 = shell(python, ["data_preparation_mini.py", video.path, root.path], cwd: repo)
+        }
         guard step1.code == 0 else {
             return .failure("处理视频失败：" + tail(step1.output))
         }
         // 2. The web assets the page actually loads.
         let step2 = shell(python, ["data_preparation_web.py", root.path], cwd: repo)
         guard step2.code == 0 else {
+            // The one failure worth naming: the checkout's video-generation
+            // weights are older than its code, so the state dict does not fit
+            // the model and torch says so in four hundred key names. Measured
+            // on this Mac — checkpoint/DINet_mini/epoch_40_new.pth from April
+            // 2025 against upstream's May 2026 DINet_mini.
+            if step2.output.contains("state_dict") || step2.output.contains("Missing key") {
+                return .failure("数字人模型权重比代码旧，做不出新形象。"
+                    + "去 localkin-service-avatar 的 README 里那个网盘下载当前的 "
+                    + "epoch_40_new.pth，放进 checkpoint/DINet_mini/ 再来。")
+            }
             return .failure("生成网页资源失败：" + tail(step2.output))
         }
         let assets = root.appendingPathComponent("assets")

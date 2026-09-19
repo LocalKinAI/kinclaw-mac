@@ -41,8 +41,8 @@ enum AvatarStage {
     static var characters: [Character] {
         var out: [Character] = []
         if let src = source {
-            for (dir, name) in shipped where FileManager.default.fileExists(
-                atPath: src.appendingPathComponent(dir).appendingPathComponent("01.mp4").path) {
+            for (dir, name) in shipped
+            where isComplete(src.appendingPathComponent(dir)) {
                 out.append(Character(assets: src.appendingPathComponent(dir), name: name))
             }
         }
@@ -52,12 +52,42 @@ enum AvatarStage {
             // Either the folder is the assets itself, or it is a run of the
             // preparation scripts, whose output lands in `assets/`.
             for candidate in [folder.appendingPathComponent("assets"), folder]
-            where fm.fileExists(atPath: candidate.appendingPathComponent("01.mp4").path) {
+            where isComplete(candidate) {
                 out.append(Character(assets: candidate, name: folder.lastPathComponent))
                 break
             }
         }
         return out
+    }
+
+    /// A look needs both files, not just the video.
+    ///
+    /// `01.mp4` alone is what an interrupted preparation leaves behind — and
+    /// the mouth data is what the runtime actually reads, so a folder with
+    /// only the video loads a face that never renders: the companion goes
+    /// black and stays there, with her own pictures hidden behind the layer
+    /// that failed. Measured the hard way, on a preparation that stopped at
+    /// the last step.
+    /// The runtime a look brings with it, if it brought one.
+    ///
+    /// DH_live's data format changed with its 2.0 upgrade — the reference
+    /// feature went from 6480 numbers to 80 — and upstream publishes the 1.x
+    /// weights with the 2.0 runtime, so a look you build yourself can only be
+    /// 1.x and the shipped runtime cannot read it. A look that carries its own
+    /// `runtime/` is staged against that instead of against the service's, so
+    /// the two generations can sit side by side.
+    nonisolated static func runtime(beside assets: URL) -> URL? {
+        let folder = assets.lastPathComponent == "assets"
+            ? assets.deletingLastPathComponent() : assets
+        let runtime = folder.appendingPathComponent("runtime")
+        return FileManager.default.fileExists(
+            atPath: runtime.appendingPathComponent("DHLiveMini.wasm").path) ? runtime : nil
+    }
+
+    nonisolated static func isComplete(_ assets: URL) -> Bool {
+        let fm = FileManager.default
+        return fm.fileExists(atPath: assets.appendingPathComponent("01.mp4").path)
+            && fm.fileExists(atPath: assets.appendingPathComponent("combined_data.json.gz").path)
     }
 
     static let characterKey = "kinclaw.companion.avatar.character"
@@ -108,7 +138,7 @@ enum AvatarStage {
     /// Where the avatar service's web files are, if it is checked out
     /// next to the other repos. nil means the feature is unavailable —
     /// not an error, just a face we cannot draw.
-    static var source: URL? {
+    nonisolated static var source: URL? {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let candidates = [
             home.appendingPathComponent("Documents/Workspace/localkin-service-avatar/web_demo/static"),
@@ -130,7 +160,9 @@ enum AvatarStage {
     /// Returns nil when the avatar service is not present.
     @discardableResult
     static func prepare(_ character: Character? = nil) -> URL? {
-        guard let character = character ?? chosen, let src = source else { return nil }
+        guard let character = character ?? chosen else { return nil }
+        // Her own runtime if she has one, else the service's.
+        guard let src = runtime(beside: character.assets) ?? source else { return nil }
         let fm = FileManager.default
         let stage = stageDir
         try? fm.createDirectory(at: stage, withIntermediateDirectories: true)

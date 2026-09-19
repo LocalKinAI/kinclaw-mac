@@ -415,6 +415,16 @@ enum PanelTools {
             }
         }
         lines.append("她现在有 \(CompanionArt.countOnDisk()) 张图/片")
+        // Where she is, and where she can be. A companion that cannot answer
+        // "where are you" from her own tools will make something up.
+        let scenes = CompanionArt.scenesOnDisk()
+        if !scenes.isEmpty {
+            let main = UserDefaults.standard.string(forKey: CompanionArt.mainSceneKey) ?? ""
+            let named = scenes.map { $0 == main ? "\($0)（主场景）" : $0 }
+            lines.append("她的场景：" + named.joined(separator: "、"))
+            lines.append("聊到没有的地方，她会留在主场景，同时后台造那个场景（约三分钟）")
+        }
+        if let building = her.building { lines.append("正在造场景：\(building)") }
         // What the last operation said, because a caller that started one
         // minutes ago has nowhere else to read it.
         if her.busy { lines.append("正在忙：\(her.note ?? "…")") }

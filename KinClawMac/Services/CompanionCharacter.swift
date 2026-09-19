@@ -245,6 +245,67 @@ final class CompanionCharacter: ObservableObject {
         }
     }
 
+    // MARK: - Somewhere she has never been
+
+    /// The place being made, if one is.
+    @Published private(set) var building: String?
+    /// Subjects already attempted this session, so a topic that keeps coming
+    /// up does not queue the same three minutes of work again.
+    private var asked: Set<String> = []
+
+    /// Build a scene for a subject the conversation named and she has no
+    /// place for.
+    ///
+    /// Returns at once. The scene takes about three minutes — one edit for
+    /// the still, two clips for waiting and for talking — and until it lands
+    /// she stays where she was, which is the whole point: a companion who
+    /// blanks out while a picture renders is worse than one who keeps talking
+    /// to you in her kitchen. When it lands she is simply there the next time
+    /// the subject comes up.
+    func wantScene(_ subject: String) {
+        let name = subject.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard name.count >= 3, building == nil, !asked.contains(name),
+              let anchor = anchorURL else { return }
+        let folder = CompanionArt.folder.appendingPathComponent("scenes/\(name)")
+        guard !FileManager.default.fileExists(atPath: folder.path) else { return }
+        asked.insert(name)
+        building = name
+        note = "在给「\(name)」造场景…（三分钟上下，先在原地陪着你）"
+
+        Task { @MainActor in
+            defer { building = nil }
+            let client = DiffuserClient.shared
+            do {
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                // The subject arrives as one English word — the reply's tag
+                // rule asks for exactly that — so it is a place, not a caption.
+                let made = try await client.edit(
+                    prompt: "keep this exact woman, same face. put her in a real \(name) scene, "
+                          + "waist up, natural light. \(sheet.style)",
+                    from: anchor, into: folder, seed: Self.seed(for: name))
+                let still = folder.appendingPathComponent("still.png")
+                try? FileManager.default.removeItem(at: still)
+                try FileManager.default.moveItem(at: made, to: still)
+                try? name.write(to: folder.appendingPathComponent("about.txt"),
+                                atomically: true, encoding: .utf8)
+                for (role, motion) in [
+                    ("wait", "she looks at the camera, a soft smile, tiny natural movements"),
+                    ("talk", "she talks to the camera, speaking naturally, mouth moving, small gestures"),
+                ] {
+                    _ = try await client.generateVideo(
+                        prompt: motion, to: folder.appendingPathComponent("\(role).mp4"),
+                        seconds: 4, width: 704, height: 704, from: still)
+                    NotificationCenter.default.post(name: .kinclawCompanionArtGrew, object: nil)
+                }
+                note = "「\(name)」这个地方做好了"
+            } catch {
+                // Leave the folder: a half-made scene has no wait or talk clip,
+                // so the scanner ignores it and nothing shows a broken place.
+                note = "造不出「\(name)」：\(error.localizedDescription)"
+            }
+        }
+    }
+
     // MARK: - 4. Clips
 
     /// Animate one of her pictures. Image-to-video, so it is her that moves.

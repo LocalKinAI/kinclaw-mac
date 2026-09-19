@@ -120,23 +120,20 @@ struct CompanionView: View {
 
     var body: some View {
         ZStack {
-            if avatarBase == nil {
-                background
-                // A dark scrim keeps the halo and caption readable over
-                // a bright picture without hiding the picture.
-                LinearGradient(colors: [.black.opacity(0.15), .black.opacity(0.55)],
-                               startPoint: .top, endPoint: .bottom)
-                    .ignoresSafeArea()
-            } else {
-                // With a person on screen the photograph behind her is
-                // two subjects competing: a green-screened figure over
-                // a picture of somebody's dog reads as a collage, not
-                // as someone in a room. A quiet ground lets the face be
-                // the only thing there is to look at.
-                LinearGradient(colors: [Color(white: 0.10), Color(white: 0.04)],
-                               startPoint: .top, endPoint: .bottom)
-                    .ignoresSafeArea()
-            }
+            // The art is behind her either way now. It used to be a dark
+            // ground whenever a face was on screen, because a green-screened
+            // stranger over a picture of somebody's dog reads as a collage
+            // rather than as a person in a room. That stopped being true when
+            // the figure and the pictures became the same woman: her cut-out
+            // over her own kitchen is one scene, not two subjects competing.
+            background
+            LinearGradient(colors: avatarBase == nil
+                           ? [.black.opacity(0.15), .black.opacity(0.55)]
+                           // A little more scrim behind a figure, so the halo
+                           // and the caption stay readable against her.
+                           : [.black.opacity(0.25), .black.opacity(0.45)],
+                           startPoint: .top, endPoint: .bottom)
+                .ignoresSafeArea()
 
             // The living face, between the background and the controls.
             // Its own background is chroma-keyed away, so what shows

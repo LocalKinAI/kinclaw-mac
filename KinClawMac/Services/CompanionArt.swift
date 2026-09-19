@@ -115,6 +115,19 @@ final class CompanionArt: ObservableObject {
         return total
     }
 
+    /// The scenes on disk, without a view — the same list the tools answer
+    /// with, read straight from the folder.
+    static func scenesOnDisk() -> [String] {
+        let root = folder.appendingPathComponent("scenes")
+        let fm = FileManager.default
+        return ((try? fm.contentsOfDirectory(atPath: root.path)) ?? []).sorted().filter { name in
+            guard !name.hasPrefix(".") else { return false }
+            let dir = root.appendingPathComponent(name)
+            let files = (try? fm.contentsOfDirectory(atPath: dir.path)) ?? []
+            return files.contains { $0.lowercased().hasPrefix("wait") || $0.lowercased().hasPrefix("talk") }
+        }
+    }
+
     static var defaultFolder: URL {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".kinclaw/companion")
     }
@@ -205,6 +218,7 @@ final class CompanionArt: ObservableObject {
         groups = found
         pool = general
         indexKeywords()
+        loadScenes()
     }
 
     /// Words that describe each file. Split on the separators filenames
@@ -246,6 +260,118 @@ final class CompanionArt: ObservableObject {
         "happy", "gentle", "curious", "sleepy", "worried",
     ]
 
+    // MARK: - Scenes
+
+    /// A place she is in, with a clip for waiting and a clip for talking.
+    ///
+    /// The flat folders answer "what fits this mood", which is right for
+    /// photographs and wrong for a person: a reply that waits in a kitchen
+    /// and answers from a night market is two different evenings. A scene
+    /// holds both clips in one place, so between them only her state changes
+    /// — she is smiling at you, she speaks, she goes back to waiting — and
+    /// the place changes only when the conversation goes somewhere else.
+    ///
+    /// On disk:
+    ///
+    ///     <art folder>/scenes/<name>/
+    ///         wait.mp4     she looks at you, smiling, waiting
+    ///         talk.mp4     she speaks, same place, same clothes
+    ///         still.png    the frame both were animated from
+    ///         about.txt    words the conversation might use for this place
+    struct Scene: Equatable, Identifiable {
+        let name: String
+        let wait: URL?
+        let talk: URL?
+        let words: [String]
+        var id: String { name }
+
+        func clip(for state: String) -> URL? {
+            state == "speaking" ? (talk ?? wait) : (wait ?? talk)
+        }
+    }
+
+    /// Which scene she goes back to. Empty means the first one found.
+    static let mainSceneKey = "kinclaw.companion.scene.main"
+
+    @Published private(set) var scenes: [Scene] = []
+    /// The place she is in now.
+    @Published private(set) var scene: Scene?
+    /// Replies since the conversation last pointed at a place. Two of them
+    /// and she goes home: one reply that mentions nothing is normal in the
+    /// middle of a topic, three in a row means the topic moved on.
+    private var repliesAwayFromHome = 0
+    /// The state at the previous ask. A reply is one *transition* into
+    /// speaking, not every call made while she speaks — the art is chosen
+    /// again for each sentence's mood, and counting those would send her
+    /// home in the middle of answering.
+    private var lastAskedState = ""
+
+    var mainScene: Scene? {
+        let wanted = UserDefaults.standard.string(forKey: Self.mainSceneKey) ?? ""
+        return scenes.first { $0.name == wanted } ?? scenes.first
+    }
+
+    /// Scan `scenes/`. Called by reload, so it follows the art folder.
+    private func loadScenes() {
+        let fm = FileManager.default
+        let root = Self.folder.appendingPathComponent("scenes")
+        var found: [Scene] = []
+        for name in ((try? fm.contentsOfDirectory(atPath: root.path)) ?? []).sorted()
+        where !name.hasPrefix(".") {
+            let dir = root.appendingPathComponent(name)
+            var isDir: ObjCBool = false
+            fm.fileExists(atPath: dir.path, isDirectory: &isDir)
+            guard isDir.boolValue else { continue }
+            let files = (try? fm.contentsOfDirectory(atPath: dir.path)) ?? []
+            func find(_ stem: String) -> URL? {
+                files.first { $0.lowercased().hasPrefix(stem) && Self.isVideo(dir.appendingPathComponent($0)) }
+                    .map { dir.appendingPathComponent($0) }
+            }
+            let about = (try? String(contentsOf: dir.appendingPathComponent("about.txt"),
+                                     encoding: .utf8)) ?? ""
+            let words = (about + " " + name).lowercased()
+                .components(separatedBy: CharacterSet.alphanumerics.inverted)
+                .filter { $0.count >= 3 && !Self.stopWords.contains($0) }
+            let scene = Scene(name: name, wait: find("wait"), talk: find("talk"), words: words)
+            if scene.wait != nil || scene.talk != nil { found.append(scene) }
+        }
+        scenes = found
+        if scene == nil || !found.contains(where: { $0.name == scene?.name }) {
+            scene = mainScene
+        }
+    }
+
+    /// The clip for this moment, when she lives in scenes.
+    ///
+    /// The subject moves her: a reply about the sea goes to the sea if there
+    /// is a sea, and anything that names nowhere counts towards going home.
+    /// Nothing here picks at random — a place that changes on its own reads
+    /// as a slideshow, not as somebody's evening.
+    func sceneArt(for state: String, subject: String) -> URL? {
+        guard !scenes.isEmpty else { return nil }
+        let s = subject.trimmingCharacters(in: .whitespaces).lowercased()
+        let startedReplying = state == "speaking" && lastAskedState != "speaking"
+        lastAskedState = state
+        if s.count >= 3,
+           let match = scenes.first(where: { $0.words.contains(where: { $0.hasPrefix(s) || s.hasPrefix($0) }) }) {
+            if match.name != scene?.name { scene = match }
+            repliesAwayFromHome = 0
+        } else if startedReplying {
+            // A place she does not have is worth making, once, in the
+            // background — she waits where she is until it exists.
+            if s.count >= 3 {
+                Task { @MainActor in CompanionCharacter.shared.wantScene(s) }
+            }
+            // Counted per reply, and a reply is what "speaking" marks.
+            repliesAwayFromHome += 1
+            if repliesAwayFromHome >= 2, let home = mainScene, home.name != scene?.name {
+                scene = home
+                repliesAwayFromHome = 0
+            }
+        }
+        return (scene ?? mainScene)?.clip(for: state)
+    }
+
     /// True when any group has art beyond the rotating pool — the view
     /// then swaps on every state and mood change rather than on a timer.
     var hasGroups: Bool { !groups.isEmpty }
@@ -270,6 +396,9 @@ final class CompanionArt: ObservableObject {
     /// picking at random: a wrong picture claimed with confidence is
     /// worse than the one already there.
     func art(for state: String, mood: CompanionMood?, subject: String, fallback: URL?) -> URL? {
+        // Scenes win when she has any: staying in one place through a whole
+        // exchange is the difference between a companion and a slideshow.
+        if let inScene = sceneArt(for: state, subject: subject) { return inScene }
         if let m = bestMatch(for: subject, mood: mood) { return m }
         let stateArt = groups[state]?.randomElement()
         let moodArt = mood.flatMap { groups[$0.rawValue]?.randomElement() }
