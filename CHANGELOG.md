@@ -141,6 +141,41 @@ one.
   is a real image of a plausible size, and says to read the server's log
   rather than writing a broken PNG into her folder.
 
+### Added — the 3D face's mouth says what she is saying
+
+The stage opened one shape, `aa`, in proportion to the audio's level: a
+mouth flapping rather than a mouth speaking, identical on every sentence.
+A VRM face has five, and Kokoro hands over the whole clip before it
+plays, so the shapes are read off it once and played back alongside it.
+
+Formant bands rather than phonemes — 350–700 Hz where an open vowel puts
+its first formant, 800–1400 for a rounded one, 1900–3000 where a spread
+vowel puts its second — and the band that stands out **against its own
+average across the clip** picks the shape. That averaging is the whole
+trick: speech carries far more energy low down, so comparing the bands
+directly picks the low one nearly every time. On one 4.5s Kokoro line,
+225 frames:
+
+| | absolute | against its own average |
+|---|---|---|
+| `aa` | 55.6% | **28.0%** |
+| `oh` | 4.0% | **12.0%** |
+| `ee` | 1.3% | **12.0%** |
+| `ou` | 3.6% | **8.4%** |
+| `ih` | 4.0% | **8.0%** |
+| closed | 31.6% | 31.6% |
+
+The right column is a mouth that moves the way a mouth moves. A Goertzel
+at three probe frequencies, not an FFT — three numbers are wanted, not
+512 — and the Swift port was checked frame-for-frame against the
+prototype on the same clip: same counts, same string of shapes.
+
+The five morphs ease 0.35 of the way to their targets each frame, about
+40ms to settle, which is roughly how fast a mouth moves between vowels;
+slower reads as mush, faster as a puppet. Without a track the old
+amplitude path still runs, so a face with no clip to read is no worse off
+than before.
+
 ### Added — she lives in scenes, and the scene stays put while she talks
 
 The flat mood folders answer "what fits this feeling", which is right for

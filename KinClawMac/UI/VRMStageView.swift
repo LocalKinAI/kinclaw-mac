@@ -98,6 +98,12 @@ final class VRMWebView: NSView, WKNavigationDelegate {
         run("window.kin && window.kin.mouth(\(String(format: "%.3f", max(0, min(1, level)))))")
     }
 
+    /// One of the five VRM mouth shapes, from the track read off the audio.
+    func viseme(_ name: String, _ weight: Double) {
+        guard ready else { return }
+        run("window.kin && window.kin.viseme('\(name)',\(String(format: "%.3f", max(0, min(1, weight)))))")
+    }
+
     func talking(_ on: Bool) {
         guard ready else { return }
         run("window.kin && window.kin.talking(\(on))")
@@ -151,7 +157,51 @@ final class VRMStage: ObservableObject {
 
     func voice(level: Double, speaking: Bool) {
         web?.talking(speaking)
-        if speaking { web?.mouth(level) }
+        // The track wins while it is playing; the level is the fallback.
+        if speaking, ticker == nil { web?.mouth(level) }
+    }
+
+    // MARK: - Lip sync
+
+    private var ticker: Timer?
+    private var trackStarted = Date()
+    private var track: VisemeTrack?
+
+    /// A clip is about to be heard: read its mouth shapes and play them
+    /// alongside it.
+    ///
+    /// Alongside rather than from the player's clock, because the clip is
+    /// handed over as it starts and a 20ms grid does not need sample-accurate
+    /// alignment — what matters is that the shape changes when the sound
+    /// does, which a wall clock started at the same moment gives.
+    func speak(_ wav: Data) {
+        guard let built = VisemeTrack(wav: wav) else { return }
+        track = built
+        trackStarted = Date()
+        ticker?.invalidate()
+        ticker = Timer.scheduledTimer(withTimeInterval: VisemeTrack.hop, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.step() }
+        }
+    }
+
+    /// Stop feeding shapes — the page decays what is left, so a mouth caught
+    /// mid-vowel closes rather than sticking.
+    func stopSpeaking() {
+        ticker?.invalidate()
+        ticker = nil
+        track = nil
+        web?.viseme("", 0)
+    }
+
+    private func step() {
+        guard let track else { return }
+        let elapsed = Date().timeIntervalSince(trackStarted)
+        guard let frame = track.frame(at: elapsed) else {
+            // Past the end of this clip: the next one will restart the ticker.
+            stopSpeaking()
+            return
+        }
+        web?.viseme(frame.viseme, frame.weight)
     }
 
     /// Ask the stage how it is doing, for the panel's note and for tests.

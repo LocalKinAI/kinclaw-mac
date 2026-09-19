@@ -477,6 +477,13 @@ struct SpotlightContentView: View {
         companionMood = nil
         companionSubject = ""
         avatarServer.startIfWanted()
+        // The 3D face reads the mouth shapes off each clip before it plays.
+        // Wired on entry rather than on the stage's onReady, because the
+        // stage is kept alive between visits and only announces itself once.
+        if VRMServerBox.shared.base != nil || VRMWardrobe.isEnabled {
+            speaker.onClip = { data in Task { @MainActor in VRMStage.shared.speak(data) } }
+            speaker.onStopped = { Task { @MainActor in VRMStage.shared.stopSpeaking() } }
+        }
         withAnimation(.easeOut(duration: 0.25)) { companionMode = true }
         (NSApp.delegate as? AppDelegate)?.spotlightWindow.enterCompanion()
         extendWakeSession()

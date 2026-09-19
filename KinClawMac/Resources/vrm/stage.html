@@ -38,12 +38,17 @@ import * as THREE from 'three';
 import { GLTFLoader } from './loaders/GLTFLoader.js';
 import { VRMLoaderPlugin, VRMUtils } from './three-vrm.module.min.js';
 
+/// The five VRM standard mouth shapes, in the order a vowel chart puts them.
+const VISEMES = ['aa', 'ih', 'ou', 'ee', 'oh'];
+
 const state = {
   ready: false,
   model: '',
   error: '',
   expressions: [],
   mouth: 0,
+  visemes: { aa: 0, ih: 0, ou: 0, ee: 0, oh: 0 },
+  viseme: '',
   talking: false,
   expression: '',
   frames: 0,
@@ -177,6 +182,16 @@ const kin = {
     state.mouth = Math.max(0, Math.min(1, Number(level) || 0));
     return state.mouth;
   },
+  /// One of the five VRM mouth shapes — aa, ih, ou, ee, oh — read off the
+  /// audio before it plays. The amplitude-driven `mouth` above is the
+  /// fallback for when there is no track: one shape flapping, which is
+  /// better than a still face and worse than this.
+  viseme(name, weight = 1) {
+    const w = Math.max(0, Math.min(1, Number(weight) || 0));
+    for (const shape of VISEMES) state.visemes[shape] = shape === name ? w : 0;
+    state.viseme = name || '';
+    return state.viseme;
+  },
 
   talking(on) { state.talking = !!on; return state.talking; },
 
@@ -191,7 +206,8 @@ const kin = {
     return {
       ready: state.ready, model: state.model, error: state.error,
       expressions: state.expressions, expression: state.expression,
-      mouth: state.mouth, talking: state.talking, frames: state.frames,
+      mouth: state.mouth, viseme: state.viseme,
+      talking: state.talking, frames: state.frames,
       size: measure(),
     };
   },
@@ -226,12 +242,26 @@ function tick() {
       head.rotation.z = Math.sin(t * 0.29) * 0.02;
     }
 
-    // Talking: the level opens the mouth, and a little wobble on top keeps a
-    // steady level from looking like a held note.
-    const wobble = state.talking ? 0.12 + 0.1 * Math.sin(t * 11) : 0;
-    const open = Math.max(0, Math.min(1, state.mouth * 0.8 + wobble));
-    vrm.expressionManager?.setValue('aa', open);
-    state.mouth *= 0.86;
+    // Talking. With a viseme track the five shapes are driven straight and
+    // eased towards their targets — 0.35 a frame at 60fps is about 40ms to
+    // settle, which is roughly how fast a mouth moves between vowels. Any
+    // slower reads as mush, any faster as a puppet.
+    const tracked = Object.values(state.visemes).some((v) => v > 0.001);
+    if (tracked) {
+      for (const shape of VISEMES) {
+        const now = vrm.expressionManager?.getValue(shape) ?? 0;
+        const next = now + (state.visemes[shape] - now) * 0.35;
+        vrm.expressionManager?.setValue(shape, next);
+        state.visemes[shape] *= 0.93;   // decays if the track stops feeding
+      }
+    } else {
+      // No track: the old single shape, with a wobble so a steady level does
+      // not look like a held note.
+      const wobble = state.talking ? 0.12 + 0.1 * Math.sin(t * 11) : 0;
+      const open = Math.max(0, Math.min(1, state.mouth * 0.8 + wobble));
+      for (const shape of VISEMES) vrm.expressionManager?.setValue(shape, shape === 'aa' ? open : 0);
+      state.mouth *= 0.86;
+    }
 
     vrm.update(dt);
   }
