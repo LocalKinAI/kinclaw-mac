@@ -158,21 +158,96 @@ final class VRMWebView: NSView, WKNavigationDelegate {
         run("window.kin && window.kin.play('\(safe)')")
     }
 
+    func hold(_ name: String?) {
+        guard ready else { return }
+        let safe = (name ?? "").filter { $0.isLetter }
+        run("window.kin && window.kin.hold(\(safe.isEmpty ? "null" : "'\(safe)'"))")
+    }
+
+    func sit(_ how: String?) {
+        guard ready else { return }
+        let safe = (how ?? "").filter { $0.isLetter }
+        run("window.kin && window.kin.sit(\(safe.isEmpty ? "null" : "'\(safe)'"))")
+    }
+
+    /// Play a motion written in the pose language, and hand back what the
+    /// stage made of it: how long it runs, which sliders it used, and which
+    /// words it did not know.
+    func compose(json: String, done: @escaping ([String: Any]) -> Void) {
+        guard ready else { return done(["ok": false, "error": "3D 形象还没准备好"]) }
+        web.evaluateJavaScript("JSON.stringify(window.kin ? window.kin.compose(\(json)) : {ok:false,error:'no stage'})") { result, _ in
+            let text = (result as? String) ?? "{}"
+            done(((try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any]) ?? [:])
+        }
+    }
+
     // MARK: Driving her
 
     /// Put on a model by file name — it is served from the wardrobe folder
-    /// under `models/`.
+    /// under `models/` — and, if she has a repainted outfit remembered for
+    /// that model, that too, as soon as the model is in.
     func wear(_ file: String) {
         guard ready else { pendingModel = file; return }
         wearing = file
         let escaped = file.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? file
-        run("window.kin && window.kin.load('models/\(escaped)')")
+        let paints = VRMOutfits.remembered(for: file).map { VRMOutfits.paintsJSON(model: file, outfit: $0) } ?? "null"
+        run("window.kin && window.kin.load('models/\(escaped)').then(() => window.kin.dress(\(paints)))")
     }
 
-    /// A VRM standard expression name, or "" for a neutral face.
+    /// Her clothing textures, as PNGs no larger than `max` on a side.
+    func textures(max: Int = 1024, done: @escaping ([(name: String, png: Data)]) -> Void) {
+        guard ready else { return done([]) }
+        let js = "JSON.stringify((window.kin ? window.kin.wardrobe() : []).map(c => ({name: c.name, png: window.kin.texture(c.name, \(max))})))"
+        web.evaluateJavaScript(js) { result, _ in
+            let list = (try? JSONSerialization.jsonObject(with: Data(((result as? String) ?? "[]").utf8))) as? [[String: Any]] ?? []
+            done(list.compactMap { item in
+                guard let name = item["name"] as? String, let url = item["png"] as? String,
+                      let comma = url.firstIndex(of: ","),
+                      let data = Data(base64Encoded: String(url[url.index(after: comma)...])) else { return nil }
+                return (name, data)
+            })
+        }
+    }
+
+    /// Whether a repaint kept the atlas's layout (see `kin.fits`).
+    func fits(material: String, url: String, done: @escaping (Bool, Double) -> Void) {
+        guard ready else { return done(false, -1) }
+        let js = "window.kin.fits(\(Self.quoted(material)), \(Self.quoted(url))).then(r => JSON.stringify(r))"
+        web.callAsyncJavaScript("return await " + js, arguments: [:], in: nil, in: .page) { result in
+            let text = (try? result.get() as? String) ?? "{}"
+            let verdict = (try? JSONSerialization.jsonObject(with: Data((text ?? "{}").utf8))) as? [String: Any]
+            done((verdict?["ok"] as? Bool) ?? false, (verdict?["spread"] as? Double) ?? -1)
+        }
+    }
+
+    private static func quoted(_ text: String) -> String {
+        let data = (try? JSONSerialization.data(withJSONObject: [text])) ?? Data("[\"\"]".utf8)
+        return String(String(data: data, encoding: .utf8)!.dropFirst().dropLast())
+    }
+
+    /// The original texture of one piece recoloured (see `kin.tinted`), as PNG data.
+    func tinted(material: String, rgb: [Int], done: @escaping (Data?) -> Void) {
+        guard ready else { return done(nil) }
+        let js = "window.kin.tinted(\(Self.quoted(material)), [\(rgb.map(String.init).joined(separator: ","))])"
+        web.evaluateJavaScript(js) { result, _ in
+            guard let url = result as? String, let comma = url.firstIndex(of: ",") else { return done(nil) }
+            done(Data(base64Encoded: String(url[url.index(after: comma)...])))
+        }
+    }
+
+    /// Put a repainted outfit on, or (nil) take it off.
+    func dress(paintsJSON: String?) {
+        guard ready else { return }
+        run(paintsJSON.map { "window.kin && window.kin.dress(\($0))" } ?? "window.kin && window.kin.undress()")
+    }
+
+    /// How she feels — happy, gentle, curious, sleepy, worried, or "" for
+    /// nothing in particular. The stage turns it into a face, a way of
+    /// standing and the things that mood makes her do.
     func express(_ name: String) {
         guard ready else { pendingExpression = name; return }
-        run("window.kin && window.kin.expression('\(name)')")
+        let safe = name.filter { $0.isLetter }
+        run("window.kin && window.kin.mood('\(safe)')")
     }
 
     /// 0…1. Sent while a reply is being spoken; the page decays it on its own.
@@ -297,13 +372,215 @@ final class VRMStage: ObservableObject {
         return where_ == "come" ? "她走过来了" : "她走过去了"
     }
 
+    /// The outfit being painted, if one is.
+    @Published private(set) var painting: String?
+
+    /// Repaint what she is wearing from a description, and put it on.
+    ///
+    /// A VRM's clothes are a mesh and a painted texture. The mesh is what it
+    /// is; the paint goes to the edit model as a flat atlas with the
+    /// instruction to change colour, fabric and pattern and leave every shape
+    /// where it is — which it does, so the result maps straight back onto
+    /// her. About half a minute, in the background: the answer comes back at
+    /// once and she changes when it lands.
+    func repaint(_ instruction: String, shoes: String = "", name raw: String) -> (String, Bool) {
+        guard let web, let model = web.wearing else { return ("3D 形象没开", true) }
+        guard painting == nil else { return ("还在换「\(painting!)」，等她换好", true) }
+        let words = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !words.isEmpty else { return ("换成什么样？repaint 是空的", true) }
+        let name = Self.motionName(raw.isEmpty ? String(words.prefix(24)) : raw)
+        guard !name.isEmpty, name != "original" else { return ("给这身起个名字（name）", true) }
+        painting = name
+        note = "在换「\(name)」…（半分钟上下）"
+        Task { @MainActor in
+            defer { painting = nil }
+            let textures = await withCheckedContinuation { continuation in
+                web.textures { continuation.resume(returning: $0) }
+            }
+            guard !textures.isEmpty else { note = "这个模型上没找到能重画的衣服"; return }
+            let folder = VRMOutfits.folder(model: model, outfit: name)
+            do {
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                try? words.write(to: folder.appendingPathComponent("about.txt"), atomically: true, encoding: .utf8)
+                var kept: [String] = [], refused: [String] = []
+                for (material, png) in textures {
+                    // Each atlas only hears about itself. Told about boots
+                    // while it was looking at a dress, the model painted boots
+                    // into the dress.
+                    let isShoes = material.lowercased().contains("shoe")
+                    let wanted = isShoes ? shoes.trimmingCharacters(in: .whitespacesAndNewlines) : words
+                    guard !wanted.isEmpty else { continue }
+                    let source = folder.appendingPathComponent("\(material).src.png")
+                    try png.write(to: source, options: .atomic)
+                    let painted = folder.appendingPathComponent("\(material).png")
+                    // An earlier painting under this outfit's name is set aside
+                    // first: if this one is refused she must not be left in the
+                    // old one, which may be the very thing being redone.
+                    if FileManager.default.fileExists(atPath: painted.path) {
+                        let aside = folder.appendingPathComponent("\(material).previous-\(Int(Date().timeIntervalSince1970)).png")
+                        try? FileManager.default.moveItem(at: painted, to: aside)
+                    }
+                    var accepted = false
+                    for attempt in 0..<2 where !accepted {
+                        let made = try await DiffuserClient.shared.edit(
+                            prompt: "this is a flat UV texture atlas of \(isShoes ? "a pair of shoes" : "a garment") for a 3D "
+                                  + "character: unfolded pieces laid out on an empty background. recolour and repaint "
+                                  + "the existing pieces as: \(wanted). keep every piece, outline and position exactly "
+                                  + "where it is, and keep the empty background empty — do not draw, add or move "
+                                  + "anything, only change colours, fabric and pattern inside the existing pieces. "
+                                  + "pieces that come in pairs must be painted identically",
+                            from: source, into: folder,
+                            seed: CompanionCharacter.seed(for: name + material) + attempt * 7919)
+                        let url = "models/" + ("outfits/\((model as NSString).deletingPathExtension)/\(name)/\(made.lastPathComponent)"
+                            .addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? "")
+                        let (fits, spread) = await withCheckedContinuation { continuation in
+                            web.fits(material: material, url: url) { continuation.resume(returning: ($0, $1)) }
+                        }
+                        if fits {
+                            if FileManager.default.fileExists(atPath: painted.path) {
+                                _ = try? FileManager.default.replaceItemAt(painted, withItemAt: made)
+                            } else {
+                                try FileManager.default.moveItem(at: made, to: painted)
+                            }
+                            accepted = true
+                        } else {
+                            // Kept beside the others under a name that says what
+                            // it is, for whoever wants to see what went wrong.
+                            let aside = folder.appendingPathComponent("\(material).refused-\(attempt).png")
+                            try? FileManager.default.moveItem(at: made, to: aside)
+                            note = "「\(material)」画走样了（空白处的杂色 \(spread)），再来一次…"
+                        }
+                    }
+                    // What could not be repainted can still be recoloured: the
+                    // original's own shading in the colour the words name.
+                    if !accepted, let rgb = VRMOutfits.colour(in: wanted) {
+                        let data = await withCheckedContinuation { continuation in
+                            web.tinted(material: material, rgb: rgb) { continuation.resume(returning: $0) }
+                        }
+                        if let data, (try? data.write(to: painted, options: .atomic)) != nil { accepted = true }
+                    }
+                    if accepted { kept.append(material) } else { refused.append(material) }
+                }
+                guard !kept.isEmpty else {
+                    note = "没换成「\(name)」：画出来的贴图都走了样，她还穿着原来的"
+                    return
+                }
+                VRMOutfits.remember(name, for: model)
+                web.dress(paintsJSON: VRMOutfits.paintsJSON(model: model, outfit: name))
+                note = refused.isEmpty ? "换上「\(name)」了"
+                                       : "换上「\(name)」了（\(refused.count) 件画走了样，保持原样）"
+            } catch {
+                note = "没换成「\(name)」：\(error.localizedDescription)"
+            }
+        }
+        return ("在换了：「\(name)」，半分钟左右她就穿上。以后 outfit: \"\(name)\" 直接换回这身", false)
+    }
+
+    /// Put on an outfit she already has, or "original" for what she came in.
+    func dress(in wanted: String) -> String? {
+        guard let web, let model = web.wearing else { return nil }
+        let name = wanted.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if ["original", "原来", "原装", "原来的", "default"].contains(name) {
+            VRMOutfits.remember(nil, for: model)
+            web.dress(paintsJSON: nil)
+            return "换回原来那身了"
+        }
+        guard let outfit = VRMOutfits.names(for: model).first(where: { $0 == name || $0.contains(name) }) else { return nil }
+        VRMOutfits.remember(outfit, for: model)
+        web.dress(paintsJSON: VRMOutfits.paintsJSON(model: model, outfit: outfit))
+        return "换上「\(outfit)」了"
+    }
+
+    static let props = ["mug", "book", "phone", "umbrella", "flower"]
+
+    /// Put something in her hand, or ("none") take it away.
+    func hold(_ what: String) -> String {
+        guard web != nil else { return "3D 形象没开" }
+        let name = what.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if ["none", "nothing", "", "放下"].contains(name) { web?.hold(nil); return "放下了" }
+        guard Self.props.contains(name) else { return "她能拿的：" + Self.props.joined(separator: "、") + "；none 是放下" }
+        web?.hold(name)
+        return "拿着「\(name)」了"
+    }
+
+    /// Sit on a stool, kneel on the floor, or stand up.
+    func sit(_ how: String) -> String {
+        guard web != nil else { return "3D 形象没开" }
+        switch how.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "stool", "chair", "sit", "坐": web?.sit("stool"); return "她坐下了"
+        case "floor", "kneel", "跪坐", "地上": web?.sit("floor"); return "她在地上跪坐下了"
+        case "stand", "up", "none", "起来", "站": web?.sit(nil); return "她站起来了"
+        default: return "sit 填 stool（坐凳子）、floor（跪坐）或 stand（站起来）"
+        }
+    }
+
     static let plays = ["wave", "stretch", "spin", "jump", "pick", "look", "dance"]
 
-    func play(_ name: String) -> String {
+    /// Motions she has made up and kept, by name — JSON in the pose language,
+    /// beside the .vrma files.
+    nonisolated static var composedNames: [String] {
+        let folder = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".kinclaw/vrm/motions")
+        return ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [])
+            .filter { $0.hasSuffix(".json") }.map { String($0.dropLast(5)) }.sorted()
+    }
+
+    nonisolated private static func composedFile(_ name: String) -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".kinclaw/vrm/motions/\(name).json")
+    }
+
+    /// A name that is safe as a file name and the same however it was typed.
+    nonisolated static func motionName(_ raw: String) -> String {
+        let cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            .map { $0.isLetter || $0.isNumber ? $0 : "-" }
+        return String(String(cleaned).split(separator: "-").joined(separator: "-").prefix(40))
+    }
+
+    func play(_ name: String) async -> String {
         guard web != nil else { return "3D 形象没开" }
-        guard Self.plays.contains(name) else { return "她会的：" + Self.plays.joined(separator: "、") }
-        web?.play(name)
-        return "好"
+        if Self.plays.contains(name) { web?.play(name); return "好" }
+        let kept = Self.motionName(name)
+        if let data = try? Data(contentsOf: Self.composedFile(kept)), let json = String(data: data, encoding: .utf8) {
+            let result = await composeOnStage(json)
+            return (result["ok"] as? Bool) == true ? "好" : "放不了「\(kept)」：\(result["error"] as? String ?? "未知")"
+        }
+        let all = Self.plays + Self.composedNames
+        return "没有「\(name)」。她会的：" + all.joined(separator: "、") + "。没有的可以用 compose 现编一个"
+    }
+
+    private func composeOnStage(_ json: String) async -> [String: Any] {
+        guard let web else { return ["ok": false, "error": "3D 形象没开"] }
+        return await withCheckedContinuation { continuation in
+            web.compose(json: json) { continuation.resume(returning: $0) }
+        }
+    }
+
+    /// Make a motion up, play it, and keep it under its name.
+    ///
+    /// Kept only if the stage accepted it, and whatever it said about words
+    /// it did not recognise goes back to the writer — a language model, which
+    /// will use the right word next time if told which one was wrong.
+    func compose(name raw: String, frames: [[String: Any]], loops: Int) async -> (String, Bool) {
+        guard web != nil else { return ("3D 形象没开", true) }
+        let name = Self.motionName(raw)
+        guard !name.isEmpty else { return ("给这个动作起个名字（name），以后好再做", true) }
+        guard !Self.plays.contains(name) else { return ("「\(name)」是她本来就会的，换个名字", true) }
+        let spec: [String: Any] = ["name": name, "loops": loops, "frames": frames]
+        guard JSONSerialization.isValidJSONObject(spec),
+              let data = try? JSONSerialization.data(withJSONObject: spec, options: [.prettyPrinted, .sortedKeys]),
+              let json = String(data: data, encoding: .utf8) else { return ("frames 不是合法的 JSON", true) }
+        let result = await composeOnStage(json)
+        guard (result["ok"] as? Bool) == true else {
+            return ("没做成：\(result["error"] as? String ?? "未知")", true)
+        }
+        let file = Self.composedFile(name)
+        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: file, options: .atomic)
+        var answer = "她做了「\(name)」（\(result["seconds"] ?? "?") 秒），记下了，以后 play: \"\(name)\" 就能再做"
+        if let ignored = result["ignored"] as? [String], !ignored.isEmpty {
+            answer += "。不认识的词被忽略了：" + ignored.joined(separator: "、")
+        }
+        return (answer, false)
     }
 
     /// Change clothes: remember the choice, and put it on if she is on screen.
@@ -315,7 +592,7 @@ final class VRMStage: ObservableObject {
 
     /// What the mood tag means on a face that has the five VRM expressions.
     func express(_ mood: CompanionMood?) {
-        web?.express(mood?.vrmExpression ?? "")
+        web?.express(mood?.rawValue ?? "")
     }
 
     /// Dance, or play one of the motion files. Answers with what it did, for
@@ -476,5 +753,71 @@ struct PlateTone {
         // halves; tripled, that swings the key light most of the way over.
         let total = max(left + right, 0.001)
         self.side = max(-1, min(1, (right - left) / total * 3))
+    }
+}
+
+
+/// Repainted outfits, on disk: `~/.kinclaw/avatars/outfits/<model>/<outfit>/`
+/// holds one PNG per clothing material and the words it was painted from.
+/// Under the avatars folder because that is what the stage serves as
+/// `models/`, so a texture is a URL away.
+enum VRMOutfits {
+    private static func stem(_ model: String) -> String { (model as NSString).deletingPathExtension }
+
+    static func folder(model: String, outfit: String) -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".kinclaw/avatars/outfits/\(stem(model))/\(outfit)")
+    }
+
+    static func names(for model: String) -> [String] {
+        let root = folder(model: model, outfit: "").deletingLastPathComponent()
+            .appendingPathComponent(stem(model))
+        return ((try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? [])
+            .filter { !$0.hasPrefix(".") }.sorted()
+    }
+
+    /// `{ "<material>": "models/outfits/<model>/<outfit>/<material>.png" }` for the stage.
+    static func paintsJSON(model: String, outfit: String) -> String {
+        let dir = folder(model: model, outfit: outfit)
+        // `<material>.png` and nothing else: sources, refusals and earlier
+        // paintings live beside them under longer names.
+        let files = ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [])
+            .filter { $0.hasSuffix(".png") && !$0.dropLast(4).contains(".") }
+        var map: [String: String] = [:]
+        for file in files {
+            let path = "outfits/\(stem(model))/\(outfit)/\(file)"
+            map[String(file.dropLast(4))] = "models/" + (path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? path)
+        }
+        let data = (try? JSONSerialization.data(withJSONObject: map)) ?? Data("{}".utf8)
+        return String(data: data, encoding: .utf8) ?? "{}"
+    }
+
+    /// The first colour a description names, as RGB — for recolouring what
+    /// cannot be repainted.
+    static func colour(in words: String) -> [Int]? {
+        let table: [(String, [Int])] = [
+            ("black", [28, 28, 32]), ("white", [238, 236, 232]), ("ivory", [236, 228, 208]), ("cream", [236, 226, 200]),
+            ("grey", [128, 130, 136]), ("gray", [128, 130, 136]), ("silver", [176, 180, 188]),
+            ("dark brown", [74, 48, 32]), ("brown", [112, 72, 44]), ("tan", [176, 132, 88]), ("beige", [208, 188, 156]),
+            ("burgundy", [110, 22, 40]), ("wine", [110, 22, 40]), ("crimson", [170, 24, 44]), ("red", [186, 32, 40]),
+            ("pink", [236, 150, 176]), ("orange", [226, 124, 44]), ("gold", [212, 170, 72]), ("yellow", [232, 204, 72]),
+            ("olive", [108, 112, 56]), ("green", [64, 132, 80]), ("teal", [40, 128, 128]), ("navy", [30, 42, 86]),
+            ("sky blue", [120, 176, 226]), ("blue", [52, 96, 176]), ("purple", [112, 64, 160]), ("violet", [128, 84, 180]),
+        ]
+        let text = words.lowercased()
+        return table.filter { text.contains($0.0) }
+            .min { text.range(of: $0.0)!.lowerBound < text.range(of: $1.0)!.lowerBound }?.1
+    }
+
+    private static func key(_ model: String) -> String { "kinclaw.companion.vrm.outfit." + stem(model) }
+
+    static func remembered(for model: String) -> String? {
+        guard let name = UserDefaults.standard.string(forKey: key(model)), !name.isEmpty,
+              FileManager.default.fileExists(atPath: folder(model: model, outfit: name).path) else { return nil }
+        return name
+    }
+
+    static func remember(_ outfit: String?, for model: String) {
+        UserDefaults.standard.set(outfit ?? "", forKey: key(model))
     }
 }

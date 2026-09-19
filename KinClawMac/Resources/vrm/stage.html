@@ -127,6 +127,51 @@ const look = new THREE.Object3D();          // what the eyes follow
 look.position.set(0, 1.35, 1.6);
 scene.add(look);
 
+/// Hang whatever swings from her hips — a skirt, a coat's hem, a tail — on
+/// the hips themselves.
+///
+/// Spring bones are simulated in world space, which is right for hair: jump,
+/// and it lifts. It is wrong for a skirt on somebody who crouches, kneels and
+/// jumps on camera: the hips drop in a third of a second, the cloth has
+/// inertia and stays where it was, and for those frames she is wearing it
+/// round her waist. No pose fixes that. With the hips as the joints' centre
+/// the cloth is simulated in the hips' own space — it still hangs by gravity,
+/// still swings when she turns, is still pushed by her thighs — and simply
+/// comes down with her. Hair and everything above the waist is left alone.
+function anchorSkirt(v) {
+  const hips = v.humanoid?.getRawBoneNode('hips'), spine = v.humanoid?.getRawBoneNode('spine');
+  if (!hips || !v.springBoneManager) return 0;
+  const under = (node, root) => { for (let n = node; n; n = n.parent) if (n === root) return true; return false; };
+  let anchored = 0;
+  state.skirt = [];
+  for (const joint of v.springBoneManager.joints) {
+    if (under(joint.bone, hips) && !(spine && under(joint.bone, spine))) {
+      joint.center = hips; anchored++;
+      state.skirt.push({ joint, stiffness: joint.settings.stiffness, gravity: joint.settings.gravityPower,
+                         drag: joint.settings.dragForce });
+    }
+  }
+  if (anchored) { v.springBoneManager.setInitState(); v.springBoneManager.reset(); }
+  return anchored;
+}
+
+/// Let the skirt be cloth, by `amount` (0 as modelled … 1 limp).
+///
+/// A spring bone pulls back towards the direction it was modelled in, which
+/// for a skirt is straight down. Standing, that is what keeps a hem in shape.
+/// Seated it is a disaster: her thighs are where "straight down" used to be,
+/// the colliders push the panels out of them, the spring pulls them back, and
+/// the two settle with the front of the skirt standing up off her lap like a
+/// fan. Cloth has no such spring. So while she sits the panels lose their
+/// stiffness and gain weight, and lie over her thighs the way fabric does.
+function drape(amount) {
+  for (const { joint, stiffness, gravity, drag } of state.skirt ?? []) {
+    joint.settings.stiffness = stiffness * (1 - amount) + 0.015 * amount;
+    joint.settings.gravityPower = gravity + (Math.max(gravity, 1.1) - gravity) * amount;
+    joint.settings.dragForce = drag + (Math.max(drag, 0.75) - drag) * amount;
+  }
+}
+
 /// Arms down, elbows a little bent. A VRM's normalised humanoid rig rests in a
 /// T-pose, which is why this is a fixed pose and not an offset: every model
 /// starts from the same place, so one set of angles works for all of them.
@@ -184,6 +229,44 @@ function spot(depth, across) {
   const half = Math.tan(lens / 2) * away * camera.aspect;
   return { x: across * half * 0.72, z: -depth };
 }
+
+/// The pose language: what a motion she makes up for herself is written in.
+///
+/// Not bone angles. A language model asked for Euler angles on seventeen
+/// joints produces arms through ribcages — it has no body to check them
+/// against — and a rig that differs between VRM 0.x and 1.0 would need the
+/// signs flipped besides. These are what a person would say instead: how
+/// high an arm is raised, how far in front, how bent the elbow; how far the
+/// head is turned; how deep the crouch. Each runs over a range the joint can
+/// actually cover, so every combination of values is a pose a body can be in.
+/// A motion is keyframes over these, and the stage does the rest.
+const SLIDERS = {
+  // arms, L and R: raise −0.2 hanging … 0.45 straight out … 1 overhead;
+  // front 0 out to the side … 1 straight ahead … 1.4 across the body;
+  // elbow 0 straight … 1 folded; twist −1 forearm down … 1 forearm up
+  armRaiseL: [-0.2, 1], armRaiseR: [-0.2, 1], armFrontL: [-0.5, 1.4], armFrontR: [-0.5, 1.4],
+  elbowL: [0, 1], elbowR: [0, 1], armTwistL: [-1, 1], armTwistR: [-1, 1],
+  // head: turn + is to her left, nod + is down, tilt + is toward her left shoulder
+  headTurn: [-1, 1], headNod: [-1, 1], headTilt: [-1, 1],
+  // torso: lean + forward, twist + to her left, bend + to her left
+  lean: [-0.6, 1], twist: [-1, 1], bend: [-1, 1],
+  // legs: front + forward (a kick) − back; side out to the side; knee folded
+  legFrontL: [-0.6, 1], legFrontR: [-0.6, 1], legSideL: [0, 1], legSideR: [0, 1],
+  kneeL: [0, 1], kneeR: [0, 1],
+  // whole body: crouch 0…1, jump 0…1 (height), turn ±1 is half a turn and
+  // ±2 a full spin, sway − to her right … + to her left
+  crouch: [0, 1], jump: [0, 1], turn: [-2, 2], sway: [-1, 1],
+  // sit 0…1: seated — thighs forward, shins down, and a stool under her
+  sit: [0, 1],
+  // face, beyond the named expression: eyes 0 open … 1 shut, mouth 0…1 open
+  eyes: [0, 1], mouth: [0, 1],
+};
+/// Hand shapes, as how far each finger is curled: thumb, index, middle, ring, little.
+const HANDS = {
+  relax: [0.2, 0.25, 0.3, 0.35, 0.4], open: [0, 0, 0, 0, 0], fist: [0.9, 1, 1, 1, 1],
+  point: [0.8, 0, 1, 1, 1], peace: [0.9, 0, 0, 1, 1], thumb: [0, 1, 1, 1, 1], ok: [0.7, 0.75, 0, 0, 0],
+};
+const FACES = ['neutral', 'happy', 'sad', 'angry', 'relaxed', 'surprised'];
 
 const ACTS = {
   wave: 2.6, stretch: 3.4, spin: 1.6, jump: 1.3, pick: 3.2, look: 3.6, dance: 5.5,
@@ -256,6 +339,8 @@ const kin = {
       actor.add(next.scene);
       vrm = next;
       mixer = null;                      // the old one animated the old model
+      state.anchored = anchorSkirt(vrm);
+      originals.clear(); state.outfit = null;
       vrm.lookAt && (vrm.lookAt.target = look);
       relax(vrm);
       // The hips bone rests at hip height, not at zero: every bounce, crouch
@@ -263,12 +348,26 @@ const kin = {
       // a two-centimetre bob puts her waist on the floor.
       const hipsBone = vrm.humanoid?.getNormalizedBoneNode('hips');
       state.hipsRest = hipsBone ? hipsBone.position.y : 0;
+      state.bones = Object.keys(vrm.humanoid?.humanBones ?? {});
+      // Her legs, for `fold`: measured in the rest pose, hips to knee to ankle.
+      {
+        const at = (name) => { const b = vrm.humanoid?.getNormalizedBoneNode(name);
+                               return b ? b.getWorldPosition(new THREE.Vector3()) : null; };
+        vrm.scene.updateMatrixWorld(true);
+        const [hip, knee, ankle] = [at('leftUpperLeg'), at('leftLowerLeg'), at('leftFoot')];
+        const hipsAt = at('hips');
+        if (hip && knee && ankle && hipsAt) {
+          state.legs = { thigh: hip.distanceTo(knee), shin: knee.distanceTo(ankle), ankle: ankle.y,
+                         hips: ankle.y + knee.distanceTo(ankle) + hip.distanceTo(knee) };
+        }
+      }
       frame(vrm);
       state.ready = true;
       state.model = url;
       state.expressions = vrm.expressionManager
         ? vrm.expressionManager.expressions.map((e) => e.expressionName)
         : [];
+      state.faces = Object.fromEntries(state.expressions.map((n) => [n.toLowerCase(), n]));
       return this.status();
     } catch (e) {
       state.error = String(e && e.message ? e.message : e);
@@ -283,14 +382,184 @@ const kin = {
   /// rather than treated as an error: expression sets vary per model.
   expression(name, weight = 1) {
     if (!vrm?.expressionManager) return false;
-    for (const e of vrm.expressionManager.expressions) {
-      const n = e.expressionName;
-      if (['happy', 'sad', 'angry', 'relaxed', 'surprised'].includes(n)) {
-        vrm.expressionManager.setValue(n, n === name ? weight : 0);
-      }
-    }
+    face.mood = name ? { [name]: weight } : {};
+    face.lids = 0;
+    feel.now = null; feel.name = '';
     state.expression = name;
     return true;
+  },
+
+  // ── What she is wearing ────────────────────────────────────────────────
+  //
+  // A VRM's clothes are a mesh with a painted texture, and the mesh cannot be
+  // changed from here. The paint can. The edit model will repaint a flat UV
+  // atlas from a description — a red dress with lace, a sailor uniform, black
+  // with purple ribbons — and leave every island exactly where it was, so the
+  // result maps straight back onto her. The cut stays; colour, fabric and
+  // pattern are free.
+
+  /// The materials that are clothes, and how big their textures are.
+  wardrobe() {
+    return clothes().map(({ name, map }) => ({ name, width: map.image?.width ?? 0, height: map.image?.height ?? 0 }));
+  },
+
+  /// One clothing texture as a PNG data URL, flattened on grey and no larger
+  /// than `max` on a side: what goes to the edit model.
+  texture(name, max = 1024) {
+    const item = clothes().find((c) => c.name === name);
+    const image = (item && originals.get(item.name)?.image) || item?.map.image;
+    if (!image) return null;
+    const scale = Math.min(1, max / Math.max(image.width, image.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(image.width * scale); canvas.height = Math.round(image.height * scale);
+    const g = canvas.getContext('2d');
+    g.fillStyle = '#808080'; g.fillRect(0, 0, canvas.width, canvas.height);
+    g.drawImage(image, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL('image/png');
+  },
+
+  /// Whether a repaint kept the atlas's layout: `{ ok, spread }`.
+  ///
+  /// The edit model usually repaints in place. Sometimes it does not — asked
+  /// about boots while looking at a dress it painted boots into the dress,
+  /// and shown a small atlas it could not read it drew a fashion plate
+  /// instead — and either of those, mapped back onto her, is rubbish. What a
+  /// faithful repaint always keeps is the *empty* part of the atlas: nothing
+  /// was there, so nothing should be there now, whatever flat colour it came
+  /// back as. So the pixels that were transparent in the original are
+  /// measured in the repaint, and if they are no longer one flat colour,
+  /// something has been drawn where there was nothing.
+  async fits(name, url) {
+    const item = clothes().find((c) => c.name === name);
+    const original = (item && originals.get(name)) || item?.map;
+    if (!original?.image) return { ok: false, spread: -1 };
+    const painted = await new Promise((ok) => {
+      const img = new Image(); img.onload = () => ok(img); img.onerror = () => ok(null);
+      img.src = url + (url.includes('?') ? '&' : '?') + 'v=' + Date.now();
+    });
+    if (!painted) return { ok: false, spread: -1 };
+    const n = 160, read = (image) => {
+      const c = document.createElement('canvas'); c.width = c.height = n;
+      const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(image, 0, 0, n, n);
+      return g.getImageData(0, 0, n, n).data;
+    };
+    const was = read(original.image), now = read(painted);
+    const empty = [];
+    for (let i = 0; i < n * n; i++) if (was[i * 4 + 3] < 20) empty.push(i);
+    if (empty.length < n * n * 0.04) return { ok: true, spread: 0 };        // no empty part to judge by
+    const mean = [0, 0, 0];
+    for (const i of empty) for (let k = 0; k < 3; k++) mean[k] += now[i * 4 + k] / empty.length;
+    let spread = 0;
+    for (const i of empty) for (let k = 0; k < 3; k++) spread += Math.abs(now[i * 4 + k] - mean[k]) / (empty.length * 3);
+    // Measured: a faithful repaint 2.9, a dress with boots painted into its
+    // empty corner 19.4, a fashion plate 89.9.
+    return { ok: spread < 10, spread: +spread.toFixed(1) };
+  },
+
+  /// The original texture recoloured: its own shading, in another colour, as
+  /// a PNG data URL. For the pieces the edit model cannot repaint — a small
+  /// atlas of shoe parts reads to it as nothing in particular — this is what
+  /// "black boots" can still mean, and it cannot get the layout wrong because
+  /// it never touches it.
+  tinted(name, rgb) {
+    const item = clothes().find((c) => c.name === name);
+    const image = (item && originals.get(name)?.image) || item?.map.image;
+    if (!image || !Array.isArray(rgb)) return null;
+    const canvas = document.createElement('canvas');
+    canvas.width = image.width; canvas.height = image.height;
+    const g = canvas.getContext('2d', { willReadFrequently: true });
+    g.drawImage(image, 0, 0);
+    const data = g.getImageData(0, 0, canvas.width, canvas.height), px = data.data;
+    // Light and shade come from the original; how dark the colour is decides
+    // how much of the highlights survive, or black leather comes out grey.
+    const depth = (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]) / 255;
+    for (let i = 0; i < px.length; i += 4) {
+      const luma = (0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]) / 255;
+      const shade = 0.35 + 0.95 * luma, shine = Math.max(0, luma - 0.75) * 2.2 * (1 - depth * 0.6);
+      for (let k = 0; k < 3; k++) px[i + k] = Math.min(255, rgb[k] * shade + 255 * shine);
+    }
+    g.putImageData(data, 0, 0);
+    return canvas.toDataURL('image/png');
+  },
+
+  /// Put repainted textures on: { materialName: url }. Each takes the
+  /// original's alpha — the repaint comes back opaque, and the lace along a
+  /// hem is cut out of the texture by exactly that alpha.
+  async dress(paints) {
+    const done = [];
+    for (const item of clothes()) {
+      const url = paints?.[item.name];
+      if (!url) continue;
+      if (!originals.has(item.name)) originals.set(item.name, item.map);
+      const original = originals.get(item.name);
+      try {
+        const painted = await new Promise((ok, bad) => {
+          const img = new Image(); img.onload = () => ok(img); img.onerror = () => bad(new Error('load ' + url));
+          img.src = url + (url.includes('?') ? '&' : '?') + 'v=' + Date.now();
+        });
+        const canvas = document.createElement('canvas');
+        canvas.width = original.image.width; canvas.height = original.image.height;
+        const g = canvas.getContext('2d');
+        g.drawImage(painted, 0, 0, canvas.width, canvas.height);
+        g.globalCompositeOperation = 'destination-in';
+        g.drawImage(original.image, 0, 0, canvas.width, canvas.height);
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.flipY = original.flipY; texture.colorSpace = original.colorSpace;
+        texture.wrapS = original.wrapS; texture.wrapT = original.wrapT;
+        texture.needsUpdate = true;
+        for (const material of item.materials) {
+          material.map = texture;
+          // The shade texture is the same painting seen in shadow; a red
+          // dress with green shadows is what leaving it alone looks like.
+          if (material.shadeMultiplyTexture) material.shadeMultiplyTexture = texture;
+          if (material.uniforms?.map) material.uniforms.map.value = texture;
+          if (material.uniforms?.shadeMultiplyTexture) material.uniforms.shadeMultiplyTexture.value = texture;
+          material.needsUpdate = true;
+        }
+        done.push(item.name);
+      } catch (e) { state.error = String(e.message || e); }
+    }
+    state.outfit = done.length ? Object.keys(paints) : null;
+    return done;
+  },
+
+  /// Back into what she came in.
+  undress() {
+    for (const item of clothes()) {
+      const original = originals.get(item.name);
+      if (!original) continue;
+      for (const material of item.materials) {
+        material.map = original;
+        if (material.shadeMultiplyTexture) material.shadeMultiplyTexture = original;
+        if (material.uniforms?.map) material.uniforms.map.value = original;
+        if (material.uniforms?.shadeMultiplyTexture) material.uniforms.shadeMultiplyTexture.value = original;
+        material.needsUpdate = true;
+      }
+    }
+    state.outfit = null;
+    return true;
+  },
+
+  /// How she feels: happy, gentle, curious, sleepy, worried, or '' for
+  /// nothing in particular. A face, a way of standing, a tempo, and things
+  /// she does now and then — see MOODS.
+  mood(name) {
+    const m = MOODS[name] ?? null;
+    const changed = name !== feel.name;
+    feel.name = m ? name : '';
+    feel.now = m;
+    face.mood = m ? { ...m.face } : {};
+    face.lids = m?.lids ?? 0;
+    state.expression = feel.name;
+    if (m?.often) feel.next = Math.min(feel.next || 99, 6 + Math.random() * 8);
+    // What arriving in a mood looks like — a little hop, leaning in — but
+    // not every time a reply repeats it: once, and then not again for a while.
+    const now = performance.now();
+    if (m?.enter && changed && now - (feel.last[m.enter] ?? -1e9) > 40000 && !state.composed) {
+      feel.last[m.enter] = now;
+      this.compose({ name: m.enter, frames: MOOD_ACTS[m.enter] }, false);
+    }
+    return feel.name;
   },
 
   /// How open the mouth is, 0…1. Driven from the voice's level while a reply
@@ -337,6 +606,7 @@ const kin = {
     mixer?.stopAllAction();
     state.clip = null;
     state.dance = false;
+    if (state.composed) state.composed.t = state.composed.length * state.composed.loops;   // eases out
     return true;
   },
   mouth(level) {
@@ -397,7 +667,7 @@ const kin = {
     if (framing !== 'scene') return false;
     // Asked for by name — "go and look over there" — it is not undone by the
     // next sound in the room calling her back to the lens.
-    if (asked) world.hold = performance.now() + 14000;
+    if (asked) { world.hold = performance.now() + 14000; world.seat = null; }
     const d = Math.max(0, Math.min(world.far, Number(depth) || 0));
     const to = d < 0.3 ? { x: 0, z: 0 } : spot(Math.max(d, world.near), Math.max(-1, Math.min(1, across)));
     world.target = { ...to, then };
@@ -413,6 +683,86 @@ const kin = {
     world.act = { name, t: 0, length: ACTS[name] };
     world.target = null;
     return true;
+  },
+
+  /// Play a motion written in the pose language (see SLIDERS).
+  ///
+  ///   { name, loops, frames: [ { t: seconds, <slider>: value, …,
+  ///                              handL/handR: shape, face: name, wink: side } ] }
+  ///
+  /// A slider a frame does not mention is left to the frames that do: each
+  /// has its own track, eased between the keys that name it, starting from
+  /// rest and holding its last value to the end. Unknown names are reported
+  /// back rather than failing the whole motion — the writer is a language
+  /// model, and telling it which word was wrong is how it learns the rest.
+  compose(spec, asked = true) {
+    if (!vrm) return { ok: false, error: '3D 形象还没加载' };
+    let frames = (Array.isArray(spec?.frames) ? spec.frames : [])
+      .filter((f) => f && Number.isFinite(Number(f.t)))
+      .map((f) => ({ ...f, t: Math.max(0, Math.min(30, Number(f.t))) }))
+      .sort((a, b) => a.t - b.t).slice(0, 80);
+    if (!frames.length) return { ok: false, error: '没有关键帧：frames 里每一帧要有 t（秒）' };
+    // One frame is a pose rather than a motion — a heart, a salute — and it
+    // is what a writer reaches for first. She moves into it, holds it, and
+    // the ease-out at the end takes her back.
+    if (frames.length === 1 || frames[frames.length - 1].t < 0.3) {
+      const pose = { ...frames[frames.length - 1] };
+      frames.splice(0, frames.length, { t: 0 }, { ...pose, t: 0.5 }, { ...pose, t: 2.4 });
+    }
+    const tracks = {}, ignored = new Set();
+    const put = (key, raw, t) => {
+      if (SLIDERS[key]) {
+        const [lo, hi] = SLIDERS[key];
+        (tracks[key] ??= []).push([t, Math.max(lo, Math.min(hi, Number(raw) || 0))]);
+      } else if ((key === 'handL' || key === 'handR') && HANDS[raw]) {
+        (tracks[key] ??= []).push([t, raw]);
+      } else if (key === 'face' && FACES.includes(raw)) {
+        (tracks.face ??= []).push([t, raw]);
+      } else if (key === 'wink' && ['left', 'right', 'none'].includes(raw)) {
+        (tracks.wink ??= []).push([t, raw]);
+      } else return false;
+      return true;
+    };
+    for (const f of frames) {
+      for (const [key, raw] of Object.entries(f)) {
+        if (key === 't') continue;
+        // A limb slider with no side on it means both: "armRaise: 1" is two
+        // arms in the air, which is what anybody writing it meant.
+        const both = put(key + 'L', raw, f.t) | put(key + 'R', raw, f.t);
+        if (!both && !put(key, raw, f.t)) ignored.add(key);
+      }
+    }
+    const length = Math.max(0.4, frames[frames.length - 1].t);
+    state.composed = { name: String(spec.name || ''), tracks, length, t: 0, w: 0,
+                       loops: Math.max(1, Math.min(8, Math.round(Number(spec.loops) || 1))),
+                       fingers: { L: [...HANDS.relax], R: [...HANDS.relax] } };
+    // Hers for as long as it lasts: nothing calls her back to the lens or
+    // sends her for a walk half way through a bow.
+    // Asked for by somebody, it is hers for as long as it lasts: nothing
+    // calls her back to the lens or sends her for a walk half way through a
+    // bow. A yawn of her own gives way like any other idling.
+    if (asked) {
+      world.target = null; world.act = null; state.dance = false;
+      world.hold = performance.now() + (length * state.composed.loops + 1.5) * 1000;
+    }
+    return { ok: true, seconds: +(length * state.composed.loops).toFixed(1),
+             used: Object.keys(tracks), ignored: [...ignored] };
+  },
+
+  /// Put something in her hand — mug, book, phone, umbrella, flower — or
+  /// (null) take it away. She carries it, and does what people do with one.
+  hold(name) {
+    if (held.object) { scene.remove(held.object); held.object = null; }
+    held.name = PROPS[name] ? name : null;
+    if (held.name) { held.object = PROPS[name](); held.object.visible = false; scene.add(held.object); held.next = 5 + Math.random() * 5; }
+    return held.name;
+  },
+
+  /// Sit on a stool ('stool'), kneel on the floor ('floor'), or stand (null).
+  sit(how) {
+    world.seat = how === 'stool' || how === 'floor' ? how : null;
+    if (world.seat) { world.target = null; world.hold = performance.now() + 600000; } else { world.hold = 0; }
+    return world.seat;
   },
 
   /// Wanted at the mark (somebody is talking to her) or free to roam.
@@ -470,13 +820,14 @@ const kin = {
 
   status() {
     return {
-      framing, light: state.light || null, place: state.place || null,
+      framing, light: state.light || null, place: state.place || null, anchored: state.anchored ?? 0,
       where: { x: +actor.position.x.toFixed(2), depth: +(-actor.position.z).toFixed(2),
                walking: world.gait > 0.5, act: world.act?.name || null, attend: world.attend },
       ready: state.ready, model: state.model, error: state.error,
       expressions: state.expressions, expression: state.expression,
       mouth: state.mouth, viseme: state.viseme, tickErrors: state.tickErrors || 0,
-      clip: state.clip, dance: state.dance,
+      clip: state.clip, dance: state.dance, composed: state.composed?.name ?? null, mood: feel.name,
+      outfit: state.outfit ?? null, holding: held.name, seat: world.seat ?? null,
       talking: state.talking, frames: state.frames,
       size: measure(),
     };
@@ -498,6 +849,472 @@ let nextBlink = 1.5, blink = 0;
 /// A glance away and how long is left of it. See the idle block below.
 let glance = null, glanceIn = 6;
 const clock = new THREE.Clock();
+
+/// How the legs fold for a crouch of depth c (0…1).
+///
+/// Not a deep squat. Thighs lifted towards the lens take the front of a skirt
+/// up with them, and a companion who flashes whoever is talking to her every
+/// time she picks something up is not one anybody can leave on screen. So it
+/// is what somebody in a skirt does: down to half way is an athletic bend —
+/// knees forward a little, feet flat, the hem still where it was — and past
+/// that she goes on down to her knees, thighs back under her and the skirt
+/// hanging straight in front. Knees together throughout.
+function fold(c) {
+  const bend = Math.min(c, 0.5) / 0.5;
+  const k = ease(Math.max(0, c - 0.5) / 0.5);
+  const hip = 0.4 * bend * (1 - k) + 0.06 * k;          // thighs forward, then back under her
+  const knee = 0.8 * bend * (1 - k) + 1.62 * k;
+  // How far the hips come down is geometry, not a guess at her proportions:
+  // standing on bent legs the feet stay on the floor, and kneeling it is the
+  // knees that are on it. Measured off her own skeleton when she loads.
+  const { thigh, shin, ankle, hips } = state.legs ?? { thigh: 0.4, shin: 0.4, ankle: 0.08, hips: 0.88 };
+  const standing = ankle + shin * Math.cos(knee - hip) + thigh * Math.cos(hip);
+  const kneeling = ankle * 0.2 + thigh * Math.cos(hip);      // the kneecap is on the floor, not the joint's centre
+  return {
+    hip, knee,
+    foot: 0.4 * bend * (1 - k) - 0.95 * k,              // flat on the floor, then toes pointed back
+    drop: (hips - (standing * (1 - k) + kneeling * k)) / Math.max(world.height, 0.5),   // of her height
+    together: 0.05 * bend + 0.03 * k,
+  };
+}
+
+/// One track's value at a moment: eased between the keys on either side,
+/// up from rest before the first, held after the last.
+function sample(track, at) {
+  if (!track || !track.length) return 0;
+  if (at <= track[0][0]) return track[0][0] > 0 ? track[0][1] * ease(at / track[0][0]) : track[0][1];
+  for (let i = 1; i < track.length; i++) {
+    const [t1, v1] = track[i];
+    if (at <= t1) {
+      const [t0, v0] = track[i - 1];
+      return v0 + (v1 - v0) * ease((at - t0) / Math.max(t1 - t0, 1e-3));
+    }
+  }
+  return track[track.length - 1][1];
+}
+const latest = (track, at) => {
+  let value = null;
+  for (const [t, v] of track ?? []) { if (t <= at) value = v; else break; }
+  return value;
+};
+
+const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _e = new THREE.Euler();
+const _from = new THREE.Vector3(), _to = new THREE.Vector3();
+
+/// Lay a composed motion over the body the idle has just posed. It owns
+/// every joint it names, eased in over a third of a second and out over
+/// half, so it starts from wherever she was and ends where she would have
+/// been anyway.
+/// Lay a pose — values for the sliders in SLIDERS — over the body the idle
+/// has just posed, by `w`. Returns how far it turns her.
+///
+/// It owns only what it names. A motion that says nothing about her legs
+/// leaves them to whatever else is going on, a mood that only tilts her head
+/// leaves her arms swinging as they were; `owns(slider)` is how it says which.
+/// Composed motions, moods and anything else written in the pose language
+/// all come through here, so they agree about what a raised arm is.
+function layPose(v, owns, w, dt, bone, hands) {
+  const old = vrm.meta?.metaVersion === '0';
+  const sgn = old ? 1 : -1;                    // see liveInPlace: the 0.x rig is mirrored
+  const h = world.height;
+  const any = (...names) => names.some(owns);
+  const pose = (name, q) => { const b = bone(name); if (b) b.quaternion.slerp(q, w); };
+  const euler = (name, x, y, z) => pose(name, _q.setFromEuler(_e.set(x, y, z, 'XYZ')));
+
+  // Arms. Where the arm points is two angles — how high, how far in front —
+  // and the joint takes the shortest turn from its rest (straight out to the
+  // side) to there. Hanging, straight ahead, overhead and across the chest
+  // are all the same kind of thing that way, and no value of either slider
+  // is a direction an arm cannot point.
+  for (const [S, side] of [['L', 1], ['R', -1]]) {
+    const limb = side > 0 ? 'left' : 'right';
+    if (any('armRaise' + S, 'armFront' + S, 'elbow' + S, 'armTwist' + S)) {
+      const out = (old ? -1 : 1) * side;                     // which way this arm's rest points, along x
+      const front = old ? -1 : 1;                            // which way she faces, along z
+      const up = (v('armRaise' + S) - 0.45) / 0.55 * (Math.PI / 2) * (v('armRaise' + S) < 0.45 ? 0.9 : 1);
+      const round = v('armFront' + S) * (Math.PI / 2);
+      _from.set(out, 0, 0);
+      _to.set(out * Math.cos(up) * Math.cos(round), Math.sin(up), front * Math.cos(up) * Math.sin(round)).normalize();
+      _q.setFromUnitVectors(_from, _to);
+      _q2.setFromAxisAngle(_from.set(1, 0, 0), sgn * v('armTwist' + S) * 1.3);
+      pose(limb + 'UpperArm', _q.multiply(_q2));
+      euler(limb + 'LowerArm', 0, -side * v('elbow' + S) * 2.4, 0);
+    }
+    // Fingers ease towards the shape named most recently.
+    const shape = hands?.shape(S);
+    if (shape) {
+      const now = hands.now[S];
+      ['Thumb', 'Index', 'Middle', 'Ring', 'Little'].forEach((finger, i) => {
+        now[i] += (shape[i] - now[i]) * Math.min(1, dt * 12);
+        const parts = finger === 'Thumb' ? ['Metacarpal', 'Proximal', 'Distal'] : ['Proximal', 'Intermediate', 'Distal'];
+        for (const part of parts) {
+          const b = bone(limb + finger + part);
+          if (!b) continue;
+          // Fingers curl towards the palm, which faces down at rest; a thumb
+          // folds across it instead.
+          if (finger === 'Thumb') b.quaternion.slerp(_q.setFromEuler(_e.set(0, side * sgn * now[i] * 0.7, 0)), w);
+          else b.quaternion.slerp(_q.setFromEuler(_e.set(0, 0, side * sgn * now[i] * 1.35)), w);
+        }
+      });
+    }
+  }
+
+  // Head and torso. A deep bow with her back to the lens is limited, for the
+  // reason `fold` exists.
+  if (any('headNod', 'headTurn', 'headTilt')) {
+    euler('head', -sgn * v('headNod') * 0.6, v('headTurn') * 1.0, sgn * v('headTilt') * 0.45);
+  }
+  if (any('lean', 'twist', 'bend')) {
+    const facing = Math.cos((framing === 'scene' ? world.yaw : 0) + (state.turn || 0));   // 1 towards the lens, −1 away
+    const lean = facing < -0.2 ? Math.min(v('lean'), 0.3) : v('lean');
+    const twist = v('twist'), bend = v('bend');
+    euler('spine', -sgn * lean * 0.5, twist * 0.35, sgn * bend * 0.22);
+    euler('chest', -sgn * lean * 0.4, twist * 0.3, sgn * bend * 0.18);
+    if (bone('upperChest')) euler('upperChest', -sgn * lean * 0.15, twist * 0.2, sgn * bend * 0.1);
+  }
+
+  // Legs: a crouch folds both (see `fold`), and each can be lifted on top of
+  // that. A leg lifted out to the side stops at thirty degrees: further is a
+  // split, and a split in a skirt is the same problem as a squat.
+  let turn = 0;
+  if (any('crouch', 'sit', 'jump', 'sway', 'legFrontL', 'legFrontR', 'legSideL', 'legSideR', 'kneeL', 'kneeR')) {
+    const legs = fold(v('crouch'));
+    // Seated: thighs level, shins straight down, knees together, and the
+    // hips down by the length of a thigh — which puts them at the height of
+    // a seat, whatever her proportions. Turned three-quarters to the lens:
+    // thighs pointed straight at it are the squat's problem once more.
+    const sit = ease(Math.max(0, Math.min(1, v('sit'))));
+    const thigh = state.legs?.thigh ?? h * 0.25;
+    for (const [S, side] of [['L', 1], ['R', -1]]) {
+      const leg = side > 0 ? 'left' : 'right';
+      euler(leg + 'UpperLeg', sgn * (v('legFront' + S) * 1.3 + legs.hip + 1.45 * sit), 0,
+            side * sgn * (legs.together + 0.04 * sit - v('legSide' + S) * 0.55));
+      euler(leg + 'LowerLeg', -sgn * Math.min(2.3, v('knee' + S) * 2.2 + legs.knee + 1.5 * sit), 0, 0);
+      euler(leg + 'Foot', sgn * legs.foot, 0, 0);
+    }
+    state.seated = Math.max(state.seated || 0, sit * w);
+    turn += 0.62 * sit;
+    const hips = bone('hips');
+    if (hips) {
+      const rest = state.hipsRest;
+      hips.position.y += ((rest - h * legs.drop - thigh * 0.97 * sit + h * 0.24 * v('jump')) - hips.position.y) * w;
+      hips.position.x += (v('sway') * h * 0.08 * (old ? -1 : 1) - hips.position.x) * w;
+    }
+    // A high kick towards the lens is the squat's problem again, so she
+    // turns side-on for it — which is also how a kick is best seen.
+    const kickL = v('legFrontL'), kickR = v('legFrontR');
+    const kick = Math.max(kickL, kickR);
+    const aside = Math.max(0, Math.min(1, (kick - 0.4) / 0.35)) * (kickL >= kickR ? -1 : 1);
+    state.aside = (state.aside || 0) + (aside - (state.aside || 0)) * Math.min(1, dt * 6);
+    turn += state.aside * 1.3;
+  }
+  if (owns('turn')) turn += v('turn') * Math.PI;
+  return turn * w;
+}
+
+/// A motion she made up, laid over everything else: eased in over a third of
+/// a second and out over half, so it starts from wherever she was and ends
+/// where she would have been anyway.
+function applyComposed(dt, bone) {
+  const c = state.composed;
+  const total = c.length * c.loops;
+  c.t += dt;
+  const closing = c.t >= total;
+  c.w = Math.max(0, Math.min(1, c.w + (closing ? -dt / 0.5 : dt / 0.35)));
+  if (closing && c.w <= 0) { state.composed = null; state.turn = 0; face.over = null; return; }
+  const at = closing ? c.length : (c.t % c.length || (c.t > 0 ? c.length : 0));
+  const v = (name) => sample(c.tracks[name], at);
+  state.turn = layPose(v, (name) => !!c.tracks[name], c.w, dt, bone, {
+    now: c.fingers, shape: (S) => (c.tracks['hand' + S] ? HANDS[latest(c.tracks['hand' + S], at)] ?? HANDS.relax : null),
+  });
+  // The face it asks for sits over the mood's for as long as it lasts.
+  const named = latest(c.tracks.face, at);
+  const wink = latest(c.tracks.wink, at);
+  face.over = { w: c.w, emotion: named ? { [named]: 1 } : null,
+                lids: v('eyes'), left: wink === 'left' ? 1 : 0, right: wink === 'right' ? 1 : 0 };
+  if (c.tracks.mouth) state.mouth = Math.max(state.mouth, v('mouth') * c.w);
+}
+
+// ── How she feels ────────────────────────────────────────────────────────
+//
+// A mood used to be one of five face presets, switched. Nobody's face works
+// like that, and nobody's feelings stop at the neck: tired is a head that
+// hangs and lids half way down, and a yawn every so often; worried is hands
+// that have found each other. So a mood is a face (a blend, eased), a way of
+// standing (a pose, laid lightly over the idle), how much she moves, and
+// something she does now and then.
+
+/// Expression names as this model spells them. A 0.x model's "Surprised" is a
+/// custom clip with a capital S; asking for 'surprised' got nothing.
+const spelled = (name) => state.faces?.[String(name).toLowerCase()] ?? null;
+
+const MOODS = {
+  happy:   { face: { happy: 0.7 }, pose: { headTilt: 0.12 }, energy: 1.3, enter: 'hop', wink: true },
+  // On a VRoid face "relaxed" and "happy" are smiles with the eyes shut. A
+  // little of each is a soft look; half of either is somebody who is not
+  // looking at you, which is no way to spend the mood she is in most.
+  gentle:  { face: { relaxed: 0.18, happy: 0.16 }, pose: { headTilt: -0.12, armFront: 0.72, armRaise: 0.16, elbow: 0.42 }, energy: 0.8 },
+  curious: { face: { surprised: 0.4 }, pose: { headTilt: 0.32, lean: 0.12 }, energy: 1.0, enter: 'leanin' },
+  sleepy:  { face: { relaxed: 0.08 }, lids: 0.5, pose: { headNod: 0.32, lean: 0.08, bend: 0.06 }, energy: 0.5, often: ['yawn', 24, 44] },
+  worried: { face: { sad: 0.6 }, pose: { headNod: 0.2, armFront: 0.8, armRaise: 0.24, elbow: 0.5 }, energy: 0.7, fidget: true },
+};
+/// Things a mood makes her do, written in the same pose language as the
+/// motions she makes up.
+const MOOD_ACTS = {
+  hop: [{ t: 0 }, { t: 0.22, crouch: 0.3 }, { t: 0.45, crouch: 0, jump: 0.55, armRaise: 0.3, face: 'happy' },
+        { t: 0.72, jump: 0, crouch: 0.22 }, { t: 1.0, crouch: 0 }],
+  leanin: [{ t: 0 }, { t: 0.5, lean: 0.3, headTilt: 0.4, face: 'surprised' }, { t: 1.5, lean: 0.3, headTilt: 0.4 },
+           { t: 2.0, lean: 0.12, headTilt: 0.32 }],
+  yawn: [{ t: 0 }, { t: 0.7, eyes: 1, mouth: 0.9, armRaise: 0.92, armFront: 0.1, elbow: 0.35, lean: -0.25, headNod: -0.3 },
+         { t: 1.9, eyes: 1, mouth: 0.8, armRaise: 0.95, armFront: 0.1, elbow: 0.3, lean: -0.3, headNod: -0.3 },
+         { t: 2.7, eyes: 0.5, mouth: 0, armRaise: 0, elbow: 0, lean: 0, headNod: 0.2 }],
+};
+
+/// Her clothes: materials grouped by name (a toon material and its outline
+/// share one), with the texture they are painted from. VRoid marks cloth in
+/// the material's name; for anything else it is whatever is not face, skin,
+/// eyes or hair.
+const originals = new Map();
+function clothes() {
+  if (!vrm) return [];
+  const found = new Map();
+  vrm.scene.traverse((o) => {
+    for (const material of [].concat(o.material ?? [])) {
+      if (!material?.map?.image) continue;
+      const name = String(material.name || '').replace(/\s*\(Outline\)$/i, '');
+      const cloth = /_CLOTH\b|cloth|tops|bottoms|onepiece|shoes|dress|skirt|shirt|jacket|coat|wear/i.test(name);
+      const body = /FACE|SKIN|EYE|HAIR|body|mouth|brow|lash|iris|highlight/i.test(name);
+      if (!cloth || (body && !/_CLOTH\b/i.test(name))) continue;
+      if (!found.has(name)) found.set(name, { name, map: material.map, materials: [] });
+      found.get(name).materials.push(material);
+    }
+  });
+  return [...found.values()];
+}
+
+// ── Things in her hands, and somewhere to sit ────────────────────────────
+//
+// None of this knows where anything in the photograph is — that the sofa is
+// there and the railing here is a harder problem, and a separate one. These
+// are the things she brings with her: what she is holding, and a stool to
+// sit on. Built from a few primitives rather than loaded, so there is no
+// asset to be missing, and lit by the same lights as she is.
+
+const paint = (color, extra = {}) => new THREE.MeshLambertMaterial({ color, ...extra });
+const PROPS = {
+  mug() {
+    const g = new THREE.Group();
+    const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.034, 0.085, 24, 1, true), paint(0xf4efe6, { side: THREE.DoubleSide }));
+    const base = new THREE.Mesh(new THREE.CircleGeometry(0.034, 24), paint(0xf4efe6));
+    base.rotation.x = Math.PI / 2; base.position.y = -0.0425;
+    const coffee = new THREE.Mesh(new THREE.CircleGeometry(0.037, 24), paint(0x4a2c1a));
+    coffee.rotation.x = -Math.PI / 2; coffee.position.y = 0.028;
+    const handle = new THREE.Mesh(new THREE.TorusGeometry(0.026, 0.007, 10, 20, Math.PI), paint(0xf4efe6));
+    handle.rotation.z = -Math.PI / 2; handle.position.x = 0.04;
+    g.add(cup, base, coffee, handle);
+    return g;
+  },
+  book() {
+    const g = new THREE.Group();
+    for (const side of [-1, 1]) {
+      const half = new THREE.Group();
+      const cover = new THREE.Mesh(new THREE.BoxGeometry(0.105, 0.15, 0.01), paint(0x7a2f3a));
+      const pages = new THREE.Mesh(new THREE.BoxGeometry(0.098, 0.142, 0.012), paint(0xf6f1e4));
+      cover.position.set(side * 0.0525, 0, 0); pages.position.set(side * 0.051, 0, 0.008);
+      half.add(cover, pages); half.rotation.y = -side * 0.32;
+      g.add(half);
+    }
+    return g;
+  },
+  phone() {
+    const g = new THREE.Group();
+    g.add(new THREE.Mesh(new THREE.BoxGeometry(0.068, 0.14, 0.008), paint(0x1c1d22)));
+    const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.06, 0.128),
+      new THREE.MeshBasicMaterial({ color: 0xbfd8ff }));
+    screen.position.z = 0.0045; g.add(screen);
+    return g;
+  },
+  umbrella() {
+    const g = new THREE.Group();
+    const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.7, 10), paint(0x3a3a3e));
+    rod.position.y = 0.23;
+    const canopy = new THREE.Mesh(new THREE.ConeGeometry(0.5, 0.17, 8, 1, true), paint(0xc2353f, { side: THREE.DoubleSide }));
+    canopy.position.y = 0.52;
+    const grip = new THREE.Mesh(new THREE.TorusGeometry(0.03, 0.008, 8, 16, Math.PI), paint(0x5a3a22));
+    grip.position.y = -0.12; grip.rotation.z = Math.PI;
+    g.add(rod, canopy, grip);
+    return g;
+  },
+  flower() {
+    const g = new THREE.Group();
+    const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, 0.26, 8), paint(0x3f8a4a));
+    stem.position.y = 0.09;
+    const heart = new THREE.Mesh(new THREE.SphereGeometry(0.016, 12, 10), paint(0xf2c84b));
+    heart.position.y = 0.225;
+    g.add(stem, heart);
+    for (let i = 0; i < 7; i++) {
+      const petal = new THREE.Mesh(new THREE.SphereGeometry(0.02, 10, 8), paint(0xf6a5c0));
+      const a = (i / 7) * Math.PI * 2;
+      petal.scale.set(1, 0.35, 0.6); petal.position.set(Math.cos(a) * 0.03, 0.225, Math.sin(a) * 0.03);
+      petal.rotation.y = -a; g.add(petal);
+    }
+    return g;
+  },
+};
+/// How the arm carries each thing, in the pose language; how it sits in the
+/// hand; and what she does with it now and then.
+const CARRY = {
+  mug:      { pose: { armFrontR: 0.92, armRaiseR: 0.17, elbowR: 0.6 }, hand: 'fist', turn: 'upright', often: ['sip', 9, 18] },
+  book:     { pose: { armFrontR: 0.95, armRaiseR: 0.1, elbowR: 0.62, headNod: 0.42 }, hand: 'relax', turn: 'face' },
+  phone:    { pose: { armFrontR: 1.0, armRaiseR: 0.1, elbowR: 0.66, headNod: 0.42 }, hand: 'relax', turn: 'face', often: ['lookup', 8, 16] },
+  umbrella: { pose: { armFrontR: 0.78, armRaiseR: 0.2, elbowR: 0.84, armTwistR: 0.45 }, hand: 'fist', turn: 'upright' },
+  flower:   { pose: { armFrontR: 0.92, armRaiseR: 0.2, elbowR: 0.7 }, hand: 'fist', turn: 'upright', often: ['smell', 10, 20] },
+};
+const CARRY_ACTS = {
+  sip: [{ t: 0 }, { t: 0.7, armFrontR: 1.08, armRaiseR: 0.34, elbowR: 0.97, headNod: -0.12, eyes: 0.6 },
+        { t: 1.5, armFrontR: 1.08, armRaiseR: 0.34, elbowR: 0.97, headNod: -0.18, eyes: 0.8 },
+        { t: 2.3, armFrontR: 0.92, armRaiseR: 0.17, elbowR: 0.6, headNod: 0, eyes: 0, face: 'relaxed' }],
+  lookup: [{ t: 0, headNod: 0.42 }, { t: 0.5, headNod: 0, headTilt: 0.15 }, { t: 1.8, headNod: 0, headTilt: 0.15 }, { t: 2.4, headNod: 0.42, headTilt: 0 }],
+  smell: [{ t: 0 }, { t: 0.7, armFrontR: 1.05, armRaiseR: 0.36, elbowR: 0.95, headNod: 0.15, eyes: 1 },
+          { t: 1.7, armFrontR: 1.05, armRaiseR: 0.36, elbowR: 0.95, headNod: 0.15, eyes: 1, face: 'happy' },
+          { t: 2.5, armFrontR: 0.92, armRaiseR: 0.2, elbowR: 0.7, headNod: 0, eyes: 0 }],
+};
+const held = { name: null, object: null, w: 0, next: 8, fingers: { L: [...HANDS.relax], R: [...HANDS.relax] } };
+const _p0 = new THREE.Vector3(), _p1 = new THREE.Vector3(), _p2 = new THREE.Vector3();
+
+/// A stool, for when she sits with nothing in the photograph to sit on.
+const stool = (() => {
+  const g = new THREE.Group();
+  const top = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.05, 28), paint(0xd8b98a));
+  top.position.y = -0.025; g.add(top);
+  for (let i = 0; i < 4; i++) {
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.011, 1, 10), paint(0xb8935f));
+    const a = Math.PI / 4 + (i * Math.PI) / 2;
+    leg.position.set(Math.cos(a) * 0.13, -0.55, Math.sin(a) * 0.13); leg.name = 'leg'; g.add(leg);
+  }
+  g.visible = false; actor.add(g);
+  return g;
+})();
+
+/// The arm that is carrying something, and the seat she has taken: two more
+/// poses laid over the idle, under anything she is doing on purpose.
+function applyCarryAndSeat(dt, bone) {
+  const busy = (framing === 'scene' ? world.gait : 0) > 0.2;
+  const carry = held.name ? CARRY[held.name] : null;
+  held.w = Math.max(0, Math.min(1, held.w + (carry ? dt / 0.5 : -dt / 0.4)));
+  if (carry && held.w > 0) {
+    layPose((n) => carry.pose[n] ?? 0, (n) => carry.pose[n] !== undefined, held.w, dt, bone,
+            { now: held.fingers, shape: (S) => (S === 'R' ? HANDS[carry.hand] : null) });
+    if (carry.often && !state.composed && !world.act && !busy) {
+      held.next -= dt;
+      if (held.next <= 0) {
+        const [act, lo, hi] = carry.often;
+        held.next = lo + Math.random() * (hi - lo);
+        kin.compose({ name: act, frames: CARRY_ACTS[act] }, false);
+      }
+    }
+  }
+  // Seated for as long as she is asked to be; walking anywhere stands her up.
+  if (busy && world.seat) world.seat = null;
+  const want = world.seat === 'stool' ? 1 : 0, kneel = world.seat === 'floor' ? 1 : 0;
+  world.sat = (world.sat ?? 0) + (want - (world.sat ?? 0)) * Math.min(1, dt * 2.2);
+  world.knelt = (world.knelt ?? 0) + (kneel - (world.knelt ?? 0)) * Math.min(1, dt * 2.2);
+  if (world.sat > 0.01 || world.knelt > 0.01) {
+    const values = { sit: world.sat, crouch: world.knelt, lean: 0.06 * world.knelt };
+    if (!carry) Object.assign(values, { armFrontL: 0.62, armFrontR: 0.62, armRaiseL: 0.1, armRaiseR: 0.1, elbowL: 0.36, elbowR: 0.36 });
+    state.seatTurn = layPose((n) => values[n] ?? 0, (n) => values[n] !== undefined, 1, dt, bone, null);
+  } else state.seatTurn = 0;
+}
+
+/// Where the thing in her hand is, once the frame's pose is final.
+function placeProps() {
+  const sat = state.seated || 0;
+  stool.visible = sat > 0.05;
+  if (stool.visible) {
+    const seatHeight = (state.legs ? state.legs.ankle + state.legs.shin : world.height * 0.3) * 0.98;
+    stool.position.set(0, seatHeight, -0.02);
+    stool.scale.setScalar(Math.min(1, sat * 1.5));
+    for (const leg of stool.children) if (leg.name === 'leg') { leg.scale.y = seatHeight - 0.05; leg.position.y = -0.05 - (seatHeight - 0.05) / 2; }
+  }
+  drape(Math.min(1, sat * 1.6));
+  state.seated = 0;                                   // said again next frame by whoever is sitting
+  if (!held.object) return;
+  held.object.visible = held.w > 0.3;
+  const hand = vrm.humanoid?.getRawBoneNode('rightHand'), fore = vrm.humanoid?.getRawBoneNode('rightLowerArm');
+  const head = vrm.humanoid?.getRawBoneNode('head');
+  if (!hand || !fore) return;
+  hand.getWorldPosition(_p1); fore.getWorldPosition(_p0);
+  const along = _p2.copy(_p1).sub(_p0).normalize();
+  const size = world.height / 1.55;
+  held.object.position.copy(_p1).addScaledVector(along, 0.075 * size);
+  held.object.scale.setScalar(size * (held.name === 'mug' ? 0.76 : 1));
+  const carry = CARRY[held.name];
+  if (carry.turn === 'face' && head) {
+    head.getWorldPosition(_p0); _p0.y += 0.06 * size;
+    held.object.lookAt(_p0);                            // a page, a screen: turned to her eyes
+    held.object.position.y += 0.03 * size;
+  } else {
+    held.object.rotation.set(0, actor.rotation.y, 0);   // a mug, an umbrella: upright whatever the wrist does
+    if (held.name === 'mug') held.object.position.y += 0.035 * size;
+  }
+}
+
+const face = { mood: {}, lids: 0, over: null, wink: 0, winkIn: 12 };
+const feel = { name: '', now: null, w: 0, next: 0, last: {} };
+
+/// The posture and the habits of whatever she is feeling.
+function applyMood(dt, t, bone) {
+  const m = feel.now;
+  // Walking, playing and motions of her own all outrank a way of standing.
+  const busy = (framing === 'scene' ? world.gait : 0) > 0.2 || world.act || state.composed || state.dance;
+  feel.w = Math.max(0, Math.min(1, feel.w + (m && !busy ? dt / 0.7 : -dt / 0.4)));
+  if (!m || feel.w <= 0) return;
+  const values = { ...m.pose };
+  if (m.fidget) {                                   // hands that will not keep still
+    values.elbow = (values.elbow ?? 0) + 0.035 * Math.sin(t * 4.3) + 0.02 * Math.sin(t * 7.1);
+    values.armFront = (values.armFront ?? 0) + 0.02 * Math.sin(t * 3.1);
+  }
+  const both = (name) => values[name] ?? values[name.slice(0, -1)];        // "armRaise" is both arms
+  layPose((n) => both(n) ?? 0, (n) => both(n) !== undefined, feel.w, dt, bone, null);
+
+  // Something she does now and then.
+  if (m.often && !busy) {
+    feel.next -= dt;
+    if (feel.next <= 0) {
+      const [act, lo, hi] = m.often;
+      feel.next = lo + Math.random() * (hi - lo);
+      kin.compose({ name: act, frames: MOOD_ACTS[act] }, false);
+    }
+  }
+}
+
+/// Ease every expression towards what the mood — or a motion, over it — asks.
+function mixFace(dt) {
+  const em = vrm.expressionManager;
+  if (!em) return;
+  const over = face.over, ow = over?.w ?? 0;
+  const want = {};
+  for (const [name, weight] of Object.entries(face.mood)) want[name] = weight * (over?.emotion ? 1 - ow : 1);
+  for (const [name, weight] of Object.entries(over?.emotion ?? {})) want[name] = (want[name] ?? 0) + weight * ow;
+  for (const name of ['happy', 'sad', 'angry', 'relaxed', 'surprised']) {
+    const actual = spelled(name);
+    if (!actual) continue;
+    const now = em.getValue(actual) ?? 0;
+    em.setValue(actual, now + ((want[name] ?? 0) - now) * Math.min(1, dt * 5));
+  }
+  // A wink, once in a while, when she is in the mood for one.
+  if (feel.now?.wink && !over) {
+    face.winkIn -= dt;
+    if (face.winkIn <= 0) { face.wink = 0.45; face.winkIn = 14 + Math.random() * 22; }
+  }
+  face.wink = Math.max(0, face.wink - dt);
+  const pulse = face.wink > 0 ? Math.sin(face.wink / 0.45 * Math.PI) : 0;
+  const lids = Math.max(face.lids * (1 - ow), (over?.lids ?? 0) * ow);
+  const set = (name, value) => { const actual = spelled(name); if (actual) em.setValue(actual, value); };
+  set('blinkLeft', Math.max(over?.left ? ow : 0, pulse));
+  set('blinkRight', over?.right ? ow : 0);
+  state.lids = lids;                          // the blink adds itself on top of this
+}
 
 const turnTo = (from, to) => {
   let d = (to - from) % (Math.PI * 2);
@@ -522,7 +1339,7 @@ function liveInPlace(dt, t, bone) {
   const h = world.height;
 
   // ── thinking ────────────────────────────────────────────────────────
-  if (!world.target && !world.act) {
+  if (!world.target && !world.act && !state.composed) {
     const fromMark = Math.hypot(actor.position.x, actor.position.z);
     if (world.attend) {
       if (fromMark > 0.12 && performance.now() > (world.hold || 0)) kin.walk(0, 0, 'face', false);
@@ -615,13 +1432,14 @@ function liveInPlace(dt, t, bone) {
       if (b) { b.rotation.z = b.rotation.z * (1 - k) + down * side * z * k; b.rotation.x = b.rotation.x * (1 - k) + x * k; }
     };
     const crouch = (deep) => {
-      for (const side of ['left', 'right']) {
+      const legs = fold(deep);
+      for (const [side, s] of [['left', 1], ['right', -1]]) {
         const up = bone(side + 'UpperLeg'), low = bone(side + 'LowerLeg'), foot = bone(side + 'Foot');
-        if (up) up.rotation.x = fwd * 1.15 * deep;
-        if (low) low.rotation.x = -fwd * 2.1 * deep;
-        if (foot) foot.rotation.x = fwd * 0.75 * deep;
+        if (up) up.rotation.set(fwd * legs.hip, 0, s * fwd * legs.together);
+        if (low) low.rotation.x = -fwd * legs.knee;
+        if (foot) foot.rotation.x = fwd * legs.foot;
       }
-      if (hips) hips.position.y = state.hipsRest + -h * 0.27 * deep;
+      if (hips) hips.position.y = state.hipsRest - h * legs.drop;
     };
     const chest = bone('chest') ?? bone('spine'), head = bone('head');
     if (act.name === 'wave') {
@@ -662,7 +1480,7 @@ function liveInPlace(dt, t, bone) {
     if (u >= 1) { world.act = null; world.next = 2 + Math.random() * 5; }
   }
 
-  actor.rotation.y = world.yaw + spin;
+  actor.rotation.y = world.yaw + spin + (state.turn || 0) + (state.seatTurn || 0);
 
   // ── eyes, shadow, focus ─────────────────────────────────────────────
   // Where she is going while she walks, the lens when she is not.
@@ -700,11 +1518,13 @@ function renderFrame() {
   if (vrm) {
     nextBlink -= dt;
     if (nextBlink <= 0) { blink = 0.18; nextBlink = 2.2 + Math.random() * 3.4; }
+    // The blink closes what the mood — or a yawn — has left open.
+    const lids = state.lids ?? 0;
     if (blink > 0) {
       blink -= dt;
-      vrm.expressionManager?.setValue('blink', Math.sin(Math.max(blink, 0) / 0.18 * Math.PI));
+      vrm.expressionManager?.setValue('blink', Math.max(lids, Math.sin(Math.max(blink, 0) / 0.18 * Math.PI)));
     } else {
-      vrm.expressionManager?.setValue('blink', 0);
+      vrm.expressionManager?.setValue('blink', lids);
     }
 
     // A motion file owns the body while it plays: the procedural idle below
@@ -728,14 +1548,26 @@ function renderFrame() {
     // that returns on its own. Nothing here is large; it is the
     // *unpredictability* that reads as alive, not the amplitude.
     const bone = (n) => vrm.humanoid?.getNormalizedBoneNode(n);
+    // Every frame starts from rest, and everything below is laid on top.
+    // The idle only writes the joints it cares about, so whatever a motion
+    // left in the others stayed there: a leg out to the side for the rest of
+    // the evening, fingers still in a peace sign.
+    for (const name of state.bones ?? []) { const b = bone(name); if (b) b.rotation.set(0, 0, 0); }
+    // A 0.x rig is modelled facing the other way from a 1.0 one, and the
+    // normalised bones keep that: the z-rotation that lowers a left arm on
+    // one raises it on the other.
+    const down = vrm.meta?.metaVersion === '0' ? 1 : -1;
     const chest = bone('chest') ?? bone('spine');
     const breath = Math.sin(t * 1.05) * 0.012 + Math.sin(t * 0.43) * 0.004;
     if (chest) chest.rotation.x = breath;
 
     // Weight on one foot, then the other, on a slow wander rather than a
     // metronome: three sines whose periods share no common multiple.
-    const sway = Math.sin(t * 0.21) * 0.6 + Math.sin(t * 0.13 + 1.7) * 0.3
-               + Math.sin(t * 0.07 + 0.4) * 0.1;
+    // How much she moves is the mood's: tired barely shifts, happy cannot
+    // keep still.
+    const energy = feel.now?.energy ?? 1;
+    const sway = (Math.sin(t * 0.21 * energy) * 0.6 + Math.sin(t * 0.13 * energy + 1.7) * 0.3
+               + Math.sin(t * 0.07 + 0.4) * 0.1) * (0.6 + 0.4 * energy);
     const hips = bone('hips');
     if (hips) {
       hips.rotation.z = sway * 0.035;
@@ -760,13 +1592,13 @@ function renderFrame() {
     for (const [name, side] of [['leftUpperArm', 1], ['rightUpperArm', -1]]) {
       const b = bone(name);
       if (b) {
-        b.rotation.z = side * (rest - gesture + 0.02 * sway);
+        b.rotation.z = down * side * (rest - gesture + 0.02 * sway);
         b.rotation.x = 0.06 * Math.sin(t * 0.31 + (side > 0 ? 0 : 1.1));
       }
     }
     for (const [name, side] of [['leftLowerArm', 1], ['rightLowerArm', -1]]) {
       const b = bone(name);
-      if (b) b.rotation.z = side * (bend + gesture * 0.5);
+      if (b) b.rotation.z = down * side * (bend + gesture * 0.5);
     }
 
     // A glance away, now and then, that comes back by itself. Looking at one
@@ -792,12 +1624,14 @@ function renderFrame() {
       look.position.y = look.userData.base + glance.y * 0.3;
     }
 
+    applyMood(dt, t, bone);
+    applyCarryAndSeat(dt, bone);
     if (framing === 'scene') liveInPlace(dt, t, bone);
 
     // The built-in dance: a bounce, a hip sway at half that rate, arms up and
     // swinging, head nodding with the beat. 112 bpm because it is the tempo
     // most people sway at without being asked.
-    if (state.dance) {
+    if (state.dance && !state.composed) {
       const beat = t * (112 / 60) * Math.PI;
       const bounce = Math.abs(Math.sin(beat)) * 0.06;
       const hipsB = bone('hips');
@@ -809,17 +1643,23 @@ function renderFrame() {
       for (const [name, side] of [['leftUpperArm', 1], ['rightUpperArm', -1]]) {
         const b = bone(name);
         if (b) {
-          b.rotation.z = side * (0.9 + Math.sin(beat + (side > 0 ? 0 : Math.PI)) * 0.5);
+          b.rotation.z = down * side * (0.9 + Math.sin(beat + (side > 0 ? 0 : Math.PI)) * 0.5);
           b.rotation.x = Math.sin(beat / 2) * 0.3;
         }
       }
       for (const [name, side] of [['leftLowerArm', 1], ['rightLowerArm', -1]]) {
         const b = bone(name);
-        if (b) b.rotation.z = side * (0.8 + Math.sin(beat) * 0.4);
+        if (b) b.rotation.z = down * side * (0.8 + Math.sin(beat) * 0.4);
       }
       const headB = bone('head');
       if (headB) headB.rotation.x = Math.sin(beat) * 0.08;
     }
+
+    // A motion she made up: over everything the idle, the walk and the dance
+    // have just done.
+    if (state.composed) applyComposed(dt, bone);
+    if (framing !== 'scene') actor.rotation.y = (state.turn || 0) + (state.seatTurn || 0);
+    mixFace(dt);
 
     // Talking. With a viseme track the five shapes are driven straight and
     // eased towards their targets — 0.35 a frame at 60fps is about 40ms to
@@ -843,6 +1683,7 @@ function renderFrame() {
     }
 
     vrm.update(dt);
+    placeProps();
   }
   state.frames++;
   renderer.render(scene, camera);

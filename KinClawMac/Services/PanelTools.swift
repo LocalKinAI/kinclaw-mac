@@ -77,18 +77,30 @@ enum PanelTools {
         [
             "name": "avatar_wear",
             "description": """
-                Change how the KinClaw companion looks, by name — a real-person \
-                look or a 3D outfit, and a partial name is enough. Use it when \
-                the user asks her to change clothes or to be someone else. Call \
-                avatar_outfits first if you do not know what she has.
+                Change how the KinClaw companion looks. `outfit` picks something \
+                she has, by name (part of one is enough): a real-person look, a \
+                3D model, an outfit she has worn before, or "original" for the \
+                clothes the model came in. `repaint` makes a new outfit for the \
+                3D companion from a description — her clothes keep their cut \
+                and are repainted in any colours, fabric and pattern ("a deep \
+                red dress with white lace", "navy sailor uniform with a red \
+                ribbon", "black gothic dress, purple ribbons"). Write it in \
+                English; about half a minute, and she changes when it lands, \
+                so say so rather than waiting. Give it a short `name` so she \
+                can wear it again. Use this when the user asks her to change \
+                clothes; call avatar_outfits if you do not know what she has.
                 """,
             "inputSchema": [
                 "type": "object",
                 "properties": [
                     "outfit": ["type": "string",
-                               "description": "An outfit name from avatar_outfits; part of one is enough."],
+                               "description": "A name from avatar_outfits (part of one is enough), or \"original\"."],
+                    "repaint": ["type": "string",
+                                "description": "A new outfit, described in English: colours, fabric, pattern. The clothes only — no shoes, hair or accessories in this one."],
+                    "shoes": ["type": "string",
+                              "description": "Optional, with repaint: the shoes, described on their own (\"black patent boots\"). Left out, her shoes stay as they are."],
+                    "name": ["type": "string", "description": "Short name to keep a repainted outfit under, e.g. \"red-lace\"."],
                 ],
-                "required": ["outfit"],
             ],
         ],
         [
@@ -263,21 +275,80 @@ enum PanelTools {
         [
             "name": "avatar_move",
             "description": """
-                Make the 3D companion move. In one of her places she can walk \
-                around in it — `walk`: "come" (up to the user), "near", "far", \
-                "left", "right", "around" — and play where she stands — \
-                `play`: wave, stretch, spin, jump, pick (crouch to pick \
-                something up), look (look around), dance. `motion` plays a \
-                .vrma file, "dance" the built-in dance, "" stops. Use it when \
-                the user asks her to come over, go and look at something, \
-                jump, wave, dance, or stop. She also wanders and plays by \
+                Make the 3D companion move. She also wanders and plays by \
                 herself when nobody is talking to her.
+                - `walk`: come | near | far | left | right | around — inside \
+                one of her places.
+                - `play`: wave, stretch, spin, jump, pick, look, dance — or the \
+                name of a motion she made up before.
+                - `hold`: mug | book | phone | umbrella | flower | none — puts \
+                it in her hand; she carries it and does what people do with \
+                one (sips, reads, glances up from the phone, smells the flower).
+                - `sit`: stool (a stool appears and she sits on it) | floor \
+                (she kneels) | stand.
+                - `compose`: make a motion up, for anything not on that list \
+                ("比个心", "鞠躬", "假装投篮"). Give it a `name` and `frames`: \
+                keyframes {t: seconds, slider: value, …}. She eases between \
+                them, starts from standing and goes back to it by herself, and \
+                the motion is kept under its name. A frame names only the \
+                sliders that change; a single frame is a pose she moves into, \
+                holds for two seconds and leaves. Sliders:
+                  (a limb slider ends in L or R for one side — armRaiseL — \
+                and with neither it means both)
+                  arms — armRaise: -0.2 hanging, 0.45 straight out, 1 \
+                overhead · armFront: 0 out to the side, 1 straight ahead, 1.4 \
+                across the chest · elbow: 0 straight, 1 folded · armTwist: -1 \
+                forearm down, 1 forearm up
+                  head — headTurn (+ her left), headNod (+ down), headTilt (+ \
+                toward her left shoulder), each -1…1
+                  torso — lean (+ forward; 0.8 is a deep bow), twist, bend, -1…1
+                  legs — legFront (+ a kick forward, - back), legSide \
+                0…1, knee 0…1
+                  body — crouch 0…1 (past 0.5 she kneels), sit 0…1 (seated, a \
+                stool under her), jump 0…1, turn (1 is half a turn, 2 a full \
+                spin), sway -1…1
+                  hands — hand (handL / handR): relax | open | fist | point | peace | \
+                thumb | ok
+                  face — face: neutral | happy | sad | angry | relaxed | \
+                surprised · wink: left | right | none · eyes 0…1 shut · mouth \
+                0…1 open
+                Arm poses known to look right — build from these, animate \
+                between them (both arms unless marked):
+                  hands together at the chest (clap, pray): armFront 0.8, \
+                armRaise 0.3, elbow 0.5 · hands over the head (big heart, \
+                cheer): armRaise 0.95, armFront 0.12, elbow 0.82 · hands at \
+                the cheeks: armFront 1.25, armRaise 0.12, elbow 0.8 · hand at \
+                the chin (one arm): armFront 1, armRaise 0.12, elbow 0.95 · \
+                salute (one arm): armRaise 0.5, armFront 0.25, elbow 0.85, \
+                armTwist 0.75 · hands on hips: armRaise 0.12, armFront -0.15, \
+                elbow 0.62, armTwist -0.55 · arms crossed: armFront 1, \
+                armRaise 0.02, elbow 0.72, armTwist -0.75 · a waving arm: \
+                armRaise 0.5, elbow 0.5, armTwist 1, then armTwist 1 ↔ 0.5 · \
+                pointing ahead: armFront 1, armRaise 0.45, hand point. \
+                Forearms folded in front of the face hide it — keep hands at \
+                the chest or above the head.
+                A bow: [{"t":0},{"t":0.6,"lean":0.8,"headNod":0.4},\
+                {"t":1.4,"lean":0.8,"headNod":0.4},{"t":2,"lean":0,"headNod":0}]
+                - `motion`: a .vrma file name, "dance", or "" to stop.
                 """,
             "inputSchema": [
                 "type": "object",
                 "properties": [
                     "walk": ["type": "string", "description": "come | near | far | left | right | around"],
-                    "play": ["type": "string", "description": "wave | stretch | spin | jump | pick | look | dance"],
+                    "play": ["type": "string", "description": "A built-in (wave, stretch, spin, jump, pick, look, dance) or the name of a motion she composed."],
+                    "hold": ["type": "string", "description": "mug | book | phone | umbrella | flower | none"],
+                    "sit": ["type": "string", "description": "stool | floor | stand"],
+                    "compose": [
+                        "type": "object",
+                        "description": "A motion made up on the spot, in the pose language above.",
+                        "properties": [
+                            "name": ["type": "string", "description": "Short English name to keep it under, e.g. \"bow\", \"heart\"."],
+                            "frames": ["type": "array", "items": ["type": "object"],
+                                       "description": "Keyframes, each {t: seconds, <slider>: value, …}. One frame is a held pose."],
+                            "loops": ["type": "integer", "description": "Times to repeat (default 1)."],
+                        ],
+                        "required": ["name", "frames"],
+                    ] as [String: Any],
                     "motion": ["type": "string",
                                "description": "\"dance\", a .vrma file name from ~/.kinclaw/vrm/motions/, or \"\" to stop."],
                     "loops": ["type": "integer", "description": "How many times to play a file (default 1)."],
@@ -361,7 +432,7 @@ enum PanelTools {
         case "companion_open":
             NotificationCenter.default.post(name: .kinclawOpenCompanion, object: nil)
             return ("陪伴模式打开了", false)
-        case "avatar_move":    return move(args)
+        case "avatar_move":    return await move(args)
         case "avatar_stage":   return (await stageReport(), false)
         case "character_go":   return goToScene(args)
         case "character_probe": return probe(args)
@@ -602,17 +673,31 @@ enum PanelTools {
 
     // MARK: Moving
 
-    private static func move(_ args: [String: Any]) -> (String, Bool) {
+    private static func move(_ args: [String: Any]) async -> (String, Bool) {
+        if let made = args["compose"] as? [String: Any] {
+            guard let frames = made["frames"] as? [[String: Any]] else {
+                return ("compose 需要 frames：一组关键帧 {t, 滑杆: 值…}", true)
+            }
+            return await VRMStage.shared.compose(name: (made["name"] as? String) ?? "",
+                                                 frames: frames, loops: made["loops"] as? Int ?? 1)
+        }
+        // Several of these can come in one call: "sit down with a book".
+        var said: [String] = []
+        if let what = args["hold"] as? String { said.append(VRMStage.shared.hold(what)) }
+        if let how = args["sit"] as? String, !how.isEmpty { said.append(VRMStage.shared.sit(how)) }
+        if !said.isEmpty, args["walk"] == nil, args["play"] == nil, args["motion"] == nil {
+            return (said.joined(separator: "；"), false)
+        }
         if let where_ = args["walk"] as? String, !where_.isEmpty {
             let answer = VRMStage.shared.walk(where_.lowercased())
-            return (answer, !answer.hasPrefix("她"))
+            return ((said + [answer]).joined(separator: "；"), !answer.hasPrefix("她"))
         }
         if let name = args["play"] as? String, !name.isEmpty {
-            let answer = VRMStage.shared.play(name.lowercased())
+            let answer = await VRMStage.shared.play(name.lowercased())
             return (answer, answer != "好")
         }
         guard let motion = args["motion"] as? String else {
-            return ("avatar_move 需要 walk、play 或 motion 之一", true)
+            return ("avatar_move 需要 walk、play、hold、sit、compose 或 motion 之一", true)
         }
         let answer = VRMStage.shared.move(motion, loops: args["loops"] as? Int ?? 1)
         let files = VRMStage.motions
@@ -764,6 +849,15 @@ enum PanelTools {
             if !lines.isEmpty { lines.append("") }
             lines.append("3D 形象（VRM）：")
             lines += outfits.map { "\($0.id == wearing && threeD ? "→" : " ") \($0.name)" }
+            // What the model she is wearing has been repainted as.
+            if let model = wearing {
+                let painted = VRMOutfits.names(for: model)
+                let on = VRMOutfits.remembered(for: model)
+                lines.append("")
+                lines.append("这个模型穿过的（avatar_wear outfit 换回；repaint 现画新的）：")
+                lines.append("\(on == nil ? "→" : " ") original（模型自带的那身）")
+                lines += painted.map { "\($0 == on ? "→" : " ") \($0)" }
+            }
         }
         lines.append("")
         let visible = CompanionPresence.shared.onScreen
@@ -780,10 +874,16 @@ enum PanelTools {
     /// far likelier to mean the person than the model, and the two surfaces are
     /// one or the other — the 3D canvas covers the panel.
     private static func wear(_ args: [String: Any]) -> (String, Bool) {
+        if let words = (args["repaint"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !words.isEmpty {
+            return VRMStage.shared.repaint(words, shoes: (args["shoes"] as? String) ?? "",
+                                           name: (args["name"] as? String) ?? "")
+        }
         guard let wanted = (args["outfit"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
               !wanted.isEmpty else {
-            return ("avatar_wear 需要一个名字", true)
+            return ("avatar_wear 需要 outfit（换一身已有的）或 repaint（现画一身新的）", true)
         }
+        // Something she has painted before, or back into what she came in.
+        if let answer = VRMStage.shared.dress(in: wanted) { return (answer + seen(), false) }
         if let look = AvatarStage.match(wanted) {
             if VRMServerBox.shared.base != nil {
                 VRMWardrobe.isEnabled = false

@@ -208,6 +208,183 @@ in one place, so between them only her state changes.
   companion who cannot answer "where are you" from her own tools will
   make something up.
 
+### Added — things in her hands, and somewhere to sit
+
+The part of "props and interaction" that needs to know nothing about the
+photograph. That the sofa is *there* and the railing *here* is a harder
+problem and a separate one; these are the things she brings with her.
+
+- **Five things to hold** — a mug, a book, a phone, an umbrella, a flower —
+  built from a few primitives rather than loaded, so there is no asset to be
+  missing, and lit by the same lights as she is. Each has a way of being
+  carried, written in the pose language, and a habit: she sips, keeps her
+  head down over the page, glances up from the phone, smells the flower.
+- **Placed by where her hand ends up, not parented to it.** Hand bones are
+  oriented differently on every model, so the thing is put at the end of her
+  forearm once the frame's pose is final and turned by what it *is*: a mug
+  and an umbrella stay upright whatever the wrist does, a page and a screen
+  face her eyes.
+- **`sit`**: a stool appears under her and she sits on it, or she kneels on
+  the floor; walking anywhere stands her up. Seated is a slider in the pose
+  language too, so a motion the brain writes can sit her down. The seat's
+  height is her own shin and ankle, so her feet reach the floor.
+- **A skirt is cloth, so seated it is treated as cloth.** Sitting exposed her
+  again, and worse than crouching had: a spring bone pulls back towards the
+  direction it was modelled in, which for a skirt is straight down — where
+  her thighs now are. Colliders push the panels out, the spring pulls them
+  back, and the front of the skirt settles standing up off her lap like a
+  fan. Cloth has no such spring. While she sits, the hip-hung joints lose
+  their stiffness and gain weight and drag, and the skirt lies over her
+  thighs the way fabric does; standing, they get their own settings back.
+  She also sits turned three-quarters to the lens with her knees together.
+- `avatar_move` takes `hold` and `sit`, together if wanted ("坐下看会儿书").
+
+### Added — a mood is a face, a way of standing, and things she does
+
+A mood used to be one of five face presets, switched. Nobody's face works
+like that, and nobody's feelings stop at the neck.
+
+- **Each mood is four things**: a face — a *blend* of expressions, eased; a
+  way of standing, written in the pose language and laid lightly over the
+  idle; how much she moves; and something she does now and then. Worried is
+  sad eyes, head a little down and hands that have found each other and will
+  not keep still. Sleepy is a hanging head and lids half way down, and every
+  half minute or so a yawn — eyes shut, mouth open, both arms stretched
+  overhead. Curious leans in with her head tilted. Happy cannot keep still,
+  winks once in a while, and arrives with a little hop — once, not every
+  time a reply repeats the mood. Gentle folds her hands in front of her.
+- **Open eyes.** On a VRoid face "relaxed" and "happy" are smiles with the
+  eyes *shut*. Half of either — the first weights tried — is somebody who is
+  not looking at you, which is no way to spend the mood she is in most. A
+  fifth of each is a soft look.
+- **Expressions are asked for the way the model spells them.** A VRM 0.x
+  model's "Surprised" is a custom clip with a capital S; asking for
+  `surprised` got nothing, silently.
+- **One pose layer.** Moods, the built-in acts and the motions the brain
+  writes all go through `layPose`, so they agree about what a raised arm is —
+  and each owns only the body parts it names. A motion that says nothing
+  about her legs leaves them alone; it used to pin everything it did not
+  mention to rest.
+
+### Added — she changes clothes, into anything
+
+- **The cut is the model's; the paint is free.** A VRM's clothes are a mesh
+  and a painted texture. The mesh cannot be changed from here. The texture
+  goes to the edit model as a flat UV atlas with the instruction to recolour
+  the existing pieces and leave every one where it is — and it does: a deep
+  red dress with white lace and gold buttons, a navy sailor uniform, black
+  with purple ribbons and silver buttons, each with every island in place,
+  so it maps straight back onto her. Twenty-three seconds at 1024 on the box.
+  The repaint comes back opaque, so it takes the original's alpha — the lace
+  along a hem is cut out of the texture by exactly that.
+- **Every repaint is checked before she wears it.** It does not always
+  repaint in place. Told about boots while looking at a dress, it painted
+  boots into the dress; shown a small atlas of shoe parts it could not read,
+  it drew a fashion plate. What a faithful repaint always keeps is the
+  *empty* part of the atlas, so the pixels that were transparent in the
+  original are measured in the repaint: still one flat colour, or something
+  has been drawn where there was nothing. Measured — a faithful repaint 1.7
+  to 2.9, the dress with boots 19.4, the fashion plate 89.9; the line is at
+  10. A refusal gets one retry with another seed (on the first real run the
+  dress needed it), and the refused paintings are kept beside the others
+  under names that say what they are.
+- **Each garment only hears about itself.** `repaint` describes the clothes,
+  `shoes` the shoes; the prompt forbids drawing, adding or moving anything.
+- **What cannot be repainted is recoloured.** The shoe atlas was refused
+  every time, so a refused piece falls back to the original's own shading
+  tinted to the first colour the words name — which cannot get the layout
+  wrong because it never touches it.
+- **Kept and remembered.** `~/.kinclaw/avatars/outfits/<model>/<name>/`;
+  the outfit goes back on with the model at launch, `avatar_wear outfit:` puts
+  on one she has, `"original"` the one she came in, and `avatar_outfits` lists
+  them. A background job: the tool answers at once and she changes when it
+  lands.
+
+### Fixed — crouching, kneeling and jumping in a skirt
+
+Reported as "蹲下时遮挡内裤啊", and it was worse than reported. Three separate
+things exposed her, and only the first was a pose.
+
+- **A deep squat lifts the front of a skirt.** Thighs raised towards the lens
+  take the hem up with them. So a crouch is now what somebody in a skirt
+  does: down to half way is a shallow athletic bend — knees forward a
+  little, feet flat, the hem where it was — and past that she goes on down
+  to her knees, thighs back under her and the skirt hanging straight in
+  front, knees together throughout. "Pick something up" is a kneel and a
+  reach. How far her hips come down is computed from her own thigh and shin
+  lengths, measured when the model loads, so feet stay on the floor while
+  she is on them and knees reach it when she kneels — for any character's
+  proportions, not the one it was tuned on.
+- **The skirt stayed in the air when she did not.** This one no pose could
+  fix. Spring bones are simulated in world space, which is right for hair —
+  jump, and it lifts — and wrong for cloth on somebody whose hips drop a
+  third of her height in a third of a second: the skirt has inertia, stays
+  where it was, and for those frames is round her waist. Every spring joint
+  that hangs from the hips and not from the spine (a skirt, a coat's hem, a
+  tail — eighteen joints on Vivi) now has the hips as its simulation centre:
+  it still hangs by gravity, still swings when she turns, is still pushed by
+  her thighs, and comes down with her. Checked mid-drop, at the top of a
+  jump and on the landing. Hair is left alone, and still flies.
+- **Motions the brain writes are held to the same standard.** A high kick
+  towards the lens is the squat's problem again, so past a certain height
+  she turns side-on for it — which is also how a kick is best seen. A leg
+  lifted out to the side stops at thirty degrees. A deep bow with her back
+  to the lens is limited. The writer is a language model with no eyes; it
+  will not think of any of this, so the stage does.
+
+### Added — she makes motions up
+
+Seven things to do is a list. "比个心", "鞠个躬", "假装投篮" are not on it and
+never will be, whatever the list grows to — so, like a place she has never
+been, a motion she does not have is made on the spot.
+
+- **A pose language, not bone angles.** A language model asked for Euler
+  angles on seventeen joints produces arms through ribcages: it has no body
+  to check them against, and a rig that is mirrored between VRM 0.x and 1.0
+  wants the signs flipped besides. What it writes instead is what a person
+  would say — how high an arm is raised, how far in front, how bent the
+  elbow; how far the head is turned; how deep the crouch — about thirty
+  sliders, each running over a range the joint can actually cover, so every
+  combination is a pose a body can be in. An arm is two angles (how high,
+  how far round) and the joint takes the shortest turn from rest to there,
+  which makes hanging, straight ahead, overhead and across the chest all the
+  same kind of thing. Seven hand shapes, the six expressions, a wink, lids
+  and mouth ride along.
+- **A motion is keyframes over those**, `{t, slider: value, …}`. Each slider
+  has its own track, eased between the keys that name it, up from rest before
+  the first and held after the last; the whole thing eases in over a third
+  of a second from wherever she was and out over half to where she would
+  have been anyway. A single frame is a pose: she moves into it, holds it
+  two seconds and leaves. `avatar_move` takes it as `compose`.
+- **Kept by name.** `~/.kinclaw/vrm/motions/<name>.json`, beside the .vrma
+  files, and `play: "<name>"` does it again.
+- **It is told what it got wrong.** Words the stage does not know are
+  ignored and named in the answer rather than failing the motion. That is
+  how the first real attempt was diagnosed: the brain wrote `armFront`,
+  `armRaise`, `elbow` with no side on them — exactly what an anchor list
+  that says "both arms" invites — so a limb slider with no L or R now means
+  both.
+- **Nine anchor poses, each looked at.** Hands together at the chest, over
+  the head, at the cheeks; hand at the chin; salute; hands on hips; arms
+  crossed; a waving arm; pointing ahead. Without them the brain's first
+  heart was two forearms folded across her face — sensible numbers from
+  something with no eyes. With them its heart is the over-the-head anchor
+  with peace signs and a smile, and its basketball shot goes from arms out
+  in front to elbows folded overhead and back.
+- Measured with the real brain, three requests nobody wrote a motion for:
+  a heart, "鞠个躬,然后挥挥手" (it composed the bow, then played the built-in
+  wave — two calls, in order), and a basketball shot. All three played, and
+  all three were on disk afterwards.
+
+### Fixed
+
+- **Every frame starts from rest.** The idle only wrote the joints it cared
+  about, so whatever a motion left in the others stayed: a leg out to the
+  side for the rest of the evening, fingers still in a peace sign.
+- **A VRM 1.0 model stood with its arms in the air.** The idle lowered them
+  with the sign that is right for a 0.x rig, and on a 1.0 rig that raises
+  them. Nobody had looked, because the model in use is a 0.x.
+
 ### Added — she can stand on the desktop, and she moves
 
 - **Her, on the desktop, in front of everything.** A second window,
