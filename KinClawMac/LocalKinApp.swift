@@ -112,6 +112,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NotificationCenter.default.post(name: .kinclawEnterCompanion, object: nil)
             }
         }
+        NotificationCenter.default.addObserver(forName: .kinclawShowPanel, object: nil,
+                                               queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.spotlightWindow.show() }
+        }
         NotificationCenter.default.addObserver(forName: .kinclawOpenCompanion, object: nil,
                                                queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.menuBar.onCompanion?() }
@@ -179,17 +183,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// land; SwiftUI 14's `SettingsLink` only works inside a SwiftUI
     /// hierarchy.
     private func openSettingsWindow() {
-        // Bring the app forward first — settings appears as a normal
-        // window which expects an active app.
+        // Through the panel's SwiftUI tree, which holds the one thing that can
+        // open a `Settings` scene: the `openSettings` environment action.
+        //
+        // This used to send `showSettingsWindow:` down the responder chain.
+        // That selector is deprecated, and on this macOS it has stopped
+        // working without saying so: something in SwiftUI still answers it —
+        // `sendAction` returns true — and no window is ever made. Measured
+        // from inside the app: after the call, `NSApp.windows` holds the
+        // panel, the status item and the menu, and nothing else. The menubar's
+        // "Settings…" did nothing at all.
         NSApp.activate(ignoringOtherApps: true)
-        if #available(macOS 14, *) {
-            // Newer SwiftUI selector form
-            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-        } else {
-            // Pre-14 fallback (we target 14+ so this branch never
-            // runs, but keeping it documents the older API).
-            NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
-        }
+        NotificationCenter.default.post(name: .kinclawOpenSettings, object: nil)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -369,4 +374,9 @@ extension Notification.Name {
     /// A tool asked for the companion to be on screen. Same road as the
     /// menubar item: show the panel, then let it switch itself over.
     static let kinclawOpenCompanion = Notification.Name("kinclaw.openCompanion")
+    /// Somebody outside the SwiftUI tree — the menubar item, a tool — wants the
+    /// Settings window. Only a view can open it (see `openSettingsWindow`).
+    static let kinclawOpenSettings = Notification.Name("kinclaw.openSettings")
+    /// A tool asked for the panel itself, optionally on a tab (`userInfo["mode"]`).
+    static let kinclawShowPanel = Notification.Name("kinclaw.showPanel")
 }

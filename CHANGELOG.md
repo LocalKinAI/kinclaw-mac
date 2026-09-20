@@ -208,6 +208,174 @@ in one place, so between them only her state changes.
   companion who cannot answer "where are you" from her own tools will
   make something up.
 
+### Fixed — Settings would not open, and the Film tab's composer was one row too few
+
+- **Settings… did nothing.** Both doors — the 🦞 menu's Settings… and the gear
+  in the panel — sent AppKit's `showSettingsWindow:` up the responder chain.
+  On this macOS the action is *accepted* (`sendAction` returns true) and no
+  window is ever made, which is the worst of both: nothing to see and nothing
+  to catch. It was not a crash, not a hang, and not the new card in the Backend
+  tab — all three were ruled out before the cause turned up, by listing
+  `NSApp.windows` from inside the app. Both doors now post
+  `.kinclawOpenSettings`, and the panel answers it with SwiftUI's own
+  `@Environment(\.openSettings)`.
+- **`settings_open` and `panel_show {mode}`** — two panel tools that came out of
+  the hunt and stayed. The first opens Settings and reports the windows the app
+  actually has, so "did it open" is a fact rather than a screenshot; the second
+  brings the panel up on a named tab (chat, cowork, code, term, web, film),
+  which is how any tab can now be looked at without a synthetic click.
+- **The Film composer is two rows.** In one, at the panel's usual width, the
+  idea field had room for three characters and the button that starts
+  everything was an ellipsis. The sentence and 开拍 have the first row to
+  themselves; who writes the storyboard, how many shots, and whether she is
+  the lead sit underneath.
+- **The kernel asks for Accessibility once per build, not at every launch**
+  (kernel side; see its changelog). Every relaunch of the panel restarts the
+  kernel, and an ungranted — or, after a rebuild, orphaned — grant meant a
+  system dialog each time.
+
+### Added — the box's model servers, started when needed and stopped when asked
+
+They were started by hand in an ssh session and lost at the next reboot,
+which is how a film gets four minutes in before anybody finds out the edit
+server is not there.
+
+- **They do not need to be resident, and the numbers say which ones matter.**
+  Measured on the box: the three diffusion servers cost five to eight
+  gigabytes idle between them and answer three to six seconds after being
+  started, so keeping them up is cheap and so is not keeping them up. The
+  expensive resident is a language model left in kinfer — thirty-five
+  gigabytes for a 35B, with no endpoint to unload it — and that is exactly
+  the memory the high-quality video model needs.
+- **Settings → Backend → 盒子上的服务**: each service with what it runs, where
+  it answers, what it costs, a status light and a Start or Stop button; the
+  box's free memory underneath. `draw`, `edit`, `film`, `filmHQ` (the q8 video
+  model) and `brain` (kinfer, through its own launchd job).
+- **Started by whatever needs them.** A draw, an edit or a clip asks for its
+  server first, and if it is not answering brings it up over ssh and waits
+  for it to: a picture requested with the draw server stopped came back in
+  twenty seconds, start and model load included. Off with one switch.
+- **Over ssh, with the key the user already has.** `BatchMode`, so it works
+  silently or fails at once and never prompts; no `accept-new`, so a box this
+  Mac has never spoken to is refused in ssh's own words rather than trusted
+  on the user's behalf. Started the way they always were — `nohup`, nothing
+  installed on the box — with the two things that go wrong doing that over
+  ssh put right: Homebrew is not on a non-interactive `PATH` (and the video
+  model refuses to load without ffmpeg), and a server with no log leaves no
+  evidence, which is why nobody can say for certain what killed the edit
+  server earlier in the day. Logs go to `~/Library/Logs/kinclaw/` on the box.
+  Model names and paths are stripped to characters a shell cannot act on
+  before they go into a command on another machine.
+- **`box_services`** — status, start, stop — so "把 kinfer 打开" is something
+  she can be asked, behind the approval it should be behind.
+
+### Added — a voice-over, from the user's own TTS
+
+- **A line per shot, spoken on this Mac.** A storyboard can give a shot a
+  `narration` — a storyteller's sentence, not a caption, short enough to say
+  in three seconds — and the Kokoro already running on this machine says it:
+  the same request the companion's voice uses, field for field, because
+  `voice` instead of `speaker`+`language` is how Chinese gets read out as
+  "Chinese letter, Chinese letter". About a second and a third a line.
+- **Over the shot, not against it.** The line goes on a track of its own a
+  quarter of a second into the shot, and the shot's own sound — the waves,
+  the rain LTX wrote — sits at a third under it, carried through the
+  dissolves at whatever level each side of them is at.
+- **Rewording a line films nothing.** `film_reshoot` given only a
+  `narration` speaks it and cuts again: two seconds, against a minute and a
+  half to roll the shot. The old take of the voice is kept.
+- **Checked with the other half of the audio stack.** The finished film's
+  mixed audio, pulled out and given to the local SenseVoice, came back as all
+  four lines in order — 「黄昏的时候,他一个人走到海边,风很大还很近。他回过头
+  笑了一下,太阳落下去,他没有走。」 — the only differences homophones (她/他,
+  海/还), which is what a clear voice over quiet waves transcribes as.
+
+### Added — a finishing pass, and a say in who writes the storyboard
+
+- **精修 (q8).** Measured against the everyday model on the same still, prompt
+  and seed, four seconds at 704²: **104 s against 519 s**, about 45 GB while
+  it works, a little cleaner in faces and fabric, the same composition and
+  motion. So drafts stay on q4 and a shot already approved can be filmed
+  again on q8 — a button on the shot, `hq` on `film_reshoot`. It refuses,
+  saying why, when kinfer is up or the box is short of memory.
+- **分镜：…** in the Film tab: who writes the storyboard. 自动 asks the Ollama
+  the app is pointed at, then this Mac, and takes the most capable chat model
+  it finds — ornith on the box while kinfer is up, kimi on this Mac when it
+  is not; naming one pins it, host and all, since the same name can exist on
+  two machines. `film_status` says who it would be.
+
+### Added — Film: one sentence in, a short film out, on your own machines
+
+The shape of Sora, not its model. What the box does is a four-second clip at
+704 pixels in about eighty seconds; what that cannot be is a twenty-second
+take with convincing physics. So a film here is what a film has always
+been — a list of short shots, cut together.
+
+- **A sixth tab, Film.** Say what you want to see; the brain the app already
+  uses writes the storyboard — a title, a look every frame shares, and a few
+  shots, each a frame to draw and what moves in it — and the studio gets on
+  with it. Built around the wait, because the wait is the product: the
+  storyboard appears at once, each frame turns up as it is drawn, each clip
+  as it is filmed, and the cut arrives at the end. Everything on screen is
+  what is on disk. A library down the side; any shot can be redone.
+- **She can be the lead, and stays herself.** With her in it, every still is
+  an *edit* of her anchor portrait — the only thing that has ever kept a
+  generated person the same person from one picture to the next — so she is
+  recognisably her in every shot. Without her, stills are drawn from the
+  description.
+- **Stills are filmed, with sound.** Image-to-video, so a clip is that frame
+  moving, and LTX writes audio along with the picture: measured on clips it
+  had already made, real content at −15 to −28 dB with harmonic structure,
+  not noise. It had been thrown away until now — stripped for the loops,
+  muted in the panel — and the shot's `motion` ends by saying what it should
+  sound like.
+- **The cut is AVFoundation's**, because the app has no ffmpeg to call: two
+  video tracks and two audio tracks, shots dealt alternately between them —
+  a dissolve needs both pictures to exist at once — each dissolving into the
+  next over 0.4 s with the sound faded across.
+- **Made to be interrupted.** Every step is written to `film.json` as it
+  happens; a film being shot when the app quits is picked up at the next
+  launch with its finished shots intact, and a reshoot keeps the old take
+  beside the new one. If a shot fails, the rest are still cut: three good
+  shots is a better answer after ten minutes than nothing.
+- **She wears one thing per film.** Each still is an edit of its own, and
+  left to themselves they dressed her differently every time — a long white
+  dress walking the sand, a beige one at the water's edge, which reads as two
+  women or two days. A storyboard now says what she wears once, in `wears`,
+  and it goes into every frame she is in.
+- **The first film**, 「海边的黄昏」: four shots, fifteen seconds, 704×704 at
+  24 fps with sound — she walks away along the waterline, the wind lifts her
+  hair and she brushes it back, she turns to the camera and smiles, she sits
+  hugging her knees as the sun goes down — and is recognisably the same
+  woman in all four. One shot failed on the first pass (see the ollamadiffuser
+  note below), the other three were cut anyway, and `film_reshoot` filled
+  the gap and cut again, keeping the three-shot version beside it.
+- **One road from a sentence to a film.** The tab's button and `film_make`
+  given only an `idea` are the same function: the studio writes the
+  storyboard with a local brain and makes it. Two things that road taught on
+  its first real use. The request as first written — JSON mode on, thinking
+  left on — had not answered after **three minutes** on kimi, because a model
+  that reasons first does all of it before the first byte when nothing is
+  streamed; with thinking off and the shape merely asked for it is sixteen
+  seconds, and the storyboard was better than the one written by hand to test
+  the pipeline. And the writer is **discovered, not assumed**: there is no one
+  "current brain" to read, and the obvious default — kimi on this Mac — is not
+  there at all when the app is pointed at a kinfer on the LAN, which answered
+  `no model matches` behind an error message that hid it. The configured host
+  is asked what it has (ornith, here: eleven seconds), then this Mac, and the
+  server's own words are what a failure says.
+- **A service that goes away pauses the film.** On the second film the edit
+  server died after the first still — the box was holding a 35B model, a
+  video generation and a 43 GB file reassembly at once — and every remaining
+  shot failed in two seconds, leaving a one-shot "film". A shot that could
+  not reach its server is now not a failed shot: the film stops, says which
+  service it could not reach, keeps what it has, and carries on from there
+  (`film_reshoot` without a shot, or 接着拍 in the tab).
+- **`film_make`, `film_status`, `film_reshoot`** — the brain writes the
+  storyboard as the tool's arguments, the way it writes a motion, so "拍一个
+  她在雨夜撑伞走的短片" is something she can be asked. Films live in
+  `<art folder>/films/<title>-<stamp>/`.
+
 ### Added — things in her hands, and somewhere to sit
 
 The part of "props and interaction" that needs to know nothing about the

@@ -132,6 +132,7 @@ final class DiffuserClient: ObservableObject {
         }
         let cleaned = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { throw Failure.message("要改成什么样？指令是空的") }
+        _ = await BoxServices.shared.ensure(.edit)
         guard FileManager.default.fileExists(atPath: source.path) else {
             throw Failure.message("找不到要改的那张图：\(source.path)")
         }
@@ -224,6 +225,7 @@ final class DiffuserClient: ObservableObject {
         }
         let cleaned = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { throw Failure.message("要画什么？提示词是空的") }
+        _ = await BoxServices.shared.ensure(.draw)
 
         busy = true
         defer { busy = false }
@@ -301,12 +303,21 @@ final class DiffuserClient: ObservableObject {
     func generateVideo(prompt: String, to file: URL, seconds: Double = 4,
                        width: Int = 704, height: Int = 480,
                        seed: Int? = nil, mode: String? = nil, from image: URL? = nil,
+                       hq: Bool = false,
                        timeout: TimeInterval = 1800) async throws -> URL {
-        guard let url = Self.url("api/generate/video", on: Self.videoHost) else {
-            throw Failure.message("视频服务地址不对：\(Self.videoHost)")
+        // `hq` is the q8 two-stage model on its own server: measured against
+        // the everyday one on the same still, prompt and seed, a little
+        // cleaner in faces and fabric, the same composition and motion, and
+        // five times as long — 519 seconds against 104. A finishing pass for
+        // a shot already approved, never the way a draft is made.
+        let service: BoxServices.Kind = hq ? .filmHQ : .film
+        let host = BoxServices.base(service)
+        guard let url = Self.url("api/generate/video", on: host) else {
+            throw Failure.message("视频服务地址不对：\(host)")
         }
         let cleaned = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { throw Failure.message("要拍什么？提示词是空的") }
+        _ = await BoxServices.shared.ensure(service)
 
         // No `busy` here: a clip runs for minutes, and the jobs list is
         // what says so. Blocking the picture button that long would be a

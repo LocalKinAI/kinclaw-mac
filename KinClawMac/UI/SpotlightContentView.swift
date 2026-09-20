@@ -170,6 +170,9 @@ struct SpotlightContentView: View {
     /// at load and from /api/state after; the footer picker changes it.
     @State private var coworkPermissionMode = "ask"
     @State private var showingArtPicker = false
+    /// The supported way to open the `Settings` scene — and, on this macOS,
+    /// the only one that still does anything.
+    @Environment(\.openSettings) private var openSettingsScene
     @StateObject private var companionArt = CompanionArt()
     /// Left folder pane in Cowork (⌘⇧L). Persisted; on by default.
     // Closed by default now. With the file tree gone the Cowork pane is
@@ -409,6 +412,20 @@ struct SpotlightContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .kinclawEnterCompanion)) { _ in
             if !companionMode { enterCompanionMode() }
         }
+        // The menubar item and the tools cannot open Settings themselves; a
+        // view can.
+        .onReceive(NotificationCenter.default.publisher(for: .kinclawOpenSettings)) { _ in
+            NSApp.activate(ignoringOtherApps: true)
+            openSettingsScene()
+        }
+        // A tool asked for a tab by name: Film, Web, Chat…
+        .onReceive(NotificationCenter.default.publisher(for: .kinclawShowPanel)) { note in
+            guard let wanted = note.userInfo?["mode"] as? String,
+                  let target = ChatMode(rawValue: wanted.lowercased()) else { return }
+            if companionMode { exitCompanionMode() }
+            mode = target
+            target.persist()
+        }
         // A clip landed — a new place's first, or one more for the library.
         // Only the picker sheet used to hear this, so a place she had built
         // stayed invisible until the panel was reopened, and she never walked
@@ -567,7 +584,7 @@ struct SpotlightContentView: View {
             // Secondary row — agent picker and utility buttons. Code
             // mode has CodePane's own repoBar acting as its secondary
             // row, so we skip ours there to avoid double bars.
-            if mode != .code, mode != .term, mode != .web {
+            if mode != .code, mode != .term, mode != .web, mode != .film {
                 agentBar
                 Divider().opacity(0.15)
             }
@@ -617,6 +634,8 @@ struct SpotlightContentView: View {
                     AgentTerminalPane()
                 case .web:
                     WebPane()
+                case .film:
+                    FilmStudioView()
                 }
             }
         }
@@ -1240,7 +1259,7 @@ struct SpotlightContentView: View {
                     }
                 }
 
-            case .code, .term, .web:
+            case .code, .term, .web, .film:
                 // Unreachable — these modes have no agent picker: Code shows a
                 // static "🦞 kincode" label, Term and Web have toolbars of
                 // their own. Defensive empty case.
@@ -2569,7 +2588,7 @@ struct SpotlightContentView: View {
 
     private func openSettings() {
         NSApp.activate(ignoringOtherApps: true)
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        openSettingsScene()
     }
 
     /// Cancel the in-flight turn. Both transports get the kill
@@ -3236,7 +3255,7 @@ struct SpotlightContentView: View {
     ///   .code   → no agent (kincode is fixed)
     private func pickDefaultAgent(for mode: ChatMode) -> Agent? {
         switch mode {
-        case .code, .term, .web:
+        case .code, .term, .web, .film:
             return nil
         case .chat:
             if !chatLastAgentSlug.isEmpty,
@@ -3287,7 +3306,7 @@ struct SpotlightContentView: View {
             // localkin repo and carry `domain == "kinclaw-private"`.
             // Both flavours route through the same chatBody surface.
             return agent.name.hasPrefix("KinClaw") || agent.domain == "kinclaw-private"
-        case .code, .term, .web: return false   // never matches
+        case .code, .term, .web, .film: return false   // never matches
         }
     }
 
@@ -3301,7 +3320,7 @@ struct SpotlightContentView: View {
         switch mode {
         case .chat:   chatLastAgentSlug = s
         case .cowork: coworkLastSoulSlug = s
-        case .code, .term, .web: break
+        case .code, .term, .web, .film: break
         }
     }
 

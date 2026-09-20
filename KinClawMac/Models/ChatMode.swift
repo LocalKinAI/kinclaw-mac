@@ -22,6 +22,9 @@ import Foundation
 ///             tab strip, for the times the answer is one command
 ///   .web    → a browser in the panel: the page you are signed into,
 ///             one button from the agent
+///   .film   → one sentence in, a short film out: a storyboard, a still
+///             and a clip per shot on the user's own image and video
+///             servers, cut together
 ///
 /// This mirrors Claude Code Desktop's three-mode top bar, but plugged
 /// into the LocalKin kernel family (kinclaw + kincode) instead of
@@ -33,6 +36,7 @@ enum ChatMode: String, CaseIterable, Identifiable {
     case code
     case term
     case web
+    case film
 
     var id: String { rawValue }
 
@@ -44,6 +48,7 @@ enum ChatMode: String, CaseIterable, Identifiable {
         case .code:   return "Code"
         case .term:   return "Term"
         case .web:    return "Web"
+        case .film:   return "Film"
         }
     }
 
@@ -57,6 +62,7 @@ enum ChatMode: String, CaseIterable, Identifiable {
         case .code:   return "chevron.left.forwardslash.chevron.right"
         case .term:   return "terminal"
         case .web:    return "globe"
+        case .film:   return "film"
         }
     }
 
@@ -73,6 +79,8 @@ enum ChatMode: String, CaseIterable, Identifiable {
             return "Term — another agent in a terminal, on the model you picked, or your own shell"
         case .web:
             return "Web — a browser in the panel; 给 agent 看这页 hands the page over"
+        case .film:
+            return "Film — 一句话拍个短片：分镜、出图、出片、剪辑，都在自己的机器上"
         }
     }
 }

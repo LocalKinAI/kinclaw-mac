@@ -519,6 +519,8 @@ private struct BackendSettingsTab: View {
                 SettingsCaption("⇧⌘M turns the panel into a picture and a voice. Art comes from this folder: files at the top level rotate; subfolders named idle / listening / thinking / speaking, or 开心 / 温柔 / 好奇 / 困 / 担心, are used when the companion is in that state or mood (every reply carries one). Short mp4 / mov loops work anywhere a picture does. \"Go get a few\" inside companion mode searches Wikimedia Commons, which needs no account; a free key from pexels.com/api swaps in a better-looking source.")
             }
 
+            BoxServicesCard()
+
             SettingsCard("Sidecars") {
                 SettingsRow(label: "Ollama host") {
                     HStack(spacing: 6) {
@@ -1863,5 +1865,78 @@ private struct RoutinesSettingsTab: View {
             }
         }
         .padding(.vertical, 4)
+    }
+}
+
+
+// MARK: - The box's model servers
+
+/// Start and stop what runs on the box, and see what is up.
+private struct BoxServicesCard: View {
+    @ObservedObject private var box = BoxServices.shared
+    @AppStorage(BoxServices.sshKey) private var ssh = ""
+    @AppStorage(BoxServices.autoStartKey) private var autoStart = true
+    @AppStorage(BoxServices.binaryKey) private var binary = ""
+
+    var body: some View {
+        SettingsCard("盒子上的服务") {
+            SettingsRow(label: "SSH") {
+                TextField("user@192.168.0.21", text: $ssh)
+                    .textFieldStyle(.roundedBorder).frame(maxWidth: 260)
+                    .onSubmit { Task { await box.refreshMemory() } }
+            }
+            SettingsRow(label: "用到时自动启动") {
+                Toggle("", isOn: $autoStart).labelsHidden().toggleStyle(.switch).controlSize(.small)
+            }
+            ForEach(BoxServices.all) { service in
+                HStack(spacing: 10) {
+                    Circle().fill(color(box.states[service.kind] ?? .unknown)).frame(width: 8, height: 8)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(service.title).font(.system(size: 12))
+                        Text("\(BoxServices.model(service.kind)) · \(BoxServices.base(service.kind).replacingOccurrences(of: "http://", with: "")) · \(service.cost)")
+                            .font(.system(size: 9)).foregroundColor(.secondary).lineLimit(1)
+                    }
+                    Spacer()
+                    button(service.kind)
+                }
+            }
+            if let free = box.memoryFree {
+                SettingsCaption("盒子内存空闲 \(free)%")
+            }
+            if let note = box.note {
+                SettingsCaption("⚠︎ \(note)")
+            }
+            SettingsCaption("用你已有的 SSH 密钥登录盒子（不会弹密码框：密钥能用就静默执行，不能用就直接失败），像手动那样用 nohup 启动、按名字停止，不往盒子上装任何东西。三个出图/出片服务空闲时一共只占几个 GB，三到六秒就能起来，所以不必常驻；kinfer 的模型常驻约 35 GB 且不会自己卸载，q8 精修要 45 GB —— 这两个别同时开。「用到时自动启动」打开时，拍片、换装、造场景发现服务不在会先把它拉起来。")
+        }
+        .task {
+            while !Task.isCancelled {
+                await box.refresh()
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+            }
+        }
+        .task { await box.refreshMemory() }
+    }
+
+    @ViewBuilder
+    private func button(_ kind: BoxServices.Kind) -> some View {
+        switch box.states[kind] ?? .unknown {
+        case .up:
+            Button("停止") { Task { await box.stop(kind) } }.controlSize(.small).disabled(ssh.isEmpty)
+        case .down, .unknown:
+            Button("启动") { Task { await box.start(kind) } }.controlSize(.small).disabled(ssh.isEmpty)
+        case .starting:
+            HStack(spacing: 5) { ProgressView().controlSize(.mini); Text("启动中").font(.system(size: 10)).foregroundColor(.secondary) }
+        case .stopping:
+            HStack(spacing: 5) { ProgressView().controlSize(.mini); Text("停止中").font(.system(size: 10)).foregroundColor(.secondary) }
+        }
+    }
+
+    private func color(_ state: BoxServices.State) -> Color {
+        switch state {
+        case .up: return .green
+        case .down: return .secondary.opacity(0.5)
+        case .starting, .stopping: return .yellow
+        case .unknown: return .secondary.opacity(0.25)
+        }
     }
 }

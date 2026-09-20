@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// The tools the panel offers the agent, and what they answer with.
@@ -356,6 +357,125 @@ enum PanelTools {
             ],
         ],
         [
+            "name": "panel_show",
+            "description": "Show the KinClaw panel, optionally on one of its tabs: chat, cowork, code, term, web, film. Use it when the user asks to see the panel or to go to a tab (\"打开片场\" → film).",
+            "inputSchema": [
+                "type": "object",
+                "properties": ["mode": ["type": "string", "description": "chat | cowork | code | term | web | film. Omit to leave the tab as it is."]],
+            ],
+        ],
+        [
+            "name": "settings_open",
+            "description": "Open KinClaw Mac's Settings window. Use it when the user asks for the settings, or has to fill something in there.",
+            "inputSchema": ["type": "object", "properties": [:] as [String: Any]],
+        ],
+        [
+            "name": "box_services",
+            "description": """
+                The model servers on the user's LAN box: see which are up, \
+                start one, or stop one. `draw` (text-to-image), `edit` \
+                (changes her scene, clothes, plates), `film` (video), `filmHQ` \
+                (the slow high-quality video model, ~45 GB while it works), \
+                `brain` (kinfer, the box's language-model server — about 35 GB \
+                resident and it does not unload by itself, so it and filmHQ \
+                should not run together). The others cost a few GB idle and \
+                start in seconds, and the app starts them by itself when it \
+                needs them; use this when the user asks to turn something on \
+                or off, or wants to know what is running.
+                """,
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "action": ["type": "string", "description": "status | start | stop. Default status."],
+                    "service": ["type": "string", "description": "draw | edit | film | filmHQ | brain. Needed for start and stop."],
+                ],
+            ],
+        ],
+        [
+            "name": "film_make",
+            "description": """
+                Make a short film on the user's own machines: a few 4-second \
+                shots, each a still that is then filmed (with sound), cut \
+                together with dissolves. You write the storyboard. Use it when \
+                the user asks for a video, a short film, a clip of something \
+                happening. It runs for minutes in the background — about 100 \
+                seconds a shot — so say so, and use film_status to see how it \
+                is going; the finished file's path is in the answer there.
+                Each shot: `still` is ONE photograph in concrete English — \
+                subject, place, light, framing (wide / medium / close; vary \
+                them); `motion` is what moves in those four seconds — one \
+                simple action and at most one camera move (slow push in, pan, \
+                handheld drift) — ending with what it sounds like ("sound of \
+                waves and distant gulls"). Keep it simple: walking, turning, \
+                looking, wind, water, light. Not fights, not fine hand work, \
+                not text. `look` is what every frame shares (film stock, \
+                palette, time of day). With `lead: true` she is in every shot \
+                and stays the same person: write `still` as "she is …", do \
+                not describe her face or hair, and say what she wears once, \
+                in `wears` — it goes into every frame so she is dressed the \
+                same throughout.
+                """,
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "title": ["type": "string", "description": "A short title."],
+                    "idea": ["type": "string", "description": "The user's idea, in their words. Given alone, with no shots, the studio writes the storyboard itself."],
+                    "count": ["type": "integer", "description": "With idea alone: how many shots, 2–8. Default 4."],
+                    "look": ["type": "string", "description": "Shared by every frame: \"35mm film still, golden hour, warm palette, shallow depth of field\"."],
+                    "lead": ["type": "boolean", "description": "true: she (the companion) is in every shot. Default false."],
+                    "wears": ["type": "string", "description": "With lead: her outfit for the whole film, e.g. \"a long white summer dress, barefoot\"."],
+                    "seconds": ["type": "number", "description": "Length of each shot, 2–10. Default 4."],
+                    "shots": [
+                        "type": "array",
+                        "description": "2–8 shots, in order.",
+                        "items": [
+                            "type": "object",
+                            "properties": [
+                                "still": ["type": "string", "description": "The frame, as one photograph."],
+                                "motion": ["type": "string", "description": "What moves, and what it sounds like."],
+                                "narration": ["type": "string", "description": "Optional voice-over for this shot, in the user's language, spoken by their own TTS: a storyteller's line, not a caption, sayable in three seconds (a dozen Chinese characters / eight English words)."],
+                            ] as [String: Any],
+                            "required": ["still", "motion"],
+                        ] as [String: Any],
+                    ] as [String: Any],
+                ],
+            ],
+        ],
+        [
+            "name": "film_status",
+            "description": """
+                How the films are going: which shot is being drawn or filmed, \
+                what is finished, and where the finished file is. With `film` \
+                (an id or title) it answers for that one, shot by shot.
+                """,
+            "inputSchema": [
+                "type": "object",
+                "properties": ["film": ["type": "string", "description": "A film's id or title. Omit for all of them."]],
+            ],
+        ],
+        [
+            "name": "film_reshoot",
+            "description": """
+                Redo one shot of a film and cut it again — a new `still` for a \
+                different frame, a new `motion` for a different take of the \
+                same frame, or neither to simply roll again. The old take is \
+                kept beside the new one. Without `shot`, it carries on with a \
+                film that stopped: every shot not finished is tried again.
+                """,
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "film": ["type": "string", "description": "The film's id or title."],
+                    "shot": ["type": "integer", "description": "Which shot, from 1."],
+                    "still": ["type": "string", "description": "A new frame. Optional."],
+                    "motion": ["type": "string", "description": "A new take. Optional."],
+                    "narration": ["type": "string", "description": "A new voice-over line for the shot (\"\" removes it). Given alone, nothing is filmed: the line is spoken by the user's TTS and the film is cut again in seconds."],
+                    "hq": ["type": "boolean", "description": "Film it on the high-quality model: a little cleaner, five times slower (~9 min a shot), and it needs about 45 GB of the box's memory, so kinfer must be off. For a shot the user is already happy with, never for a draft."],
+                ],
+                "required": ["film"],
+            ],
+        ],
+        [
             "name": "companion_open",
             "description": """
                 Show the panel in companion mode — the picture of her and the \
@@ -429,6 +549,29 @@ enum PanelTools {
         case "video_generate": return film(args)
         case "video_status": return (DiffuserClient.shared.videoReport, false)
         case "avatar_desktop": return desktop(args)
+        case "panel_show":
+            var info: [String: Any] = [:]
+            if let mode = args["mode"] as? String, !mode.isEmpty { info["mode"] = mode }
+            NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: info)
+            return ("面板打开了" + ((info["mode"] as? String).map { "，在 \($0) 标签" } ?? ""), false)
+        case "settings_open":
+            NSApp.activate(ignoringOtherApps: true)
+            NotificationCenter.default.post(name: .kinclawOpenSettings, object: nil)
+            let sent = true
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            // What AppKit thinks exists, which is more than the window server
+            // will admit to: a window that was made and never ordered in is
+            // only visible from in here.
+            let windows = NSApp.windows.map { w in
+                "\(type(of: w)) 「\(w.title)」 visible=\(w.isVisible) mini=\(w.isMiniaturized) \(Int(w.frame.width))x\(Int(w.frame.height))@(\(Int(w.frame.minX)),\(Int(w.frame.minY))) level=\(w.level.rawValue)"
+            }
+            let opened = NSApp.windows.contains { $0.isVisible && $0.frame.width >= 700 && !($0 is NSPanel) }
+            return ((opened ? "设置窗口打开了" : "设置窗口没出来")
+                    + "\n激活策略=\(NSApp.activationPolicy().rawValue) active=\(NSApp.isActive)\n" + windows.joined(separator: "\n"), !(sent && opened))
+        case "box_services": return await boxServices(args)
+        case "film_make":    return filmMake(args)
+        case "film_status":  return await filmStatus(args)
+        case "film_reshoot": return filmReshoot(args)
         case "companion_open":
             NotificationCenter.default.post(name: .kinclawOpenCompanion, object: nil)
             return ("陪伴模式打开了", false)
@@ -573,6 +716,131 @@ enum PanelTools {
         )
         let where_ = mood.isEmpty ? "陪伴模式的图片池" : "「\(mood)」那一组"
         return ("开拍了，\(Int(seconds)) 秒的片子，几分钟后落在\(where_)：\(file.path)（用 video_status 看进度）", false)
+    }
+
+    // MARK: The box
+
+    private static func boxServices(_ args: [String: Any]) async -> (String, Bool) {
+        let box = BoxServices.shared
+        let action = ((args["action"] as? String) ?? "status").lowercased()
+        if action == "start" || action == "stop" {
+            guard let name = args["service"] as? String,
+                  let kind = BoxServices.Kind.allCases.first(where: { $0.rawValue.lowercased() == name.lowercased() }) else {
+                return ("service 填 draw、edit、film、filmHQ 或 brain", true)
+            }
+            guard !BoxServices.ssh.isEmpty else {
+                return ("还没填盒子的 SSH：Settings → Backend → 盒子上的服务", true)
+            }
+            if action == "start" { await box.start(kind) } else { await box.stop(kind) }
+        }
+        await box.refresh()
+        await box.refreshMemory()
+        var lines = BoxServices.all.map { service -> String in
+            let state = box.states[service.kind] ?? .unknown
+            let word = [BoxServices.State.up: "开着", .down: "关着", .starting: "启动中", .stopping: "停止中"][state] ?? "不知道"
+            return "\(service.kind.rawValue)（\(service.title)）：\(word) · \(BoxServices.model(service.kind)) · \(BoxServices.base(service.kind).replacingOccurrences(of: "http://", with: ""))"
+        }
+        if let free = box.memoryFree { lines.append("盒子内存空闲 \(free)%") }
+        if let note = box.note { lines.append("⚠︎ \(note)") }
+        return (lines.joined(separator: "\n"), box.note != nil && action != "status")
+    }
+
+    // MARK: The film studio
+
+    private static func filmMake(_ args: [String: Any]) -> (String, Bool) {
+        let list = (args["shots"] as? [[String: Any]]) ?? []
+        let shots = list.compactMap { item -> (still: String, motion: String)? in
+            guard let still = item["still"] as? String else { return nil }
+            return (still, (item["motion"] as? String) ?? "gentle natural movement")
+        }
+        // An idea and no shots: the studio writes the storyboard itself, with
+        // the brain the app already uses. The same road the Film tab takes.
+        if shots.isEmpty, let idea = (args["idea"] as? String)?.trimmingCharacters(in: .whitespaces), !idea.isEmpty {
+            guard FilmStudio.shared.shooting == nil else { return ("片场正在拍别的，等它拍完", true) }
+            FilmStudio.shared.make(from: idea, shots: (args["count"] as? Int) ?? 4, lead: (args["lead"] as? Bool) ?? false)
+            return ("在写分镜了（十几秒），写好就开拍。film_status 看进度", false)
+        }
+        let lines = list.filter { $0["still"] is String }.map { ($0["narration"] as? String) ?? "" }
+        let seconds = (args["seconds"] as? Double) ?? Double((args["seconds"] as? Int) ?? 4)
+        switch FilmStudio.shared.make(title: (args["title"] as? String) ?? "", idea: (args["idea"] as? String) ?? "",
+                                      look: (args["look"] as? String) ?? "", wears: (args["wears"] as? String) ?? "",
+                                      lead: (args["lead"] as? Bool) ?? false,
+                                      seconds: seconds, shots: shots, narration: lines) {
+        case .success(let film):
+            let minutes = max(1, Int((Double(film.shots.count) * (20 + film.seconds * 21) / 60).rounded()))
+            return ("开拍了：「\(film.title)」\(film.shots.count) 个镜头，大约 \(minutes) 分钟。"
+                  + "film_status 看进度；成片会在 \(film.file.path)", false)
+        case .failure(let failure):
+            return (failure.localizedDescription, true)
+        }
+    }
+
+    private static func filmStatus(_ args: [String: Any]) async -> (String, Bool) {
+        let studio = FilmStudio.shared
+        let words: [FilmStudio.Shot.State: String] = [.waiting: "等着", .drawing: "在画", .filming: "在拍", .done: "好了", .failed: "没拍成"]
+        if let wanted = (args["film"] as? String)?.trimmingCharacters(in: .whitespaces), !wanted.isEmpty {
+            guard let film = studio.films.first(where: { $0.id == wanted || $0.title == wanted || $0.id.hasPrefix(wanted) }) else {
+                return ("没有这部片子：\(wanted)", true)
+            }
+            var lines = ["「\(film.title)」\(film.id)：\(describe(film))"]
+            for shot in film.shots {
+                lines.append("  \(shot.id). [\(words[shot.state] ?? "?")] \(shot.still.prefix(70))" + (shot.note.map { " —— \($0)" } ?? ""))
+                if let said = shot.narration { lines.append("     旁白：\(said)") }
+            }
+            if film.state == .done { lines.append("成片：\(film.file.path)") }
+            return (lines.joined(separator: "\n"), false)
+        }
+        var header: [String] = []
+        // Who would write the next storyboard — discovered, so worth saying.
+        if let pick = await FilmStudio.writer() {
+            let pinned = !(UserDefaults.standard.string(forKey: "kinclaw.film.writer") ?? "").isEmpty
+            header.append("分镜由 \(pick.model) 写（\(pick.host.replacingOccurrences(of: "http://", with: ""))，\(pinned ? "指定的" : "自动挑的")）")
+        } else {
+            header.append("分镜：找不到可用的模型（配置的 Ollama 和本机上都没有）")
+        }
+        if let idea = studio.writing { header.append("在写分镜：\(idea)") }
+        if let trouble = studio.trouble { header.append("上一次没成：\(trouble)") }
+        guard !studio.films.isEmpty else { return ((header + ["还没拍过片子。film_make 拍一部"]).joined(separator: "\n"), false) }
+        let lines = header + studio.films.prefix(8).map { "「\($0.title)」\($0.id)：\(describe($0))" }
+        return (lines.joined(separator: "\n"), false)
+    }
+
+    private static func describe(_ film: FilmStudio.Film) -> String {
+        switch film.state {
+        case .waiting:  return "等着开拍"
+        case .shooting: return "在拍，\(film.finished)/\(film.shots.count) 个镜头好了"
+        case .cutting:  return "在剪"
+        case .done:     return "拍好了，\(film.finished) 个镜头" + (film.note.map { "（\($0)）" } ?? "")
+        case .failed:   return "没拍成：" + (film.note ?? "")
+        }
+    }
+
+    private static func filmReshoot(_ args: [String: Any]) -> (String, Bool) {
+        guard let film = args["film"] as? String else { return ("film_reshoot 需要 film", true) }
+        // No shot named: carry on with whatever is not finished.
+        guard let shot = args["shot"] as? Int else {
+            switch FilmStudio.shared.resume(film: film) {
+            case .success(let made):
+                let left = made.shots.filter { $0.state != .done }.count
+                return ("接着拍「\(made.title)」：还有 \(left) 个镜头，拍完重新剪", false)
+            case .failure(let failure): return (failure.localizedDescription, true)
+            }
+        }
+        // A new line and nothing else: spoken and cut again, nothing filmed.
+        if let line = args["narration"] as? String, args["still"] == nil, args["motion"] == nil, args["hq"] == nil {
+            switch FilmStudio.shared.narrate(film: film, shot: shot, line: line) {
+            case .success(let made):
+                return ("「\(made.title)」第 \(shot) 个镜头的旁白\(line.isEmpty ? "去掉了" : "改了")，在重新剪（十来秒）", false)
+            case .failure(let failure): return (failure.localizedDescription, true)
+            }
+        }
+        let fine = (args["hq"] as? Bool) ?? false
+        switch FilmStudio.shared.reshoot(film: film, shot: shot, still: args["still"] as? String,
+                                         motion: args["motion"] as? String, hq: fine) {
+        case .success(let made):
+            return ("「\(made.title)」第 \(shot) 个镜头\(fine ? "在精修（q8，约 9 分钟）" : "重拍了")，拍完会重新剪一遍", false)
+        case .failure(let failure): return (failure.localizedDescription, true)
+        }
     }
 
     // MARK: The probe
