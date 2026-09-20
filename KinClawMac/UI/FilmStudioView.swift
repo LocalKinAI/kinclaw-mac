@@ -20,9 +20,34 @@ struct FilmStudioView: View {
     /// Who could write a storyboard, host by host, and who will.
     @State private var writers: [(host: String, models: [String])] = []
     @State private var writer = "自动"
+    @State private var writerPlace = ""
     @AppStorage("kinclaw.film.writer") private var writerModel = ""
     @AppStorage("kinclaw.film.writer.host") private var writerHost = ""
+    /// The voice-over's language: a tag, "none", or "" to follow the idea's.
+    @AppStorage(FilmStudio.tongueKey) private var tongue = ""
+    @AppStorage(FilmStudio.layaOnKey) private var layaOn = false
+    /// Automatic retakes per shot on the reviewer's say-so; 0 is no reviewer.
+    @AppStorage(FilmStudio.retakesKey) private var retakes = 1
     @State private var tick = 0
+    /// One shot's words, open for rewriting, and what they were when opened.
+    @State private var editing: Words?
+    @State private var opened: Words?
+    @State private var translating = false
+    /// The shot being watched in the player, by film: nil is the whole film.
+    /// A shot is there to be looked at the moment it is filmed — not when
+    /// the last one is, a quarter of an hour later.
+    @State private var watching: [String: Int] = [:]
+
+    struct Words: Equatable {
+        var film: String
+        var shot: Int
+        /// A direction in a sentence; the words below are rewritten to it.
+        var wish: String
+        var framing: String
+        var pose: String
+        var action: String
+        var narration: String
+    }
 
     private var film: FilmStudio.Film? {
         studio.films.first { $0.id == selected } ?? studio.films.first
@@ -39,6 +64,7 @@ struct FilmStudioView: View {
             }
         }
         .onAppear { studio.reload() }
+        .onReceive(NotificationCenter.default.publisher(for: .kinclawFilmShow)) { show($0) }
         // Stills and clips land on disk one by one; a glance every two
         // seconds is how they show up here as they do.
         .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in
@@ -86,21 +112,51 @@ struct FilmStudioView: View {
                     Text(film.title).font(.system(size: 15, weight: .semibold))
                     Text(status(film)).font(.system(size: 10)).foregroundColor(.secondary)
                     Spacer()
+                    if let busy = studio.revising {
+                        ProgressView().controlSize(.mini)
+                        Text(busy).font(.system(size: 9)).foregroundColor(.secondary).lineLimit(1)
+                    }
                     if film.state == .done {
+                        Button("重新把关") { studio.reassess(film: film.id) }
+                            .controlSize(.small)
+                            .disabled(studio.shooting != nil || studio.revising != nil)
+                            .help("不重拍，只把每个镜头再看一遍：动作到不到位、有没有出错，以及 Laya 的打分")
                         Button("在访达里显示") { NSWorkspace.shared.activateFileViewerSelecting([film.file]) }
                             .controlSize(.small)
                     }
                 }
-                if film.state == .done, FileManager.default.fileExists(atPath: film.file.path) {
-                    FilmPlayer(url: film.file)
+                if let playing = playing(film) {
+                    FilmPlayer(url: playing.url, autoplay: playing.shot != nil)
                         .aspectRatio(1, contentMode: .fit)
                         .frame(maxWidth: 420)
                         .clipShape(RoundedRectangle(cornerRadius: 10))
                         .frame(maxWidth: .infinity)
+                    // What the player can show, side by side: the cut, and
+                    // each shot that has been filmed. The first version had a
+                    // small "看整片" beside a caption, and its owner, having
+                    // clicked a shot, could not find the film again.
+                    HStack(spacing: 4) {
+                        let cut = FileManager.default.fileExists(atPath: film.file.path)
+                        choice("整片", on: playing.shot == nil, ready: cut) { watching[film.id] = nil }
+                        ForEach(film.shots) { shot in
+                            choice("镜头 \(shot.id)", on: playing.shot == shot.id,
+                                   ready: FileManager.default.fileExists(atPath: film.clip(shot.id).path)) {
+                                watching[film.id] = shot.id
+                            }
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .frame(maxWidth: 420).frame(maxWidth: .infinity)
                 }
                 if !film.look.isEmpty {
                     Text(film.look).font(.system(size: 10)).foregroundColor(.secondary)
                 }
+                // Where it all happens: one place for the whole film, and the
+                // first thing to read when two shots do not look like one.
+                if let place = film.place {
+                    Text(place).font(.system(size: 10)).foregroundColor(.secondary)
+                }
+                if let words = editing, words.film == film.id { editor(film, words) }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10)], spacing: 10) {
                     ForEach(film.shots) { shot in card(film, shot) }
                 }
@@ -120,26 +176,102 @@ struct FilmStudioView: View {
         }
     }
 
+    private func badge(_ words: String, _ colour: Color) -> some View {
+        Text(words).font(.system(size: 9, weight: .semibold)).foregroundColor(.white)
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(Capsule().fill(colour.opacity(0.85)))
+    }
+
+    /// One of the things the player can show.
+    private func choice(_ title: String, on: Bool, ready: Bool, pick: @escaping () -> Void) -> some View {
+        Button(action: pick) {
+            Text(title).font(.system(size: 10, weight: on ? .semibold : .regular))
+                .padding(.horizontal, 9).padding(.vertical, 3)
+                .background(Capsule().fill(on ? Color.accentColor.opacity(0.85) : Color.primary.opacity(0.08)))
+                .foregroundColor(on ? .white : .primary)
+        }
+        .buttonStyle(.plain)
+        .disabled(!ready)
+        .opacity(ready ? 1 : 0.35)
+    }
+
+    /// What the player shows: the shot that was picked, if its clip is
+    /// there; else the finished film; else — while it is still being made —
+    /// the latest shot that has been filmed.
+    private func playing(_ film: FilmStudio.Film) -> (url: URL, shot: Int?)? {
+        let fm = FileManager.default
+        if let picked = watching[film.id], fm.fileExists(atPath: film.clip(picked).path) {
+            return (film.clip(picked), picked)
+        }
+        if film.state == .done, fm.fileExists(atPath: film.file.path) { return (film.file, nil) }
+        if let latest = film.shots.last(where: { $0.state == .done && fm.fileExists(atPath: film.clip($0.id).path) }) {
+            return (film.clip(latest.id), latest.id)
+        }
+        return nil
+    }
+
     private func card(_ film: FilmStudio.Film, _ shot: FilmStudio.Shot) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
+        let filmed = FileManager.default.fileExists(atPath: film.clip(shot.id).path)
+        let onScreen = playing(film)?.shot == shot.id
+        return VStack(alignment: .leading, spacing: 5) {
             ZStack(alignment: .topLeading) {
                 thumb(film.still(shot.id)).aspectRatio(1, contentMode: .fit)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.accentColor, lineWidth: onScreen ? 2 : 0))
+                    // The verdict where it cannot be missed: on the picture.
+                    // Under three lines of prompt text, below the fold, it
+                    // was data nobody saw ("我怎么没有看见").
+                    .overlay(alignment: .topTrailing) {
+                        VStack(alignment: .trailing, spacing: 3) {
+                            if let score = shot.score {
+                                badge("把关 \(score)", score >= 7 ? Color.green : score >= 5 ? Color.orange : Color.red)
+                            }
+                            if layaOn, let right = shot.laya?["activity"] {
+                                badge("Laya \(String(format: "%.2f", right))", Color.blue)
+                            }
+                        }
+                        .padding(6)
+                    }
+                    .overlay(alignment: .bottomTrailing) {
+                        if filmed {
+                            Image(systemName: onScreen ? "play.circle.fill" : "play.circle")
+                                .font(.system(size: 20)).foregroundColor(.white)
+                                .shadow(radius: 3).padding(6)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture { if filmed { watching[film.id] = shot.id } }
+                    .help(filmed ? "在上面的播放器里看这个镜头" : "这个镜头还没拍好")
                 Text("\(shot.id) · \(word(shot.state))\(shot.hq == true ? " · 精修" : "")")
                     .font(.system(size: 9, weight: .medium))
                     .padding(.horizontal, 6).padding(.vertical, 2)
                     .background(Capsule().fill(Color.black.opacity(0.55)))
                     .padding(6)
-                if shot.state == .drawing || shot.state == .filming {
+                if shot.state == .drawing || shot.state == .filming || shot.state == .reviewing {
                     ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
             if let said = shot.narration {
                 Text("「\(said)」").font(.system(size: 10)).italic().lineLimit(2)
             }
-            Text(shot.motion).font(.system(size: 9)).foregroundColor(.secondary).lineLimit(3)
+            if let camera = shot.framing {
+                Text(camera).font(.system(size: 9, weight: .medium)).foregroundColor(.secondary).lineLimit(1)
+            }
+            Text(shot.action).font(.system(size: 9)).foregroundColor(.secondary).lineLimit(3)
             if let note = shot.note { Text(note).font(.system(size: 9)).foregroundColor(.orange).lineLimit(2) }
+            if let verdict = verdict(shot) {
+                Text(verdict).font(.system(size: 9)).foregroundColor(.secondary).lineLimit(2)
+            }
+            if layaOn, let second = second(shot) {
+                Text(second).font(.system(size: 9)).foregroundColor(.secondary).lineLimit(2)
+                    .help("Laya 对「看到的动作」的打分，只显示、不参与决定。\n看到的：\(shot.saw ?? "")")
+            }
             if film.state == .done || film.state == .failed {
+                Button("改这个镜头…") { open(film, shot) }
+                .controlSize(.mini)
+                .disabled(studio.shooting != nil)
+                .help("改这个镜头的机位、画面、动作、旁白，然后只重拍它，或者从它往后都重拍")
                 Button("重拍这个镜头") {
                     if case .failure(let failure) = studio.reshoot(film: film.id, shot: shot.id, still: nil, motion: nil) {
                         trouble = failure.localizedDescription
@@ -157,6 +289,139 @@ struct FilmStudioView: View {
                     .disabled(studio.shooting != nil)
                     .help("同一张图、同一段动作，用高清模型再拍一遍：细节干净一点，约 9 分钟，要占盒子约 45 GB 内存（kinfer 得关着）")
                 }
+            }
+        }
+    }
+
+    // MARK: Rewriting one shot
+
+    /// The four things a shot is made of, open for rewriting.
+    ///
+    /// Inline rather than a sheet or a popover: the panel is a floating
+    /// window that hides when it loses focus, and a popover that closes on
+    /// the first stray click takes a paragraph of typing with it.
+    private func editor(_ film: FilmStudio.Film, _ words: Words) -> some View {
+        let first = film.shots.first?.id == words.shot
+        let changed = words != opened
+        let onlyVoice = changed && opened.map {
+            $0.framing == words.framing && $0.pose == words.pose && $0.action == words.action && $0.wish == words.wish
+        } == true
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("改镜头 \(words.shot)").font(.system(size: 12, weight: .semibold))
+                Spacer()
+                if translating { ProgressView().controlSize(.mini); Text("在转成英文…").font(.system(size: 9)).foregroundColor(.secondary) }
+                if let busy = studio.revising { ProgressView().controlSize(.mini); Text("在照你说的改：\(busy)").font(.system(size: 9)).foregroundColor(.secondary).lineLimit(1) }
+            }
+            field("方向", "说一句就行：「手再慢一点，脚别动」「镜头近一点，只拍上半身」「让她最后看向镜头」", binding(\.wish), lines: 2)
+            Text("给个方向，提示词它自己改：会先看一眼现在这条拍成了什么样。下面是这个镜头实际用的提示词，想自己动手也可以直接改——你写的会原样用，不会再被改写。")
+                .font(.system(size: 9)).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
+            field("机位", first ? "第一个镜头固定是全景：它是全片的底图" : "medium shot from her left side, waist up",
+                  binding(\.framing), lines: 1).disabled(first)
+            field("画面", "她这一刻的姿势：站/坐/走，每只手脚在做什么", binding(\.pose), lines: 3)
+            field("动作", "这四秒里她怎么动；镜头（身体在动就写 static camera）；环境声", binding(\.action), lines: 4)
+            field("旁白", "留空就是不说话", binding(\.narration), lines: 2)
+            HStack(spacing: 8) {
+                Button("取消") { editing = nil; opened = nil }.controlSize(.small)
+                Spacer()
+                if onlyVoice {
+                    Button("只换旁白（两秒）") { apply(words, following: false) }.controlSize(.small)
+                } else {
+                    Button("只重拍这一个") { apply(words, following: false) }.controlSize(.small)
+                    Button("从这个往后都重拍") { apply(words, following: true) }.controlSize(.small)
+                        .help("后面的镜头是接着这个镜头的最后一帧拍的；它变了，后面就接不上了")
+                        .disabled(film.shots.last?.id == words.shot)
+                }
+            }
+            .disabled(!changed || translating || studio.shooting != nil || studio.revising != nil)
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.06)))
+    }
+
+    /// Laya's numbers on the take that was kept, as one line.
+    private func second(_ shot: FilmStudio.Shot) -> String? {
+        guard let read = shot.laya, !read.isEmpty else { return nil }
+        func part(_ key: String, _ name: String) -> String? { read[key].map { "\(name) \(String(format: "%.2f", $0))" } }
+        let parts = [part("follows", "按计划"), part("activity", "动作到位"), part("leaves", "走掉"),
+                     read["amount"].map { "幅度 \(String(format: "%.1f", $0))/2" }].compactMap { $0 }
+        return "Laya：" + parts.joined(separator: " · ")
+    }
+
+    /// What the reviewer made of the take that was kept.
+    private func verdict(_ shot: FilmStudio.Shot) -> String? {
+        guard let score = shot.score else { return nil }
+        let again = (shot.retakes ?? 0) > 0 ? " · 自动重拍了 \(shot.retakes!) 次" : ""
+        let bother = (shot.review ?? "").isEmpty ? "" : " · \(shot.review!)"
+        return "把关 \(score)/10\(again)\(bother)"
+    }
+
+    private func open(_ film: FilmStudio.Film, _ shot: FilmStudio.Shot) {
+        let words = Words(film: film.id, shot: shot.id, wish: shot.wish ?? "", framing: shot.framing ?? "",
+                          pose: shot.pose, action: shot.action, narration: shot.narration ?? "")
+        editing = words
+        opened = words
+    }
+
+    /// `panel_show {mode: film, film, shot}`: "我想改第三个镜头" said to her.
+    private func show(_ note: Notification) {
+        guard let wanted = note.userInfo?["film"] as? String,
+              let film = studio.films.first(where: { $0.id == wanted || $0.title == wanted || $0.id.hasPrefix(wanted) })
+        else { return }
+        selected = film.id
+        if let number = note.userInfo?["shot"] as? Int, let shot = film.shots.first(where: { $0.id == number }) {
+            open(film, shot)
+        }
+    }
+
+    private func binding(_ path: WritableKeyPath<Words, String>) -> Binding<String> {
+        Binding(get: { editing?[keyPath: path] ?? "" }, set: { editing?[keyPath: path] = $0 })
+    }
+
+    private func field(_ label: String, _ hint: String, _ text: Binding<String>, lines: Int) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(label).font(.system(size: 10, weight: .medium)).frame(width: 30, alignment: .leading).padding(.top, 3)
+            TextField(hint, text: text, axis: .vertical)
+                .textFieldStyle(.plain).font(.system(size: 11)).lineLimit(lines...max(lines, 6))
+                .padding(5)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.05)))
+        }
+    }
+
+    /// Only what was changed is sent, so a shot whose pose was left alone
+    /// keeps the pose that was read off the previous shot.
+    private func apply(_ words: Words, following: Bool) {
+        guard let was = opened else { return }
+        let typed = was.framing != words.framing || was.pose != words.pose || was.action != words.action
+        // A direction and no words typed: the model rewrites them. Words
+        // typed: they are the user's, and the direction rides along as a wish.
+        if words.wish != was.wish, !typed, !words.wish.trimmingCharacters(in: .whitespaces).isEmpty {
+            studio.redirect(film: words.film, shot: words.shot, note: words.wish, following: following) { result in
+                switch result {
+                case .success: editing = nil; opened = nil
+                case .failure(let failure): trouble = failure.localizedDescription
+                }
+            }
+            return
+        }
+        let voiceOnly = !typed && was.wish == words.wish
+        if voiceOnly {
+            if case .failure(let failure) = studio.narrate(film: words.film, shot: words.shot, line: words.narration) {
+                trouble = failure.localizedDescription
+            } else { editing = nil; opened = nil }
+            return
+        }
+        translating = true
+        Task { @MainActor in
+            defer { translating = false }
+            let framing = words.framing == was.framing ? nil : await FilmStudio.english(words.framing, as: "camera position")
+            let pose = words.pose == was.pose ? nil : await FilmStudio.english(words.pose, as: "still frame (her pose)")
+            let action = words.action == was.action ? nil : await FilmStudio.english(words.action, as: "movement, camera and ambient sound")
+            switch studio.reshoot(film: words.film, shot: words.shot, framing: framing, still: pose, motion: action,
+                                  narration: words.narration == was.narration ? nil : words.narration,
+                                  following: following, wish: words.wish == was.wish ? nil : words.wish) {
+            case .success: editing = nil; opened = nil
+            case .failure(let failure): trouble = failure.localizedDescription
             }
         }
     }
@@ -190,6 +455,8 @@ struct FilmStudioView: View {
             }
             HStack(spacing: 12) {
                 writerMenu
+                tongueMenu
+                reviewMenu
                 Stepper("\(shots) 个镜头", value: $shots, in: 2...8).font(.system(size: 10)).fixedSize()
                 Toggle("她当主角", isOn: $lead).font(.system(size: 10)).toggleStyle(.checkbox).fixedSize()
                     .disabled(character.anchorURL == nil)
@@ -225,8 +492,41 @@ struct FilmStudioView: View {
             Label("分镜：\(writer)", systemImage: "pencil.and.outline").font(.system(size: 10))
         }
         .menuStyle(.borderlessButton).fixedSize()
-        .help("分镜由哪个模型写")
+        .help("分镜由哪个模型写：\(writer)（\(writerPlace)）。它也是看图把关的那个，如果它能看图")
         .task { await loadWriters(); await describeWriter() }
+    }
+
+    /// Whether each take is looked at, and how many times it may be redone.
+    private var reviewMenu: some View {
+        Menu {
+            Button { retakes = 0 } label: { Label("不把关（拍成什么样就是什么样）", systemImage: retakes == 0 ? "checkmark" : "") }
+            ForEach(1...3, id: \.self) { count in
+                Button { retakes = count } label: {
+                    Label("不满意就自动重拍，每个镜头最多 \(count) 次", systemImage: retakes == count ? "checkmark" : "")
+                }
+            }
+        } label: {
+            Label(retakes == 0 ? "把关：关" : "把关：\(retakes) 次", systemImage: "checkmark.seal").font(.system(size: 10))
+        }
+        .menuStyle(.borderlessButton).fixedSize()
+        .help("每个镜头拍完，让能看图的模型对着计划看一遍：跑题了、多了人、镜头乱飞，就自己改提示词重拍，留得分最高的那条。一次重拍约两分半钟")
+    }
+
+    /// What language the voice-over is written and spoken in.
+    private var tongueMenu: some View {
+        Menu {
+            Button { tongue = "" } label: { Label("自动（跟你写的那句话）", systemImage: tongue.isEmpty ? "checkmark" : "") }
+            ForEach(FilmStudio.tongues, id: \.tag) { entry in
+                Button { tongue = entry.tag } label: { Label(entry.name, systemImage: tongue == entry.tag ? "checkmark" : "") }
+            }
+            Divider()
+            Button { tongue = "none" } label: { Label("不要旁白", systemImage: tongue == "none" ? "checkmark" : "") }
+        } label: {
+            let shown = tongue == "none" ? "无" : FilmStudio.tongues.first { $0.tag == tongue }?.name ?? "自动"
+            Label("旁白：\(shown)", systemImage: "waveform").font(.system(size: 10))
+        }
+        .menuStyle(.borderlessButton).fixedSize()
+        .help("旁白用哪种语言写、用哪种语言的声音念")
     }
 
     private func loadWriters() async {
@@ -236,7 +536,8 @@ struct FilmStudioView: View {
     private func describeWriter() async {
         guard let pick = await FilmStudio.writer() else { writer = "没有可用的模型"; return }
         let place = pick.host == OllamaCatalog.defaultBaseURL ? "本机" : "盒子"
-        writer = "\(pick.model)（\(place)\(writerModel.isEmpty ? "，自动" : "")）"
+        writer = pick.model
+        writerPlace = "\(place)\(writerModel.isEmpty ? "，自动挑的" : "，你指定的")"
     }
 
     private func start() {
@@ -268,6 +569,7 @@ struct FilmStudioView: View {
         case .waiting: return "等着"
         case .drawing: return "在画"
         case .filming: return "在拍"
+        case .reviewing: return "在把关"
         case .done:    return "好了"
         case .failed:  return "没拍成"
         }
@@ -287,15 +589,20 @@ struct FilmStudioView: View {
 /// The finished film, with sound and the usual controls.
 private struct FilmPlayer: NSViewRepresentable {
     let url: URL
+    /// A shot that was just picked plays; the whole film waits to be started.
+    var autoplay = false
 
     func makeNSView(context: Context) -> AVPlayerView {
         let view = AVPlayerView()
         view.controlsStyle = .inline
         view.player = AVPlayer(url: url)
+        if autoplay { view.player?.play() }
         return view
     }
 
     func updateNSView(_ view: AVPlayerView, context: Context) {
-        if (view.player?.currentItem?.asset as? AVURLAsset)?.url != url { view.player = AVPlayer(url: url) }
+        guard (view.player?.currentItem?.asset as? AVURLAsset)?.url != url else { return }
+        view.player = AVPlayer(url: url)
+        if autoplay { view.player?.play() }
     }
 }

@@ -98,7 +98,8 @@ final class DiffuserClient: ObservableObject {
         }
         for file in files {
             let data = try Data(contentsOf: file.url)
-            let type = file.url.pathExtension.lowercased() == "png" ? "image/png" : "image/jpeg"
+            let type = ["png": "image/png", "mp4": "video/mp4", "wav": "audio/wav"][file.url.pathExtension.lowercased()]
+                ?? "image/jpeg"
             body.append("--\(boundary)\r\n".data(using: .utf8)!)
             body.append("""
                 Content-Disposition: form-data; name="\(file.name)"; \
@@ -124,7 +125,7 @@ final class DiffuserClient: ObservableObject {
     /// Kontext wants an instruction rather than a caption: "change her coat to
     /// a red one", not "a woman in a red coat".
     @discardableResult
-    func edit(prompt: String, from source: URL, into folder: URL,
+    func edit(prompt: String, from source: URL, also references: [URL] = [], into folder: URL,
               steps: Int? = nil, guidance: Double? = nil, seed: Int? = nil,
               timeout: TimeInterval = 900) async throws -> URL {
         guard let url = Self.url("api/generate/img2img", on: Self.editHost) else {
@@ -147,8 +148,13 @@ final class DiffuserClient: ObservableObject {
         if let steps { fields["num_inference_steps"] = String(steps) }
         if let guidance { fields["guidance_scale"] = String(guidance) }
         if let seed { fields["seed"] = String(seed) }
-        let (boundary, body) = try Self.multipart(fields: fields,
-                                                  files: [(name: "image", url: source)])
+        // `image` is image 1 and sets the size; `images` are 2, 3… in order.
+        // One picture for who and another for where is what keeps a film in
+        // one place — see FilmStudio.recipe. A reference that has gone
+        // missing is left out rather than failing the edit.
+        let extras = references.filter { FileManager.default.fileExists(atPath: $0.path) }
+        let (boundary, body) = try Self.multipart(
+            fields: fields, files: [(name: "image", url: source)] + extras.map { (name: "images", url: $0) })
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -303,6 +309,8 @@ final class DiffuserClient: ObservableObject {
     func generateVideo(prompt: String, to file: URL, seconds: Double = 4,
                        width: Int = 704, height: Int = 480,
                        seed: Int? = nil, mode: String? = nil, from image: URL? = nil,
+                       following control: URL? = nil,
+                       lowRAM: Bool? = nil,
                        hq: Bool = false,
                        timeout: TimeInterval = 1800) async throws -> URL {
         // `hq` is the q8 two-stage model on its own server: measured against
@@ -332,12 +340,26 @@ final class DiffuserClient: ObservableObject {
         ]
         if let seed { fields["seed"] = String(seed) }
         if let mode { fields["mode"] = mode }
+        // The q4 pack's registry entry streams the transformer from disk
+        // (`--low-ram`) so that it fits a 16 GB Mac. On a box with memory to
+        // spare that is time spent for nothing, and a caller that knows says so.
+        if let lowRAM { fields["low_ram"] = lowRAM ? "true" : "false" }
         var files: [(name: String, url: URL)] = []
         if let image {
             guard FileManager.default.fileExists(atPath: image.path) else {
                 throw Failure.message("找不到要动起来的那张图：\(image.path)")
             }
             files.append((name: "image", url: image))
+        }
+        // A control video — a pose skeleton — makes this motion transfer: the
+        // still says who and where, the skeleton says how she moves. It is
+        // how a movement no sentence can describe gets filmed; see
+        // MotionStudio.
+        if let control {
+            guard FileManager.default.fileExists(atPath: control.path) else {
+                throw Failure.message("找不到动作参考：\(control.path)")
+            }
+            files.append((name: "control", url: control))
         }
         let (boundary, body) = try Self.multipart(fields: fields, files: files)
 

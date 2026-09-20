@@ -73,6 +73,10 @@ struct KinClawMacSettingsView: View {
         .frame(minWidth: 820, idealWidth: 860, maxWidth: 1100,
                minHeight: 620, idealHeight: 680, maxHeight: 900)
         .preferredColorScheme(.dark)
+        // `settings_open {tab}`: "打开后端设置" said to her lands on the right page.
+        .onReceive(NotificationCenter.default.publisher(for: .kinclawSettingsTab)) { note in
+            if let wanted = note.userInfo?["tab"] as? String, let tab = Tab(rawValue: wanted) { selectedTab = tab }
+        }
         // Inject NSVisualEffectView .hudWindow .behindWindow into
         // the host NSWindow so Settings looks identical to the main
         // SpotlightWindow — true desktop-show-through glass, not
@@ -520,6 +524,7 @@ private struct BackendSettingsTab: View {
             }
 
             BoxServicesCard()
+            LayaCard()
 
             SettingsCard("Sidecars") {
                 SettingsRow(label: "Ollama host") {
@@ -1872,6 +1877,52 @@ private struct RoutinesSettingsTab: View {
 // MARK: - The box's model servers
 
 /// Start and stop what runs on the box, and see what is up.
+/// Laya's second opinion on each filmed shot: a switch, where it listens,
+/// and whether anybody is there.
+private struct LayaCard: View {
+    @AppStorage(FilmStudio.layaOnKey) private var on = false
+    @AppStorage(FilmStudio.layaURLKey) private var address = ""
+    @State private var answers: Bool?
+
+    private let start = "cd ~/Documents/Workspace/kinclaw-mac && USE_TF=0 HF_HUB_OFFLINE=1 python3 scripts/laya_judge.py"
+
+    var body: some View {
+        SettingsCard("片场 · Laya 打分") {
+            SettingsRow(label: "给每个镜头打分") {
+                Toggle("", isOn: $on).labelsHidden().toggleStyle(.switch).controlSize(.small)
+            }
+            SettingsRow(label: "服务地址") {
+                HStack(spacing: 8) {
+                    Circle().fill(answers == true ? Color.green : answers == false ? Color.red : Color.gray)
+                        .frame(width: 8, height: 8)
+                    TextField(FilmStudio.layaDefault, text: $address)
+                        .textFieldStyle(.roundedBorder).frame(maxWidth: 240)
+                        .onSubmit { Task { answers = await FilmStudio.layaAnswers() } }
+                    Text(answers == true ? "在" : answers == false ? "没起来" : "…")
+                        .font(.system(size: 10)).foregroundColor(.secondary)
+                }
+            }
+            if answers == false {
+                HStack(spacing: 6) {
+                    Text(start).font(.system(size: 9, design: .monospaced)).foregroundColor(.secondary)
+                        .textSelection(.enabled).lineLimit(2)
+                    Button("复制") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(start, forType: .string)
+                    }.controlSize(.mini)
+                }
+            }
+            SettingsCaption("Laya 是一个 0.4B 的文字判断模型，跑在这台 Mac 上，一次约 0.2 秒。它看不了画面：把关的模型把「她的身体实际做了什么」写下来，Laya 拿这段话对着计划打分——按计划、动作到位、走掉、幅度——显示在镜头卡片上把关那一行下面。只显示，不参与把关的决定：实测它零样本读这些描述并不可靠（模型卡自己也说要微调），开着是为了看数据。默认关；开了之后新拍的镜头和「重新把关」才会有这一行。服务得自己起（上面那条命令），没起来就只是少一行。")
+        }
+        .task {
+            while !Task.isCancelled {
+                answers = await FilmStudio.layaAnswers()
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+            }
+        }
+    }
+}
+
 private struct BoxServicesCard: View {
     @ObservedObject private var box = BoxServices.shared
     @AppStorage(BoxServices.sshKey) private var ssh = ""

@@ -199,6 +199,9 @@ enum TextSegmenter {
         s.unicodeScalars.reduce(0) { CharacterSet.letters.contains($1) ? $0 + 1 : $0 }
     }
 
+    /// The voice that reads `language` when nobody has chosen one for it.
+    static func voice(forLanguage language: String) -> String? { defaultVoices[language] }
+
     /// Kokoro wants a bare language tag ("zh"), derived from the voice prefix.
     static func language(forVoice voice: String) -> String {
         guard let first = voice.first, let lang = prefixToLang[first] else { return "en" }

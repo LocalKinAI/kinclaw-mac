@@ -208,6 +208,287 @@ in one place, so between them only her state changes.
   companion who cannot answer "where are you" from her own tools will
   make something up.
 
+### Added — Motion: a movement from a real performance, performed by her
+
+An evening went into asking a video model for tai chi in words, and what it
+gave back, however the asking was refined, was a woman moving her arms; the
+reviewer built that evening said so itself ("腿部没有屈膝下沉和重心转移"). Its
+owner's conclusion: "似乎这种思路是错误的… 用已存在的视频". He was right, and it did
+not need a face swap.
+
+- **A seventh tab, Motion.** Drop in a video of somebody doing the thing — one
+  person, whole body, a camera that mostly stays put — say where she is and
+  what she wears, and she does it. Only the *skeleton* is taken from the
+  reference: Apple's Vision tracks the body frame by frame on this Mac
+  (`MotionPose`; a body in 241 of 241 frames of a performer 65×144 pixels
+  tall), and it is drawn as the OpenPose stick figure that LTX's IC-LoRA
+  union control was trained to follow. Nobody's face, clothes or garden comes
+  along, which is the difference from a face swap — and the swap models worth
+  having are non-commercial anyway.
+- **Her starting still** is an edit of her anchor shown the reference's first
+  frame for the pose and the distance, then given her face back by the head
+  pass; the skeleton is then *fitted onto her* (least squares on shoulders,
+  hips and knees, one scale) because an editor's idea of "the same position in
+  the frame" is a little lower and a little to one side.
+- **As long as the reference.** Filmed in ten-second stretches, each starting
+  on the last frame of the one before and following the next ten seconds of
+  the same performance, joined end to end with no dissolve — the joins are
+  continuous in picture and in motion already. Measured on the box's everyday
+  q4 model: 4 s in 97 s, 10 s in 273 s (q8: 120 s for 4, no visible gain), two
+  tens joined with no seam to be found frame by frame. The first clip made this
+  way was recognisably tai chi — bow stance, a hand rising, both arms pushing,
+  knees bent throughout, feet planted — in her park, in her padded jacket.
+- The player shows 成片 · 第 N 段 · 原视频 · 骨架, so what she did can be held
+  against what she was shown. `motion_make` / `motion_status` for her and for
+  agents. Where the movement came from is kept with the take (`credit`) and
+  shown under it: the first reference was a Creative Commons tai chi form, and
+  CC BY asks to be named.
+- **A link instead of a file** ("我可以粘贴youtube连接吗"). Paste an address and
+  the tab reads what it is *before taking any of it* — title, author, length,
+  licence — and shows it. A Creative Commons video can be fetched, and the
+  credit line fills itself in. Anything else is somebody's work under the
+  site's standard terms, which do not allow taking it and making something
+  from it: the tab says so, and fetches only once 我有权使用这段视频 is ticked
+  (`motion_make {url}` refuses likewise unless the user has said, in the
+  conversation, that it is theirs). Picture only, 480 lines at most, an mp4
+  that needs no merging — a skeleton does not need more. The app installs
+  nothing: it runs the `yt-dlp` already on the Mac (`kinclaw.motion.ytdlp` to
+  name one), and when that one is too old for the site — YouTube breaks old
+  ones every few months, and "HTTP Error 403" is how it says so — the error
+  carries the line that fixes it.
+- **A topic instead of a link** ("我给主题，智能找符合的视频，然后我勾选就可以用").
+  Type 八段锦 and the tab finds references that can be used *and* tracked:
+  the writer model turns the topic into three searches for one person
+  demonstrating it (the topic's language and English — a bare topic finds
+  talks, history and group classes); YouTube is searched with its Creative
+  Commons filter on, read flat, nothing fetched; and the model that can see
+  looks at the thumbnails, six at a time with their titles, and says whether
+  each is the thing asked for and how good a reference it would make out of
+  ten — one person, whole body, a steady camera — with a sentence of why.
+  The grid is sorted by that; 用这个 reads the real licence field (a filter is a
+  claim, the field is the record), fetches it and fills in the credit. About
+  seventy seconds from a topic to fourteen ranked videos; a group class scored
+  3, a lone performer head to foot 9. `motion_find {topic}` for her — she is
+  told to show the list and let the user choose.
+- A stretch says how long it has been running. Ten seconds of film is five
+  minutes of one unchanging sentence, and its owner took the second stretch
+  for a hang ("是不是卡住了啊"); the line now counts up beside what the last
+  stretch took. And the model is no longer streamed from disk when the box
+  has memory to spare (`low_ram=false`): 266 s for ten seconds against 295.
+- Needs, on the box: ollamadiffuser with the control-video mode (below) and
+  `ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors` (654 MB, LTX-2
+  community licence) under `~/.ollamadiffuser/models/ltx-loras/`.
+
+### Changed — a film is one place and one movement, not four postcards
+
+"她在公园里打太极" came back as a pavilion, a stone house, a lake she stood
+waist-deep in and a wood — in two pairs of shoes, doing four things none of
+which was tai chi. Then, with the place fixed, as four unrelated poses in one
+place. Both were the pipeline, not the models:
+
+- **One place, and the first shot is its master.** A storyboard now has a
+  `place`, said once, and its first still is always a wide frame of her in it.
+  Words alone do not hold a location from one still to the next; a picture
+  does. The edit server took one reference image; it takes several now
+  (ollamadiffuser: `images` on `/api/generate/img2img`), so a still can be
+  made from *who* (her anchor) and *where* (another frame) at once.
+- **Every shot starts where the last one stopped.** The previous clip's final
+  frame is pulled out, a model that can see (the storyboard's writer when it
+  has eyes — kimi does) puts her pose into words for the next camera and
+  rewrites the planned movement to carry on from it, and the next still is
+  that pose from the new angle: a match cut. It has to be read rather than
+  planned, because the video model does not stop where the storyboard says —
+  asked for a weight shift, it ended on one knee with her hands behind her
+  back, and the next shot now begins there. "Keep her pose" alone is not
+  kept (from behind, her raised arms came back down); the pose in words is.
+  The reader is told what the film is *about*, too. The first version was
+  not, and directed faithfully from what it saw: the video model ended a tai
+  chi shot on a stray step, so the next shot "continues walking forward", and
+  so did the one after — a perfectly continuous film of a woman leaving. And
+  the master rides along as a third picture: three links into a chain without
+  it, a padded jacket had become a jumper, because every frame of video is a
+  slightly worse witness to the clothes than the one before.
+- **The place and the clothes are not repeated in words once a picture carries
+  them.** They were, at first, and every still came back as the same
+  full-length wide shot whatever the storyboard asked: a sentence listing a
+  pavilion, a willow, trousers and shoes can only be satisfied by a frame
+  with all of them in it. Left to the picture, "medium shot from her left
+  side, waist up" is one.
+- **The brief says who reads it.** The writer was a good writer addressing
+  the wrong reader: "hands pushing forward as if moving water" put her in the
+  lake, "the opening gesture of tai chi" was a T-pose, "sound of distant park
+  keepers sweeping" walked a man into the last frame. Storyboards are now
+  asked for a `framing` per shot, the body described limb by limb, only what
+  is in the frame, no similes, no names of techniques, ambient sound that
+  names nothing not already visible, and a static camera whenever her body
+  moves (asked for both, the video model trades her movement for a zoom).
+  The brief's examples are from another subject than the one most likely to
+  be asked for: a writer copies an example that fits. And because a simile
+  still slips through about one shot in four — and gets drawn; there was a
+  ball — "as if …" clauses are cut from what the models are sent.
+- **Each shot's words can be rewritten.** 改提示词… on a shot opens its camera,
+  pose, movement and voice-over; what is shown is what the shot was actually
+  made from (the pose that was read, the movement that was played), and what
+  is changed is used as written — nobody's model rewrites a director. Chinese
+  is turned into the literal English the models read. Then 只重拍这一个, or
+  从这个往后都重拍 — later shots were filmed from this one's last frame, and
+  a new ending leaves them starting from a moment that no longer happened.
+  A change to the voice-over alone is still two seconds. `film_reshoot` takes
+  `framing` and `following` for the same, and `panel_show {mode: film, film,
+  shot}` opens a shot's words from a conversation ("我想改第三个镜头").
+- **Nobody has to write a prompt.** Two ways not to:
+  - *A direction in a sentence.* 改这个镜头… opens with one field, 方向: "手放下来
+    的时候再慢一点，脚不要动，不要转身". The model that can see looks at the
+    current take and rewrites what has to change — and only that — then the
+    shot is taken again. Measured on the shot that prompted it: before, she
+    lowered her arms, turned side-on and stepped off; after, four seconds of
+    arms coming down, feet planted, facing the lens throughout. The sentence
+    stays on the shot as its `wish`, and whoever writes or judges the shot
+    afterwards is told it outranks the plan. `film_reshoot` takes `direction`,
+    so it can be said to her in conversation. The shot's actual words are
+    still underneath for anyone who wants to type them, and typed words are
+    still used as written.
+  - *把关：N 次*, in the composer. Every take is watched — four frames across
+    it, and the master for the place and the clothes — against the plan: does
+    she do what the film is about or drift into something else; is anything
+    there that should not be; does the camera do something wild; are the
+    place and the clothes still the master's. A score out of ten and, under
+    seven, a sentence on what is wrong and rewritten words; the shot is taken
+    again, up to N times (one by default, 把关：关 for none), and the
+    best-scoring take is the one the film uses — a worse retake does not
+    replace a better first try. Asked about two takes of the same shot by
+    hand, it gave the one where she turns and walks off 4/10 ("第四帧她转身走掉，
+    完全偏离太极动作计划") and the one made to the direction 7. About ten seconds
+    a look; a retake is two and a half minutes. The verdict is on the card.
+  - *The reviewer reports facts; the app decides.* Its first form gave a mark
+    out of ten and was a mood: three shots in four sent back, "ok: false,
+    score: 7", a take marked down because its camera was not the master's.
+    It is now asked only what it can plainly see — did she leave, did somebody
+    arrive, is anything deformed, did the camera run off, did the clothes or
+    the place change, did her face, was the user's wish ignored — and the
+    score is arithmetic on the answers. On four takes whose faults were known
+    it named both walk-offs, with the frame they happen in, and passed the
+    good take three times out of three. What it cannot do is faces: shown a
+    profile that turns to the lens as somebody else, it said nothing had
+    changed. That needs a face-comparison model, which this Mac does not have.
+    (And a model that thinks aloud answers, argues with itself, and answers
+    again — the reply is read for the last JSON object that parses, not for
+    everything between the first brace and the last.)
+  - Found on the way: a direction given in conversation was accepted,
+    acknowledged and dropped. `done?(reshoot(…))` reads as "reshoot, then tell
+    whoever asked" and means "if nobody asked, do not reshoot" — an optional
+    call does not evaluate its arguments, and the tool asks for no callback.
+- **Her face stays hers.** "三脸也变了啊" — and cropped out and lined up beside
+  the anchor, it had: in a full-length wide shot at 704 pixels her face is
+  about fifty pixels across, and at fifty pixels neither the editor nor the
+  video model holds an identity. The woman in the first three shots was nobody
+  in particular, a little older in each clip. Asking for "medium shot, waist
+  up" did not help, because the two pictures the editor was shown were wide
+  shots and it composes what it is shown. So the references are now **cropped
+  to the shot's framing before they are sent** — the camera is set by a
+  rectangle, not by an adjective — and **her face is blurred out of every
+  reference but the anchor**, because the last frame of a clip carries a face
+  that has already drifted and with it in view the editor copies that one.
+  Measured on one still, three ways: references as they were, a wide shot,
+  face 57 px, not her; cropped, waist up, 128 px, a sharp portrait of the
+  wrong woman; cropped and blurred, 138 px and recognisably her, same jacket,
+  same park. (`FilmReference`, Vision for the face, Core Image for the rest.)
+  Storyboards are asked to stay close after the opening shot, which itself is
+  now full-length rather than wide; and the reviewer is shown her portrait
+  and told how many pixels wide her face is, with a closer camera as the fix.
+- **The camera is the film's, not her face's.** The paragraph above went too
+  far, and its owner said so twice: "不要为了保持脸就拉近镜头" and "拉近镜头完全就不是
+  太极动作了". It had. To keep her face large the brief told writers to stay
+  close after the opening shot, anything unrecognised was cropped to the
+  waist, and the reviewer's cure for a small face was a closer camera — and a
+  film of tai chi became a film of a woman moving her arms. All three are
+  gone: the references are cropped only to the framing the storyboard asked
+  for, the brief asks for the framing the *action* needs (the whole body, in
+  every shot, for anything done with the whole body; variety from the angle,
+  not the distance), and the reviewer never moves the camera for a face.
+  Her face is looked after where she stands instead — a **head pass**: when
+  the face in a new still is under 110 pixels, the head is cut out and
+  enlarged, the editor redraws the face from her anchor, and the face is set
+  back into the still. Not as it comes: asked to change only the face, the
+  editor hands back a fresh head-and-shoulders portrait, and pasted in as it
+  was that was a face twice the size of the head it landed on. The face found
+  in its answer is scaled and moved onto the face found in the still, and
+  only a feathered ellipse inside the face is taken. On a full-length still
+  with a 66-pixel face: sharper, the anchor's brows and eyes, no seam at the
+  size it is shown. The still as first drawn is kept as `shot-NN.drawn.png`.
+- **The action is the film.** "要强调动作啊." Four shots had scored ten out of
+  ten in a film its owner watched and said was not tai chi, because the
+  reviewer only looked for things going wrong and nothing had: nothing much
+  had happened either. Three changes. Stills catch her *in the middle* of the
+  movement — a wide stance, knees bent, weight on one leg, arms partway
+  through their arc — because the video model continues the energy of its
+  first frame and a neutral standing pose becomes a small gesture or a walk.
+  `motion` leads with the movement and says what the legs, the weight and the
+  torso do as well as the arms, with the constraints (on the spot, static
+  camera, ambient sound) cut to a few words at the end — they had grown to
+  outweigh the action they were protecting. And the reviewer now reports
+  whether she performs the planned movement (no / partly / yes), whether she
+  is frozen, and how much of her body took part against how much the plan
+  called for; falling short costs points and sends the shot back with a
+  larger movement written for it.
+- **Tried: a text decision model as the judge** (`convaiinnovations/laya`,
+  0.4B, runs here in ~200 ms). It cannot see, so the split was kimi describing
+  what her body does and Laya judging the description against the plan. Kimi's
+  descriptions were exact ("knees straight, weight stays centred, feet do not
+  move"; "turns to the side, steps forward, and walks off to the right").
+  Laya's readings of them were not: the walk-off scored 0.36 for "does she
+  walk away", arms-only movement 1.88 of 2 for "her whole body moves", and
+  "is this tai chi" sat between 0.81 and 0.92 for four of six takes whatever
+  they showed. Its own card says as much — a base to fine-tune, not a
+  zero-shot judge — so the facts are asked of the model with eyes and the
+  arithmetic is done in code. The descriptions it would need to learn from
+  are the ones now written for every take.
+- **A shot can be watched the moment it is filmed.** Under the player: 整片 ·
+  镜头 1 · 镜头 2 …, and a click on any finished shot's picture does the same;
+  while a film is still being made the player shows the latest shot instead of
+  nothing for a quarter of an hour. (Its first form was a small "看整片" beside
+  a caption, and having clicked a shot its owner could not find the film
+  again: "却没有最后的合成版了".)
+- **Laya's numbers are shown beside the verdict** — asked for, so that they can
+  be watched rather than argued about. The reviewer now also writes down what
+  it *saw* her body do (`saw`, two plain sentences), and that, with the plan,
+  goes to Laya behind `scripts/laya_judge.py` (a forty-line FastAPI wrapper on
+  127.0.0.1:8005, `kinclaw.film.laya` to point elsewhere): 按计划 · 动作到位 ·
+  走掉 · 幅度. Displayed, not obeyed; when the service is not running the card
+  has one line fewer. It is **off by default**: Settings → Backend → 片场 · Laya
+  打分 has the switch, the address, a live dot for whether the service answers,
+  and the command that starts it (`settings_open {tab: "backend"}` lands
+  there). And the numbers are on the picture now — 把关 N in green, amber or
+  red, Laya's 动作到位 in blue — because the first place they were put, a ninth
+  line of small grey text below the fold, was data nobody saw ("我怎么没有看见"). **重新把关** on a finished film (`film_review`) reviews
+  every shot again without filming anything, which is how films made before
+  tonight get their action verdicts and their Laya line.
+- **Never from behind, and she does not turn round.** A shot that opened on
+  her back and had her turn gave the video model a side of her it had never
+  seen: it invented a face, and an open jacket over a white top, and because
+  the next shot starts from the last frame, that became her outfit for the
+  rest of the film. It is in the brief and in the rules every rewrite is
+  given. Two more things from the same run: a model describing a frame adds
+  what she is wearing however it is asked not to, and those words outrank the
+  master picture, so "wearing …" is cut from a pose the way "as if …" is; and
+  a shot that scores under five after its retakes is not carried on from —
+  the next one is a fresh setup from the master, a cut away, which is what an
+  editor does with a bad take. A still that predates the latest take of the
+  shot before it is drawn again, too: redoing shot 2 alone used to leave shot
+  3 opening on a moment that no longer happened.
+- **What is left is the video model's.** It does not do slow, controlled
+  choreography: asked for tai chi it gives unhurried arm movements and the
+  occasional step nobody asked for, and with the place held by three pictures
+  the camera mostly stays wide whatever `framing` says (a close-up comes back
+  as a medium shot). A shot is about 2 min 40 s now — reading the last frame
+  and a three-picture edit on top of the filming.
+- **旁白：…** in the composer picks the voice-over's language — 自动 (the
+  idea's own), 中文, English, 日本語, Español, Français, Italiano, Português,
+  हिन्दी, or none. It is told to the writer, which had started answering an
+  English brief in English, and it picks the voice: a Kokoro voice reads one
+  language, so her usual voice is used only when it is a voice of that
+  language. `film_make` takes `narration_language`.
+
 ### Fixed — Settings would not open, and the Film tab's composer was one row too few
 
 - **Settings… did nothing.** Both doors — the 🦞 menu's Settings… and the gear

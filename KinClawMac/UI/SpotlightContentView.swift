@@ -584,7 +584,7 @@ struct SpotlightContentView: View {
             // Secondary row — agent picker and utility buttons. Code
             // mode has CodePane's own repoBar acting as its secondary
             // row, so we skip ours there to avoid double bars.
-            if mode != .code, mode != .term, mode != .web, mode != .film {
+            if mode != .code, mode != .term, mode != .web, mode != .film, mode != .motion {
                 agentBar
                 Divider().opacity(0.15)
             }
@@ -636,6 +636,8 @@ struct SpotlightContentView: View {
                     WebPane()
                 case .film:
                     FilmStudioView()
+                case .motion:
+                    MotionStudioView()
                 }
             }
         }
@@ -1259,7 +1261,7 @@ struct SpotlightContentView: View {
                     }
                 }
 
-            case .code, .term, .web, .film:
+            case .code, .term, .web, .film, .motion:
                 // Unreachable — these modes have no agent picker: Code shows a
                 // static "🦞 kincode" label, Term and Web have toolbars of
                 // their own. Defensive empty case.
@@ -3255,7 +3257,7 @@ struct SpotlightContentView: View {
     ///   .code   → no agent (kincode is fixed)
     private func pickDefaultAgent(for mode: ChatMode) -> Agent? {
         switch mode {
-        case .code, .term, .web, .film:
+        case .code, .term, .web, .film, .motion:
             return nil
         case .chat:
             if !chatLastAgentSlug.isEmpty,
@@ -3306,7 +3308,7 @@ struct SpotlightContentView: View {
             // localkin repo and carry `domain == "kinclaw-private"`.
             // Both flavours route through the same chatBody surface.
             return agent.name.hasPrefix("KinClaw") || agent.domain == "kinclaw-private"
-        case .code, .term, .web, .film: return false   // never matches
+        case .code, .term, .web, .film, .motion: return false   // never matches
         }
     }
 
@@ -3320,7 +3322,7 @@ struct SpotlightContentView: View {
         switch mode {
         case .chat:   chatLastAgentSlug = s
         case .cowork: coworkLastSoulSlug = s
-        case .code, .term, .web, .film: break
+        case .code, .term, .web, .film, .motion: break
         }
     }
 

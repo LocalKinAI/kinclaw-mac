@@ -22,6 +22,8 @@ import Foundation
 ///             tab strip, for the times the answer is one command
 ///   .web    → a browser in the panel: the page you are signed into,
 ///             one button from the agent
+///   .motion → a movement taken from a real performance, performed by her:
+///             a reference video's pose skeleton drives the video model
 ///   .film   → one sentence in, a short film out: a storyboard, a still
 ///             and a clip per shot on the user's own image and video
 ///             servers, cut together
@@ -37,6 +39,7 @@ enum ChatMode: String, CaseIterable, Identifiable {
     case term
     case web
     case film
+    case motion
 
     var id: String { rawValue }
 
@@ -49,6 +52,7 @@ enum ChatMode: String, CaseIterable, Identifiable {
         case .term:   return "Term"
         case .web:    return "Web"
         case .film:   return "Film"
+        case .motion: return "Motion"
         }
     }
 
@@ -63,6 +67,7 @@ enum ChatMode: String, CaseIterable, Identifiable {
         case .term:   return "terminal"
         case .web:    return "globe"
         case .film:   return "film"
+        case .motion: return "figure.taichi"
         }
     }
 
@@ -81,6 +86,8 @@ enum ChatMode: String, CaseIterable, Identifiable {
             return "Web — a browser in the panel; 给 agent 看这页 hands the page over"
         case .film:
             return "Film — 一句话拍个短片：分镜、出图、出片、剪辑，都在自己的机器上"
+        case .motion:
+            return "Motion — 找一段真人动作的视频，只取骨架，让她照着做：太极、舞蹈、任何说不清的动作"
         }
     }
 }

@@ -379,4 +379,8 @@ extension Notification.Name {
     static let kinclawOpenSettings = Notification.Name("kinclaw.openSettings")
     /// A tool asked for the panel itself, optionally on a tab (`userInfo["mode"]`).
     static let kinclawShowPanel = Notification.Name("kinclaw.showPanel")
+    /// Show one of the Settings window's tabs.
+    static let kinclawSettingsTab = Notification.Name("kinclaw.settings.tab")
+    /// Select a film in the Film tab, and optionally open one shot's words.
+    static let kinclawFilmShow = Notification.Name("kinclaw.film.show")
 }

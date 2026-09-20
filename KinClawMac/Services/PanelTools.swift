@@ -358,16 +358,23 @@ enum PanelTools {
         ],
         [
             "name": "panel_show",
-            "description": "Show the KinClaw panel, optionally on one of its tabs: chat, cowork, code, term, web, film. Use it when the user asks to see the panel or to go to a tab (\"打开片场\" → film).",
+            "description": "Show the KinClaw panel, optionally on one of its tabs: chat, cowork, code, term, web, film, motion. Use it when the user asks to see the panel or to go to a tab (\"打开片场\" → film). With mode film, `film` selects a film and `shot` opens that shot's words for rewriting (\"我想改第三个镜头\").",
             "inputSchema": [
                 "type": "object",
-                "properties": ["mode": ["type": "string", "description": "chat | cowork | code | term | web | film. Omit to leave the tab as it is."]],
+                "properties": [
+                    "mode": ["type": "string", "description": "chat | cowork | code | term | web | film | motion. Omit to leave the tab as it is."],
+                    "film": ["type": "string", "description": "With mode film: the film to show, by id or title."],
+                    "shot": ["type": "integer", "description": "With film: open this shot's prompt editor."],
+                ] as [String: Any],
             ],
         ],
         [
             "name": "settings_open",
-            "description": "Open KinClaw Mac's Settings window. Use it when the user asks for the settings, or has to fill something in there.",
-            "inputSchema": ["type": "object", "properties": [:] as [String: Any]],
+            "description": "Open KinClaw Mac's Settings window, optionally on one of its tabs. Use it when the user asks for the settings, or has to fill something in there (the box's services and Laya are under backend).",
+            "inputSchema": [
+                "type": "object",
+                "properties": ["tab": ["type": "string", "description": "general | hotkey | backend | agents | skills | voice | mcp | harvest | routines | data | about. Omit to leave it where it is."]],
+            ],
         ],
         [
             "name": "box_services",
@@ -401,19 +408,39 @@ enum PanelTools {
                 happening. It runs for minutes in the background — about 100 \
                 seconds a shot — so say so, and use film_status to see how it \
                 is going; the finished file's path is in the answer there.
-                Each shot: `still` is ONE photograph in concrete English — \
-                subject, place, light, framing (wide / medium / close; vary \
-                them); `motion` is what moves in those four seconds — one \
-                simple action and at most one camera move (slow push in, pan, \
-                handheld drift) — ending with what it sounds like ("sound of \
-                waves and distant gulls"). Keep it simple: walking, turning, \
-                looking, wind, water, light. Not fights, not fine hand work, \
-                not text. `look` is what every frame shares (film stock, \
-                palette, time of day). With `lead: true` she is in every shot \
-                and stays the same person: write `still` as "she is …", do \
-                not describe her face or hair, and say what she wears once, \
-                in `wears` — it goes into every frame so she is dressed the \
-                same throughout.
+                The models that draw and film it take every word literally \
+                and know nothing you do not say, so write a shot list, not \
+                prose. ONE PLACE: `place` describes the single location once, \
+                with the landmarks that make it that spot; it goes into every \
+                frame, and the film never moves elsewhere — variety comes \
+                from the camera. ONE ACTIVITY, IN ORDER: the shots are \
+                chained — shot 1 is drawn as a wide shot of her whole body and \
+                the place, and every later shot starts from the last frame of \
+                the one before it, seen by its own camera (her pose is read \
+                off that frame, and your `motion` is adjusted to carry on from \
+                it). So write each `motion` as the next phase of one continuous \
+                movement. \
+                Each shot: `framing` is where the camera is ("medium shot from \
+                her left side, waist up"; vary it, but never from behind her \
+                and never turn her around — the models invent the side of her \
+                they have not seen, and her clothes change); `still` is what that one \
+                photograph shows, literally — whether she stands, sits or \
+                walks and what each limb in the frame is doing; only what is \
+                inside the frame; no similes or metaphors ("as if holding a \
+                ball" draws a ball); never the name of a technique or a pose, \
+                describe the body; `motion` is one slow body movement that \
+                starts from that pose, then the camera ("static camera" \
+                whenever her body moves; a slow push in or pan only where she \
+                holds still), then the sound — ambient \
+                only (wind, water, birds, her breath): never mention a person, \
+                animal or object that is not already in the still, not even \
+                as a sound, because whatever is named gets drawn. No fights, \
+                no fine hand work, no text. `look` is what every frame shares \
+                (film stock, palette, time of day). With `lead: true` she is \
+                in every shot and stays the same person: write `still` as \
+                "she …", do not describe her face or hair, and say what she \
+                wears once, in `wears`, shoes included — it goes into every \
+                frame so she is dressed the same throughout.
                 """,
             "inputSchema": [
                 "type": "object",
@@ -422,17 +449,21 @@ enum PanelTools {
                     "idea": ["type": "string", "description": "The user's idea, in their words. Given alone, with no shots, the studio writes the storyboard itself."],
                     "count": ["type": "integer", "description": "With idea alone: how many shots, 2–8. Default 4."],
                     "look": ["type": "string", "description": "Shared by every frame: \"35mm film still, golden hour, warm palette, shallow depth of field\"."],
+                    "place": ["type": "string", "description": "The one location, said once: \"a stone-paved clearing beside a lake in a city park, a red wooden pavilion behind it, a large willow on the right, morning mist\"."],
                     "lead": ["type": "boolean", "description": "true: she (the companion) is in every shot. Default false."],
                     "wears": ["type": "string", "description": "With lead: her outfit for the whole film, e.g. \"a long white summer dress, barefoot\"."],
+                    "narration_language": ["type": "string", "description": "Language of the voice-over, written and spoken: zh | en | ja | es | fr | it | pt | hi, or \"none\" for a film without one. Omit to follow the idea's language. Narration you write yourself must be in it — the voice that reads it can only read its own language."],
                     "seconds": ["type": "number", "description": "Length of each shot, 2–10. Default 4."],
+                    "retakes": ["type": "integer", "description": "Each take is reviewed by a model that can see, and sent back with rewritten words when it went wrong; this is how many times per shot, 0–3 (0: no review). Omit for the user's setting."],
                     "shots": [
                         "type": "array",
                         "description": "2–8 shots, in order.",
                         "items": [
                             "type": "object",
                             "properties": [
-                                "still": ["type": "string", "description": "The frame, as one photograph."],
-                                "motion": ["type": "string", "description": "What moves, and what it sounds like."],
+                                "framing": ["type": "string", "description": "Where the camera is: \"wide shot from the front, whole body\", \"close-up of her hands\"."],
+                                "still": ["type": "string", "description": "What the photograph shows, literally: posture and limbs, nothing outside the frame, no similes."],
+                                "motion": ["type": "string", "description": "One slow body movement from that pose, a camera move at most, then ambient sound."],
                                 "narration": ["type": "string", "description": "Optional voice-over for this shot, in the user's language, spoken by their own TTS: a storyteller's line, not a caption, sayable in three seconds (a dozen Chinese characters / eight English words)."],
                             ] as [String: Any],
                             "required": ["still", "motion"],
@@ -454,12 +485,77 @@ enum PanelTools {
             ],
         ],
         [
+            "name": "motion_make",
+            "description": """
+                Film her performing a movement taken from a real video: tai \
+                chi, a dance, a stretch — anything a sentence cannot describe \
+                and a body can show. Only the pose skeleton is taken from the \
+                reference (found on this Mac, nothing uploaded but the stick \
+                figure); the person, the clothes and the place in the result \
+                are hers. The reference should show ONE person, whole body, \
+                from a camera that does not move much. It is filmed in \
+                ten-second stretches, each carrying on from the last frame of \
+                the one before, so it can be as long as the reference: about \
+                four and a half minutes of work for ten seconds of film. Use \
+                motion_status to follow it. The video must be a file on this \
+                Mac that the user may use — their own, or one whose licence \
+                allows it (Creative Commons, a stock library); pass where it \
+                came from in `credit`, because a published result has to say.
+                """,
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "video": ["type": "string", "description": "Path to the reference video on this Mac. Or give `url`."],
+                    "url": ["type": "string", "description": "An address instead of a file (YouTube, TikTok…). Its licence is read first: Creative Commons is fetched; anything else is refused unless `rights` is true."],
+                    "rights": ["type": "boolean", "description": "true ONLY when the user has told you, in this conversation, that the video is theirs or that they have permission to use it. Never assume it."],
+                    "scene": ["type": "string", "description": "Where she is and what she wears, one sentence, in any language: \"清晨起雾的公园，圆形砖地，穿蓝色棉袄、灰色长裤、白布鞋\"."],
+                    "start": ["type": "number", "description": "Second of the reference to start from. Default 0."],
+                    "seconds": ["type": "number", "description": "How long, 4–120. Default 10."],
+                    "title": ["type": "string", "description": "A short title."],
+                    "credit": ["type": "string", "description": "Where the movement came from: title, author, address, licence."],
+                ] as [String: Any],
+                "required": ["scene"],
+            ],
+        ],
+        [
+            "name": "motion_find",
+            "description": "Find reference videos for a movement by topic (\"八段锦\", \"tai chi\", \"ballet barre\"): searches YouTube for Creative Commons videos only, then has the model that can see look at the thumbnails and score each for motion capture — one person, whole body, steady camera. Shows the list in the Motion tab and returns it, best first. Give the user the list and let THEM choose; then motion_make with the chosen `url`.",
+            "inputSchema": [
+                "type": "object",
+                "properties": ["topic": ["type": "string", "description": "What movement to find, in any language."]],
+                "required": ["topic"],
+            ],
+        ],
+        [
+            "name": "motion_status",
+            "description": "How the Motion tab's takes are getting on: what each is doing, and the finished file's path.",
+            "inputSchema": ["type": "object", "properties": [:] as [String: Any]],
+        ],
+        [
+            "name": "film_review",
+            "description": "Review a finished film's shots again without filming anything: for each shot, whether she does the planned action and with how much of her body, whether anything went wrong, what was seen, and Laya's second-opinion numbers. About ten seconds a shot; read the result with film_status.",
+            "inputSchema": [
+                "type": "object",
+                "properties": ["film": ["type": "string", "description": "The film's id or title."]],
+                "required": ["film"],
+            ],
+        ],
+        [
             "name": "film_reshoot",
             "description": """
-                Redo one shot of a film and cut it again — a new `still` for a \
-                different frame, a new `motion` for a different take of the \
-                same frame, or neither to simply roll again. The old take is \
-                kept beside the new one. Without `shot`, it carries on with a \
+                Redo one shot of a film and cut it again. The easy way is \
+                `direction`: the user's wish in a sentence, and the studio \
+                rewrites the shot's words to it after looking at the current \
+                take. Or write them yourself — a new `framing` or \
+                `still` for a different frame, a new `motion` for a different \
+                take of the same frame, or neither to simply roll again. Words \
+                you give are used as written (same rules as film_make: \
+                literal, no similes). Every shot starts from the last frame of \
+                the one before it, so a shot that now ends somewhere else \
+                leaves the next one starting from a moment that no longer \
+                happened: pass `following: true` to redo the shots after it \
+                too (about two and a half minutes each). The old takes are \
+                kept beside the new ones. Without `shot`, it carries on with a \
                 film that stopped: every shot not finished is tried again.
                 """,
             "inputSchema": [
@@ -467,8 +563,11 @@ enum PanelTools {
                 "properties": [
                     "film": ["type": "string", "description": "The film's id or title."],
                     "shot": ["type": "integer", "description": "Which shot, from 1."],
-                    "still": ["type": "string", "description": "A new frame. Optional."],
-                    "motion": ["type": "string", "description": "A new take. Optional."],
+                    "direction": ["type": "string", "description": "What the user wants different, in their own words (\"手再慢一点，脚别动\", \"镜头近一点\"). The studio looks at the current take and rewrites the shot's words itself — prefer this to writing `framing`/`still`/`motion` yourself; pass the user's sentence as they said it."],
+                    "framing": ["type": "string", "description": "A new camera position for the shot. Optional."],
+                    "still": ["type": "string", "description": "A new frame: her pose, literally. Optional."],
+                    "motion": ["type": "string", "description": "A new take: one slow movement, the camera, ambient sound. Optional."],
+                    "following": ["type": "boolean", "description": "Also redo every shot after this one, so they carry on from its new ending. Default false."],
                     "narration": ["type": "string", "description": "A new voice-over line for the shot (\"\" removes it). Given alone, nothing is filmed: the line is spoken by the user's TTS and the film is cut again in seconds."],
                     "hq": ["type": "boolean", "description": "Film it on the high-quality model: a little cleaner, five times slower (~9 min a shot), and it needs about 45 GB of the box's memory, so kinfer must be off. For a shot the user is already happy with, never for a draft."],
                 ],
@@ -553,12 +652,24 @@ enum PanelTools {
             var info: [String: Any] = [:]
             if let mode = args["mode"] as? String, !mode.isEmpty { info["mode"] = mode }
             NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: info)
+            if let film = args["film"] as? String, !film.isEmpty {
+                // After the tab has had a moment to exist: a view that is not
+                // on screen yet is not listening yet.
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                var which: [String: Any] = ["film": film]
+                if let shot = args["shot"] as? Int { which["shot"] = shot }
+                NotificationCenter.default.post(name: .kinclawFilmShow, object: nil, userInfo: which)
+            }
             return ("面板打开了" + ((info["mode"] as? String).map { "，在 \($0) 标签" } ?? ""), false)
         case "settings_open":
             NSApp.activate(ignoringOtherApps: true)
             NotificationCenter.default.post(name: .kinclawOpenSettings, object: nil)
             let sent = true
             try? await Task.sleep(nanoseconds: 1_200_000_000)
+            if let tab = (args["tab"] as? String)?.lowercased(), !tab.isEmpty {
+                NotificationCenter.default.post(name: .kinclawSettingsTab, object: nil, userInfo: ["tab": tab])
+                try? await Task.sleep(nanoseconds: 400_000_000)
+            }
             // What AppKit thinks exists, which is more than the window server
             // will admit to: a window that was made and never ordered in is
             // only visible from in here.
@@ -572,6 +683,68 @@ enum PanelTools {
         case "film_make":    return filmMake(args)
         case "film_status":  return await filmStatus(args)
         case "film_reshoot": return filmReshoot(args)
+        case "motion_make":
+            var args = args
+            if (args["video"] as? String ?? "").isEmpty, let address = (args["url"] as? String)?.trimmingCharacters(in: .whitespaces), !address.isEmpty {
+                do {
+                    let info = try await MotionImport.look(address)
+                    guard info.open || (args["rights"] as? Bool) == true else {
+                        return ("「\(info.title)」（\(info.author)）的许可是\(info.licence.isEmpty ? "网站的标准许可" : info.licence)，不允许下载再创作。是用户自己的视频或已获授权，才能用：先问清楚，再带 rights: true。", true)
+                    }
+                    let file = try await MotionImport.fetch(info, into: MotionStudio.root.appendingPathComponent(".imports"))
+                    args["video"] = file.path
+                    if (args["credit"] as? String ?? "").isEmpty { args["credit"] = info.credit }
+                    if (args["title"] as? String ?? "").isEmpty { args["title"] = String(info.title.prefix(24)) }
+                } catch { return (error.localizedDescription, true) }
+            }
+            guard let path = (args["video"] as? String)?.trimmingCharacters(in: .whitespaces), !path.isEmpty else { return ("motion_make 需要 video（参考视频的路径）或 url", true) }
+            let seconds = (args["seconds"] as? Double) ?? Double((args["seconds"] as? Int) ?? 10)
+            let start = (args["start"] as? Double) ?? Double((args["start"] as? Int) ?? 0)
+            switch MotionStudio.shared.make(video: URL(fileURLWithPath: (path as NSString).expandingTildeInPath),
+                                            title: (args["title"] as? String) ?? "", start: start, seconds: seconds,
+                                            scene: (args["scene"] as? String) ?? "", credit: args["credit"] as? String) {
+            case .success(let take):
+                let minutes = max(1, Int((take.seconds * 27 / 60).rounded()))
+                return ("开拍了：「\(take.title)」\(Int(take.seconds)) 秒，分 \(take.segments.count) 段，大约 \(minutes + 2) 分钟。motion_status 看进度；成片会在 \(take.file.path)", false)
+            case .failure(let failure): return (failure.localizedDescription, true)
+            }
+        case "motion_find":
+            guard let topic = (args["topic"] as? String)?.trimmingCharacters(in: .whitespaces), !topic.isEmpty else { return ("motion_find 需要 topic", true) }
+            let finder = MotionFinder.shared
+            guard finder.doing == nil else { return ("还在找「\(finder.topic)」，等一下", true) }
+            NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: ["mode": "motion"])
+            finder.find(topic)
+            for _ in 0..<90 {                       // searches and thumbnails: usually under a minute
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                if finder.doing == nil { break }
+            }
+            if let trouble = finder.trouble { return (trouble, true) }
+            let lines = finder.found.prefix(10).map { c in
+                "· \(c.fit.map { "适合 \($0)/10" } ?? "没看封面")\(c.onTopic == false ? "（不是这个动作）" : "") · \(c.title.prefix(60)) · \(c.author) · \(Int(c.seconds)) 秒 · \(c.address)" + (c.why.map { "\n    \($0)" } ?? "")
+            }
+            return ("「\(topic)」找到 \(finder.found.count) 个 Creative Commons 视频，已经显示在 Motion 标签里，按适合度排好了：\n" + lines.joined(separator: "\n"), false)
+        case "motion_status":
+            let studio = MotionStudio.shared
+            if studio.takes.isEmpty { return ("还没有拍过动作", false) }
+            let lines = studio.takes.prefix(8).map { take -> String in
+                let state: String
+                switch take.state {
+                case .waiting: state = "等着"
+                case .tracking: state = "在提取动作"
+                case .drawing: state = "在画起始画面"
+                case .filming: state = "在拍，\(take.finished)/\(take.segments.count) 段好了"
+                case .joining: state = "在接起来"
+                case .done: state = "拍好了 → \(take.file.path)"
+                case .failed: state = "没拍成：\(take.note ?? "")"
+                }
+                return "「\(take.title)」\(take.id)：\(Int(take.seconds)) 秒，\(state)"
+            }
+            return ((studio.progress.map { "正在：\($0)\n" } ?? "") + lines.joined(separator: "\n"), false)
+        case "film_review":
+            guard let film = args["film"] as? String else { return ("film_review 需要 film", true) }
+            guard FilmStudio.shared.shooting == nil, FilmStudio.shared.revising == nil else { return ("片场正忙，等这一条拍完", true) }
+            FilmStudio.shared.reassess(film: film)
+            return ("在重新把关（每个镜头十来秒，不重拍）。film_status 看结果", false)
         case "companion_open":
             NotificationCenter.default.post(name: .kinclawOpenCompanion, object: nil)
             return ("陪伴模式打开了", false)
@@ -748,24 +921,23 @@ enum PanelTools {
     // MARK: The film studio
 
     private static func filmMake(_ args: [String: Any]) -> (String, Bool) {
-        let list = (args["shots"] as? [[String: Any]]) ?? []
-        let shots = list.compactMap { item -> (still: String, motion: String)? in
-            guard let still = item["still"] as? String else { return nil }
-            return (still, (item["motion"] as? String) ?? "gentle natural movement")
-        }
+        let shots = ((args["shots"] as? [[String: Any]]) ?? []).compactMap { FilmStudio.Draft($0) }
         // An idea and no shots: the studio writes the storyboard itself, with
         // the brain the app already uses. The same road the Film tab takes.
         if shots.isEmpty, let idea = (args["idea"] as? String)?.trimmingCharacters(in: .whitespaces), !idea.isEmpty {
             guard FilmStudio.shared.shooting == nil else { return ("片场正在拍别的，等它拍完", true) }
-            FilmStudio.shared.make(from: idea, shots: (args["count"] as? Int) ?? 4, lead: (args["lead"] as? Bool) ?? false)
+            FilmStudio.shared.make(from: idea, shots: (args["count"] as? Int) ?? 4, lead: (args["lead"] as? Bool) ?? false,
+                                   tongue: args["narration_language"] as? String, retakes: args["retakes"] as? Int)
             return ("在写分镜了（十几秒），写好就开拍。film_status 看进度", false)
         }
-        let lines = list.filter { $0["still"] is String }.map { ($0["narration"] as? String) ?? "" }
         let seconds = (args["seconds"] as? Double) ?? Double((args["seconds"] as? Int) ?? 4)
         switch FilmStudio.shared.make(title: (args["title"] as? String) ?? "", idea: (args["idea"] as? String) ?? "",
-                                      look: (args["look"] as? String) ?? "", wears: (args["wears"] as? String) ?? "",
+                                      look: (args["look"] as? String) ?? "", place: (args["place"] as? String) ?? "",
+                                      wears: (args["wears"] as? String) ?? "",
                                       lead: (args["lead"] as? Bool) ?? false,
-                                      seconds: seconds, shots: shots, narration: lines) {
+                                      seconds: seconds, shots: shots,
+                                      tongue: (args["narration_language"] as? String) ?? "",
+                                      retakes: args["retakes"] as? Int) {
         case .success(let film):
             let minutes = max(1, Int((Double(film.shots.count) * (20 + film.seconds * 21) / 60).rounded()))
             return ("开拍了：「\(film.title)」\(film.shots.count) 个镜头，大约 \(minutes) 分钟。"
@@ -777,14 +949,27 @@ enum PanelTools {
 
     private static func filmStatus(_ args: [String: Any]) async -> (String, Bool) {
         let studio = FilmStudio.shared
-        let words: [FilmStudio.Shot.State: String] = [.waiting: "等着", .drawing: "在画", .filming: "在拍", .done: "好了", .failed: "没拍成"]
+        let words: [FilmStudio.Shot.State: String] = [.waiting: "等着", .drawing: "在画", .filming: "在拍", .reviewing: "在把关",
+                                                      .done: "好了", .failed: "没拍成"]
         if let wanted = (args["film"] as? String)?.trimmingCharacters(in: .whitespaces), !wanted.isEmpty {
             guard let film = studio.films.first(where: { $0.id == wanted || $0.title == wanted || $0.id.hasPrefix(wanted) }) else {
                 return ("没有这部片子：\(wanted)", true)
             }
             var lines = ["「\(film.title)」\(film.id)：\(describe(film))"]
+            if let place = film.place { lines.append("  地点：\(place)") }
             for shot in film.shots {
-                lines.append("  \(shot.id). [\(words[shot.state] ?? "?")] \(shot.still.prefix(70))" + (shot.note.map { " —— \($0)" } ?? ""))
+                let camera = shot.framing.map { "〔\($0)〕" } ?? ""
+                lines.append("  \(shot.id). [\(words[shot.state] ?? "?")] \(camera)\(shot.pose.prefix(90))" + (shot.note.map { " —— \($0)" } ?? ""))
+                lines.append("     动作：\(shot.action.prefix(120))")
+                if let wish = shot.wish { lines.append("     方向：\(wish)") }
+                if let score = shot.score {
+                    let again = (shot.retakes ?? 0) > 0 ? "，自动重拍了 \(shot.retakes!) 次" : ""
+                    lines.append("     把关：\(score)/10\(again)" + ((shot.review ?? "").isEmpty ? "" : "，\(shot.review!)"))
+                }
+                if FilmStudio.layaOn, let read = shot.laya, !read.isEmpty {
+                    let numbers = read.sorted { $0.key < $1.key }.map { "\($0.key) \(String(format: "%.2f", $0.value))" }
+                    lines.append("     Laya（只显示，不参与决定）：" + numbers.joined(separator: " · "))
+                }
                 if let said = shot.narration { lines.append("     旁白：\(said)") }
             }
             if film.state == .done { lines.append("成片：\(film.file.path)") }
@@ -827,7 +1012,8 @@ enum PanelTools {
             }
         }
         // A new line and nothing else: spoken and cut again, nothing filmed.
-        if let line = args["narration"] as? String, args["still"] == nil, args["motion"] == nil, args["hq"] == nil {
+        if let line = args["narration"] as? String, args["still"] == nil, args["motion"] == nil, args["hq"] == nil,
+           args["framing"] == nil, args["following"] == nil {
             switch FilmStudio.shared.narrate(film: film, shot: shot, line: line) {
             case .success(let made):
                 return ("「\(made.title)」第 \(shot) 个镜头的旁白\(line.isEmpty ? "去掉了" : "改了")，在重新剪（十来秒）", false)
@@ -835,10 +1021,19 @@ enum PanelTools {
             }
         }
         let fine = (args["hq"] as? Bool) ?? false
-        switch FilmStudio.shared.reshoot(film: film, shot: shot, still: args["still"] as? String,
-                                         motion: args["motion"] as? String, hq: fine) {
+        let onward = (args["following"] as? Bool) ?? false
+        // A direction in a sentence: the studio rewrites the words itself.
+        if let note = (args["direction"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty {
+            guard FilmStudio.shared.shooting == nil, FilmStudio.shared.revising == nil else { return ("片场正忙，等这一条拍完", true) }
+            FilmStudio.shared.redirect(film: film, shot: shot, note: note, following: onward)
+            return ("在照「\(note)」改第 \(shot) 个镜头的提示词（十几秒），改好就重拍\(onward ? "，后面的镜头也跟着重拍" : "")。film_status 看进度", false)
+        }
+        switch FilmStudio.shared.reshoot(film: film, shot: shot, framing: args["framing"] as? String,
+                                         still: args["still"] as? String, motion: args["motion"] as? String,
+                                         narration: args["narration"] as? String, hq: fine, following: onward) {
         case .success(let made):
-            return ("「\(made.title)」第 \(shot) 个镜头\(fine ? "在精修（q8，约 9 分钟）" : "重拍了")，拍完会重新剪一遍", false)
+            let redone = onward ? "第 \(shot) 个镜头和它后面的都在重拍" : "第 \(shot) 个镜头\(fine ? "在精修（q8，约 9 分钟）" : "在重拍")"
+            return ("「\(made.title)」\(redone)，拍完会重新剪一遍", false)
         case .failure(let failure): return (failure.localizedDescription, true)
         }
     }
