@@ -97,6 +97,10 @@ final class FilmStudio: ObservableObject {
         /// activity, that she leaves, and how much of her body moves (0–2).
         /// Shown beside the verdict; it decides nothing.
         var laya: [String: Double]? = nil
+        /// The same four numbers from TypeSafe's Jev, asked the same questions
+        /// about the same description. Kept apart from Laya's so the two can
+        /// be read side by side.
+        var jev: [String: Double]? = nil
 
         enum State: String, Codable { case waiting, drawing, filming, reviewing, done, failed }
 
@@ -176,6 +180,26 @@ final class FilmStudio: ObservableObject {
         if let unfinished = films.first(where: { $0.state == .shooting || $0.state == .cutting }) {
             produce(unfinished.id)
         }
+    }
+
+    /// Take a whole film off the shelf. Its folder — the storyboard, the stills,
+    /// every clip, the takes that were set aside, the cut — goes to the Trash,
+    /// where Put Back still works: a film is a quarter of an hour of the box's
+    /// time and sometimes the only good take of something, and "deleted" ought
+    /// to be a thing a person can change their mind about. The film being shot
+    /// or looked at again is left alone; its makers would write it back.
+    @discardableResult
+    func remove(film id: String) -> Result<Film, Failure> {
+        guard let film = films.first(where: { $0.id == id }) else { return .failure(.message("没有这部片子：\(id)")) }
+        guard shooting != film.id else { return .failure(.message("「\(film.title)」正在拍，等它停了再删")) }
+        guard revising == nil else { return .failure(.message("片场正忙（\(revising ?? "")），等这一条完了再删")) }
+        do {
+            try FileManager.default.trashItem(at: film.folder, resultingItemURL: nil)
+        } catch {
+            return .failure(.message("没能把「\(film.title)」移到废纸篓：\(error.localizedDescription)"))
+        }
+        films.removeAll { $0.id == film.id }
+        return .success(film)
     }
 
     func reload() {
@@ -438,24 +462,54 @@ final class FilmStudio: ObservableObject {
     /// the verdict, what was seen, Laya's numbers — and nothing is filmed.
     /// For films made before the reviewer looked at the action, and for
     /// seeing what a changed reviewer makes of takes it has already judged.
-    func reassess(film id: String, then done: ((Result<Film, Failure>) -> Void)? = nil) {
+    ///
+    /// `opinionsOnly` leaves the reviewer out of it: Laya and Jev are asked
+    /// again about the description the reviewer already wrote. Nothing looks
+    /// at a frame, so it takes a second a shot and none of the vision model's
+    /// quota — the way to see what a judge that was just switched on makes of
+    /// a film that is already there.
+    func reassess(film id: String, opinionsOnly: Bool = false, then done: ((Result<Film, Failure>) -> Void)? = nil) {
         guard shooting == nil, revising == nil else { done?(.failure(.message("片场正忙，等这一条拍完"))); return }
         guard var film = films.first(where: { $0.id == id || $0.title == id || $0.id.hasPrefix(id) }) else {
             done?(.failure(.message("没有这部片子：\(id)"))); return
+        }
+        if opinionsOnly {
+            guard Self.layaOn || Self.jevOn else { done?(.failure(.message("Laya 和 Jev 都关着：在 设置 → Backend → 片场 里打开一个"))); return }
+            guard film.shots.contains(where: { $0.saw != nil }) else {
+                done?(.failure(.message("这部片子还没有「看到的动作」那段文字，先「重新把关」一次"))); return
+            }
+            revising = "在问第二意见「\(film.title)」"
+            Task { @MainActor in
+                defer { revising = nil }
+                for index in film.shots.indices {
+                    guard let saw = film.shots[index].saw else { continue }
+                    // The description has not changed, so numbers already here
+                    // still stand: a judge that is off, or did not answer this
+                    // time, leaves its old line alone.
+                    let asked = await Self.opinions(on: saw, plan: film.shots[index].action, idea: film.idea)
+                    if let laya = asked.laya { film.shots[index].laya = laya }
+                    if let jev = asked.jev { film.shots[index].jev = jev }
+                    save(film)
+                }
+                done?(.success(film))
+            }
+            return
         }
         revising = "在重新把关「\(film.title)」"
         Task { @MainActor in
             defer { revising = nil }
             for index in film.shots.indices where FileManager.default.fileExists(atPath: film.clip(film.shots[index].id).path) {
                 revising = "在重新把关「\(film.title)」镜头 \(film.shots[index].id)"
-                guard let verdict = await Self.review(film.shots[index], in: film) else { continue }
-                film.shots[index].score = verdict.score
-                film.shots[index].review = verdict.passed ? "" : verdict.problem
+                guard var verdict = await Self.review(film.shots[index], in: film) else { continue }
                 film.shots[index].saw = verdict.saw
                 film.shots[index].laya = nil
+                film.shots[index].jev = nil
                 if let saw = verdict.saw {
-                    film.shots[index].laya = await Self.second(on: saw, plan: film.shots[index].action, idea: film.idea)
+                    (film.shots[index].laya, film.shots[index].jev) = await Self.opinions(on: saw, plan: film.shots[index].action, idea: film.idea)
                 }
+                verdict = Self.weigh(verdict, jev: film.shots[index].jev)
+                film.shots[index].score = verdict.score
+                film.shots[index].review = verdict.passed ? "" : verdict.problem
                 save(film)
             }
             done?(.success(film))
@@ -570,14 +624,16 @@ final class FilmStudio: ObservableObject {
                         // pass of a take that was already accepted.
                         guard limit > 0, !fine, shot.posed != true, shot.moved != true else { break }
                         update(&film, index, .reviewing)
-                        guard let verdict = await Self.review(film.shots[index], in: film) else { break }
-                        film.shots[index].score = verdict.score
-                        film.shots[index].review = verdict.passed ? "" : verdict.problem
+                        guard var verdict = await Self.review(film.shots[index], in: film) else { break }
                         film.shots[index].saw = verdict.saw
                         film.shots[index].laya = nil
+                        film.shots[index].jev = nil
                         if let saw = verdict.saw {
-                            film.shots[index].laya = await Self.second(on: saw, plan: film.shots[index].action, idea: film.idea)
+                            (film.shots[index].laya, film.shots[index].jev) = await Self.opinions(on: saw, plan: film.shots[index].action, idea: film.idea)
                         }
+                        verdict = Self.weigh(verdict, jev: film.shots[index].jev)
+                        film.shots[index].score = verdict.score
+                        film.shots[index].review = verdict.passed ? "" : verdict.problem
                         save(film)
                         if verdict.passed || attempt >= limit { break }
 
@@ -880,9 +936,21 @@ final class FilmStudio: ObservableObject {
 
     /// Where the Laya service listens (`scripts/laya_judge.py`); not running
     /// is not an error, the card simply has one line fewer.
+    ///
+    /// With a box configured it is the box's, unless an address was typed in:
+    /// the model is four to ten times quicker on the box's GPU than on this
+    /// Mac's CPU, the LAN adds twenty milliseconds, and the Mac keeps its
+    /// memory. No box, no change: the loopback.
     static var layaURL: String {
-        let set = UserDefaults.standard.string(forKey: layaURLKey) ?? ""
-        return set.isEmpty ? layaDefault : set.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let set = (UserDefaults.standard.string(forKey: layaURLKey) ?? "").trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
+        if !set.isEmpty { return set }
+        return BoxServices.ssh.isEmpty ? layaDefault : BoxServices.base(.laya)
+    }
+
+    /// Bring the box's Laya up if that is the one in use and it is not there.
+    static func layaReady() async {
+        guard layaURL == BoxServices.base(.laya) else { return }
+        _ = await BoxServices.shared.ensure(.laya)
     }
 
     /// Is anybody there? For the dot in Settings.
@@ -894,22 +962,128 @@ final class FilmStudio: ObservableObject {
         return (response as? HTTPURLResponse)?.statusCode == 200
     }
 
+    /// Jev's second opinion: the same questions put to TypeSafe's hosted model.
+    /// Off by default for the same reasons, and one more — the description of
+    /// the take and the film's idea leave this Mac. The key is the one typed
+    /// into the Jev tab; it stays in the Keychain.
+    static let jevOnKey = "kinclaw.film.jev.on"
+    static var jevOn: Bool { UserDefaults.standard.bool(forKey: jevOnKey) }
+
+    /// Whether Jev's reading counts. A second switch, off by default, and
+    /// worth nothing unless the first is on.
+    static let jevCountsKey = "kinclaw.film.jev.counts"
+    static var jevCounts: Bool { jevOn && UserDefaults.standard.bool(forKey: jevCountsKey) }
+    /// Below this, "what was seen carries out the plan" is a no.
+    static let jevFollows = 0.3
+
+    /// What Jev's reading does to the reviewer's verdict when it counts: one
+    /// thing, and only downward. A take the reviewer let through is failed
+    /// when Jev reads the reviewer's own description as a different movement
+    /// from the planned one — the model that looks is good at saying what it
+    /// saw and moody about what that amounts to, and comparing two pieces of
+    /// text is the thing Jev is for. On the eight takes it was first tried on,
+    /// the three that were a different movement got 0.02, 0.00 and 0.28 and
+    /// the other five 0.56 to 1.00; Laya gave all eight 0.78 to 0.95.
+    ///
+    /// Nothing else counts. Jev never rescues a take the reviewer failed — it
+    /// cannot see an extra arm or a changed coat — and the retake is made from
+    /// the same words, the reviewer having had no complaint to rewrite them by.
+    static func weigh(_ verdict: Verdict, jev: [String: Double]?, counts: Bool? = nil) -> Verdict {
+        guard counts ?? jevCounts, let follows = jev?["follows"], follows < jevFollows, verdict.score > 4 else { return verdict }
+        var weighed = verdict
+        weighed.score = 4
+        weighed.ok = false
+        let said = "Jev：看到的动作和计划的不是一回事（按计划 \(String(format: "%.2f", follows))）"
+        weighed.problem = verdict.problem.isEmpty ? said : verdict.problem + "；" + said
+        return weighed
+    }
+
+    /// Why Jev's line is missing, when it is: no key, a refused key, no network.
+    /// Laya not running is ordinary and says nothing; a judge somebody paid for
+    /// and switched on, silently absent, would be "我怎么没有看见" again.
+    @Published private(set) var jevTrouble: String?
+    /// Input tokens Jev has been sent for film reviews since the app started.
+    @Published private(set) var jevTokens = 0
+
+    /// Whoever is switched on, asked at the same time.
+    static func opinions(on saw: String, plan: String, idea: String) async -> (laya: [String: Double]?, jev: [String: Double]?) {
+        async let laya = second(on: saw, plan: plan, idea: idea)
+        async let jev = verdictOfJev(on: saw, plan: plan, idea: idea)
+        return await (laya, jev)
+    }
+
+    /// Jev's reading of what was seen against what was planned.
+    ///
+    /// Jev is asked Choice questions — the one kind this app has seen it answer
+    /// — so a yes-or-no is put as two options and the number is the probability
+    /// of the yes; how much of her moves is three options, and the number is
+    /// where the probabilities balance between nought and two. That makes the
+    /// four numbers mean what Laya's four mean.
+    static func verdictOfJev(on saw: String, plan: String, idea: String) async -> [String: Double]? {
+        guard jevOn else { return nil }
+        let questions = [
+            JevClient.Question(id: "follows", question: "Does what was seen carry out the planned movement?",
+                               howToJudge: "Compare which limbs move, and which way, in what_was_seen with planned_movement. Different wording for the same movement is a yes; a different movement, a part of it only, or none, is a no.",
+                               options: [("yes", "What was seen is the planned movement"),
+                                         ("no", "What was seen is a different movement, or hardly any")]),
+            JevClient.Question(id: "activity", question: "Is what was seen the activity the film is about, done properly?",
+                               howToJudge: "Judge the body described in what_was_seen against what doing film_is_about properly asks of a body. Ordinary standing, walking, waving or posing is a no, however graceful.",
+                               options: [("yes", "She is doing that activity, and doing it properly"),
+                                         ("no", "She is only standing, walking, waving or posing")]),
+            JevClient.Question(id: "leaves", question: "Does she walk away, turn her back, or stop the activity?",
+                               options: [("yes", "She walks away, turns her back, or stops"),
+                                         ("no", "She stays where she is, facing the same way, and keeps going")]),
+            JevClient.Question(id: "amount", question: "How much of her body takes part in the movement?",
+                               options: [("still", "She barely moves"),
+                                         ("arms", "Only her arms or hands move"),
+                                         ("whole", "Her whole body moves: arms, torso and legs")]),
+        ]
+        do {
+            let reply = try await JevClient.ask(state: [("film_is_about", idea), ("planned_movement", plan), ("what_was_seen", saw)], questions)
+            var read: [String: Double] = [:]
+            for name in ["follows", "activity", "leaves"] {
+                if let yes = reply.answers[name]?.chances["yes"] { read[name] = yes }
+            }
+            if let chances = reply.answers["amount"]?.chances, !chances.isEmpty {
+                read["amount"] = (chances["arms"] ?? 0) + 2 * (chances["whole"] ?? 0)
+            }
+            await MainActor.run {
+                shared.jevTokens += reply.tokens
+                shared.jevTrouble = read.isEmpty ? "Jev 答了，但读不出数：\(reply.answers.keys.sorted().joined(separator: ", "))" : nil
+            }
+            return read.isEmpty ? nil : read
+        } catch {
+            let said = error.localizedDescription
+            await MainActor.run { shared.jevTrouble = said }
+            return nil
+        }
+    }
+
     /// Laya's reading of what was seen against what was planned.
     static func second(on saw: String, plan: String, idea: String) async -> [String: Double]? {
         guard layaOn, let url = URL(string: layaURL + "/decide") else { return nil }
-        let questions: [String: Any] = [
-            "follows": ["type": "noul", "instructions": "Does what was seen carry out the planned movement?"],
-            "activity": ["type": "noul", "instructions": "Is what was seen an instance of the activity the film is about, done properly, rather than ordinary standing, walking or waving?"],
-            "leaves": ["type": "noul", "instructions": "Does she walk away, turn her back, or stop the activity?"],
-            "amount": ["type": "score", "instructions": "How much of her body takes part in the movement?",
-                       "criteria": ["she barely moves", "only her arms or hands move", "her whole body moves: arms, torso and legs"]],
-        ]
-        let body: [String: Any] = ["state": ["film_is_about": idea, "planned_movement": plan, "what_was_seen": saw],
-                                   "questions": questions]
+        await layaReady()
+        // Written out in order, by hand. A model reads a request from the top,
+        // and a dictionary reaches it shuffled — differently at every launch:
+        // one description of one take was given 0.09 for "the activity, done
+        // properly" by one launch of the app and 0.83 by the next.
+        let quoted = JevClient.quoted, object = JevClient.object
+        func noul(_ ask: String) -> String { object([("type", quoted("noul")), ("instructions", quoted(ask))]) }
+        let amounts = ["she barely moves", "only her arms or hands move", "her whole body moves: arms, torso and legs"]
+        let body = object([
+            ("state", object([("film_is_about", quoted(idea)), ("planned_movement", quoted(plan)), ("what_was_seen", quoted(saw))])),
+            ("questions", object([
+                ("follows", noul("Does what was seen carry out the planned movement?")),
+                ("activity", noul("Is what was seen an instance of the activity the film is about, done properly, rather than ordinary standing, walking or waving?")),
+                ("leaves", noul("Does she walk away, turn her back, or stop the activity?")),
+                ("amount", object([("type", quoted("score")), ("instructions", quoted("How much of her body takes part in the movement?")),
+                                   ("criteria", "[" + amounts.map(quoted).joined(separator: ", ") + "]")])),
+            ])),
+        ])
         var request = URLRequest(url: url, timeoutInterval: 40)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        request.httpBody = Data(body.utf8)
         guard let (data, response) = try? await URLSession.shared.data(for: request),
               (response as? HTTPURLResponse)?.statusCode == 200,
               let reply = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
@@ -1594,9 +1768,14 @@ final class FilmStudio: ObservableObject {
         return found
     }
 
+    /// Every Ollama a model can be picked from: the one the app is pointed
+    /// at, this Mac's, and the box's. The box's is only ever *offered* — what
+    /// is picked automatically (`writer`) still comes from the first two, so
+    /// adding a machine to the menus changes nobody's default.
     private static var hosts: [String] {
         var list = [OllamaCatalog.baseURL]
         if !list.contains(OllamaCatalog.defaultBaseURL) { list.append(OllamaCatalog.defaultBaseURL) }
+        if let box = BoxServices.ollama, !list.contains(box) { list.append(box) }
         return list
     }
 

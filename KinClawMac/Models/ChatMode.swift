@@ -40,6 +40,7 @@ enum ChatMode: String, CaseIterable, Identifiable {
     case web
     case film
     case motion
+    case jev
 
     var id: String { rawValue }
 
@@ -53,6 +54,7 @@ enum ChatMode: String, CaseIterable, Identifiable {
         case .web:    return "Web"
         case .film:   return "Film"
         case .motion: return "Motion"
+        case .jev:    return "Jev"
         }
     }
 
@@ -68,6 +70,7 @@ enum ChatMode: String, CaseIterable, Identifiable {
         case .web:    return "globe"
         case .film:   return "film"
         case .motion: return "figure.taichi"
+        case .jev:    return "gamecontroller"
         }
     }
 
@@ -88,6 +91,8 @@ enum ChatMode: String, CaseIterable, Identifiable {
             return "Film — 一句话拍个短片：分镜、出图、出片、剪辑，都在自己的机器上"
         case .motion:
             return "Motion — 找一段真人动作的视频，只取骨架，让她照着做：太极、舞蹈、任何说不清的动作"
+        case .jev:
+            return "Jev — 让决策模型玩游戏：每一步是一道选择题，俄罗斯方块、2048、贪吃蛇"
         }
     }
 }

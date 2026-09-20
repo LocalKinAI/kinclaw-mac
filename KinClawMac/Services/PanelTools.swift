@@ -358,11 +358,11 @@ enum PanelTools {
         ],
         [
             "name": "panel_show",
-            "description": "Show the KinClaw panel, optionally on one of its tabs: chat, cowork, code, term, web, film, motion. Use it when the user asks to see the panel or to go to a tab (\"打开片场\" → film). With mode film, `film` selects a film and `shot` opens that shot's words for rewriting (\"我想改第三个镜头\").",
+            "description": "Show the KinClaw panel, optionally on one of its tabs: chat, cowork, code, term, web, film, motion, jev. Use it when the user asks to see the panel or to go to a tab (\"打开片场\" → film). With mode film, `film` selects a film and `shot` opens that shot's words for rewriting (\"我想改第三个镜头\").",
             "inputSchema": [
                 "type": "object",
                 "properties": [
-                    "mode": ["type": "string", "description": "chat | cowork | code | term | web | film | motion. Omit to leave the tab as it is."],
+                    "mode": ["type": "string", "description": "chat | cowork | code | term | web | film | motion | jev. Omit to leave the tab as it is."],
                     "film": ["type": "string", "description": "With mode film: the film to show, by id or title."],
                     "shot": ["type": "integer", "description": "With film: open this shot's prompt editor."],
                 ] as [String: Any],
@@ -383,6 +383,8 @@ enum PanelTools {
                 start one, or stop one. `draw` (text-to-image), `edit` \
                 (changes her scene, clothes, plates), `film` (video), `filmHQ` \
                 (the slow high-quality video model, ~45 GB while it works), \
+                `laya` (the small decision model that scores film shots and \
+                plays in the Jev tab — 2 GB, 23 ms a question on the box), \
                 `brain` (kinfer, the box's language-model server — about 35 GB \
                 resident and it does not unload by itself, so it and filmHQ \
                 should not run together). The others cost a few GB idle and \
@@ -394,7 +396,7 @@ enum PanelTools {
                 "type": "object",
                 "properties": [
                     "action": ["type": "string", "description": "status | start | stop. Default status."],
-                    "service": ["type": "string", "description": "draw | edit | film | filmHQ | brain. Needed for start and stop."],
+                    "service": ["type": "string", "description": "draw | edit | film | filmHQ | brain | laya. Needed for start and stop."],
                 ],
             ],
         ],
@@ -518,6 +520,25 @@ enum PanelTools {
             ],
         ],
         [
+            "name": "jev_play",
+            "description": "Have a decision model play a game in the Jev tab: each move is one multiple-choice question whose options are the legal moves described in words. Games: tetris, 2048, snake, and two for two players — chess (`white` against `black`) and xiangqi, Chinese chess (`red` against `black`). Players: jev (TypeSafe's API — needs the user's key, which only they can enter in the tab), laya (the open local model of the same kind), llm (a local chat model), heuristic (the game's own evaluator, the yardstick), random. The same seed deals the same game to every player, so they can be compared. Plays up to `moves` moves and reports the score, how often the player agreed with the heuristic, and the time per move.",
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "game": ["type": "string", "description": "tetris | 2048 | snake | chess | xiangqi. Default: the one showing."],
+                    "player": ["type": "string", "description": "jev | laya | llm | heuristic | random — for the games played alone. Default: the one selected."],
+                    "model": ["type": "string", "description": "When player is llm: which chat model, as for white_model."],
+                    "white": ["type": "string", "description": "For chess: who plays White, same choices. Any two can meet: jev against laya, a chat model against the yardstick."],
+                    "red": ["type": "string", "description": "For xiangqi: who plays Red, who moves first. Same as `white`."],
+                    "black": ["type": "string", "description": "For chess and xiangqi: who plays Black."],
+                    "white_model": ["type": "string", "description": "When white is llm: which chat model — an Ollama model name, or \"http://host:11434|name\" to say which machine's (the box's Ollama has local models that cost no cloud quota). Omit for the app's own pick."],
+                    "black_model": ["type": "string", "description": "When black is llm: which chat model."],
+                    "moves": ["type": "integer", "description": "How many moves at most. Default 50."],
+                    "seed": ["type": "integer", "description": "Which game is dealt. Default: the tab's."],
+                ] as [String: Any],
+            ],
+        ],
+        [
             "name": "motion_find",
             "description": "Find reference videos for a movement by topic (\"八段锦\", \"tai chi\", \"ballet barre\"): searches YouTube for Creative Commons videos only, then has the model that can see look at the thumbnails and score each for motion capture — one person, whole body, steady camera. Shows the list in the Motion tab and returns it, best first. Give the user the list and let THEM choose; then motion_make with the chosen `url`.",
             "inputSchema": [
@@ -532,11 +553,19 @@ enum PanelTools {
             "inputSchema": ["type": "object", "properties": [:] as [String: Any]],
         ],
         [
+            "name": "jev_status",
+            "description": "What the Jev tab is doing right now, without touching it: which game, who is playing, whether a game is running, how it stands, moves so far, agreement with the heuristic, time per move, Jev's tokens. Look here before jev_play, which deals a new game over whatever is on the board.",
+            "inputSchema": ["type": "object", "properties": [String: Any]()],
+        ],
+        [
             "name": "film_review",
-            "description": "Review a finished film's shots again without filming anything: for each shot, whether she does the planned action and with how much of her body, whether anything went wrong, what was seen, and Laya's second-opinion numbers. About ten seconds a shot; read the result with film_status.",
+            "description": "Review a finished film's shots again without filming anything: for each shot, whether she does the planned action and with how much of her body, whether anything went wrong, what was seen, and the second opinions of Laya and Jev (text decision models that judge the written description against the plan; each is switched on in Settings → Backend, Jev needs the user's TypeSafe key). About ten seconds a shot; read the result with film_status. `opinions_only` skips the looking and asks only Laya/Jev again about the description already written — a second a shot.",
             "inputSchema": [
                 "type": "object",
-                "properties": ["film": ["type": "string", "description": "The film's id or title."]],
+                "properties": [
+                    "film": ["type": "string", "description": "The film's id or title."],
+                    "opinions_only": ["type": "boolean", "description": "Only ask Laya/Jev again, on the description the reviewer already wrote. Default false."],
+                ],
                 "required": ["film"],
             ],
         ],
@@ -635,6 +664,25 @@ enum PanelTools {
     /// Run a tool. The pair is (text, isError) — an error is still an answer,
     /// and one the model can act on, so it goes back as text rather than as a
     /// JSON-RPC failure.
+    /// Where the Jev tab's game stands, in lines: for the end of a game played
+    /// by a tool, and for looking without touching.
+    private static func jevReport(_ arcade: JevArcade) -> [String] {
+        let who = arcade.game.sides.isEmpty ? arcade.player.title
+            : arcade.game.sides.enumerated().map { "\($0.element) \(arcade.rivals[$0.offset].title)" }.joined(separator: " 对 ")
+        var lines = ["\(arcade.game.title) · \(who) · 种子 \(arcade.seed)：\(arcade.game.status)" + (arcade.game.over ? "（这一局结束了）" : "")]
+        for (seat, side) in arcade.game.sides.enumerated() where arcade.seats[seat].moves > 0 {
+            let tally = arcade.seats[seat]
+            lines.append("\(side)：\(tally.moves) 步，平均 \(tally.spent / tally.moves) ms，和启发式一致 \(100 * tally.agreed / tally.moves)%")
+        }
+        if arcade.moves > 0, arcade.game.sides.isEmpty {
+            lines.append("\(arcade.moves) 步，平均 \(arcade.spent / arcade.moves) ms 一步，和启发式一致 \(Int(100 * arcade.agreed / arcade.moves))%")
+        }
+        if arcade.tokens > 0 { lines.append("Jev 读了 \(arcade.tokens) tokens ≈ $\(String(format: "%.4f", arcade.cost))") }
+        if let last = arcade.last, let picked = last.options.first(where: { $0.id == last.chosen }) { lines.append("最后一步选了：\(picked.label)") }
+        if let trouble = arcade.trouble { lines.append("停下来的原因：\(trouble)") }
+        return lines
+    }
+
     static func call(_ name: String, _ args: [String: Any]) async -> (String, Bool) {
         switch name {
         case "browser_open":  return await browserOpen(args)
@@ -708,6 +756,39 @@ enum PanelTools {
                 return ("开拍了：「\(take.title)」\(Int(take.seconds)) 秒，分 \(take.segments.count) 段，大约 \(minutes + 2) 分钟。motion_status 看进度；成片会在 \(take.file.path)", false)
             case .failure(let failure): return (failure.localizedDescription, true)
             }
+        case "jev_play":
+            let arcade = JevArcade.shared
+            guard !arcade.running else { return ("Jev 标签里正在玩，先等它停", true) }
+            NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: ["mode": "jev"])
+            if let game = args["game"] as? String { arcade.choose(game) }
+            if let name = args["player"] as? String, let player = JevArcade.Player(rawValue: name) { arcade.player = player }
+            if let name = (args["white"] ?? args["red"]) as? String, let player = JevArcade.Player(rawValue: name) { arcade.rivals[0] = player }
+            if let name = args["black"] as? String, let player = JevArcade.Player(rawValue: name) { arcade.rivals[1] = player }
+            if let model = args["model"] as? String { arcade.models[0] = model }
+            if let model = (args["white_model"] ?? args["red_model"]) as? String { arcade.models[0] = model }
+            if let model = args["black_model"] as? String { arcade.models[1] = model }
+            if let seed = args["seed"] as? Int, seed > 0 { arcade.seed = UInt64(seed) }
+            arcade.restart()
+            let limit = min(max((args["moves"] as? Int) ?? 50, 1), 2000)
+            // A game asked for in conversation is played to be reported, not
+            // watched: no pause between moves, and the tab's own pace put back after.
+            let pace = arcade.pause
+            arcade.pause = 0
+            arcade.start(limit: limit)
+            // A tool call has about a minute before whoever made it gives up;
+            // a model that takes a second a move gets fifty of them, and says so.
+            let began = Date()
+            while arcade.running, Date().timeIntervalSince(began) < 55 { try? await Task.sleep(nanoseconds: 200_000_000) }
+            let cutShort = arcade.running
+            arcade.stop()
+            arcade.pause = pace
+            var lines = jevReport(arcade)
+            if cutShort { lines.append("到 55 秒先停在这儿了；在 Jev 标签里点「开始」可以接着玩。") }
+            return (lines.joined(separator: "\n"), arcade.trouble != nil && arcade.moves == 0)
+        case "jev_status":
+            let arcade = JevArcade.shared
+            let state = arcade.running ? "正在玩" : arcade.game.over ? "这一局结束了" : arcade.moves > 0 ? "停着，没下完" : "还没开始"
+            return (([state] + jevReport(arcade)).joined(separator: "\n"), false)
         case "motion_find":
             guard let topic = (args["topic"] as? String)?.trimmingCharacters(in: .whitespaces), !topic.isEmpty else { return ("motion_find 需要 topic", true) }
             let finder = MotionFinder.shared
@@ -743,6 +824,16 @@ enum PanelTools {
         case "film_review":
             guard let film = args["film"] as? String else { return ("film_review 需要 film", true) }
             guard FilmStudio.shared.shooting == nil, FilmStudio.shared.revising == nil else { return ("片场正忙，等这一条拍完", true) }
+            if args["opinions_only"] as? Bool == true {
+                // Quick enough to wait for, and the caller wants the numbers.
+                let result: Result<FilmStudio.Film, FilmStudio.Failure> = await withCheckedContinuation { done in
+                    FilmStudio.shared.reassess(film: film, opinionsOnly: true) { done.resume(returning: $0) }
+                }
+                switch result {
+                case .failure(let failure): return (failure.localizedDescription, true)
+                case .success(let made): return await call("film_status", ["film": made.id])
+                }
+            }
             FilmStudio.shared.reassess(film: film)
             return ("在重新把关（每个镜头十来秒，不重拍）。film_status 看结果", false)
         case "companion_open":
@@ -966,13 +1057,17 @@ enum PanelTools {
                     let again = (shot.retakes ?? 0) > 0 ? "，自动重拍了 \(shot.retakes!) 次" : ""
                     lines.append("     把关：\(score)/10\(again)" + ((shot.review ?? "").isEmpty ? "" : "，\(shot.review!)"))
                 }
-                if FilmStudio.layaOn, let read = shot.laya, !read.isEmpty {
-                    let numbers = read.sorted { $0.key < $1.key }.map { "\($0.key) \(String(format: "%.2f", $0.value))" }
-                    lines.append("     Laya（只显示，不参与决定）：" + numbers.joined(separator: " · "))
+                for (who, on, numbers) in [("Laya", FilmStudio.layaOn, shot.laya), ("Jev", FilmStudio.jevOn, shot.jev)] {
+                    guard on, let read = numbers, !read.isEmpty else { continue }
+                    let said = read.sorted { $0.key < $1.key }.map { "\($0.key) \(String(format: "%.2f", $0.value))" }
+                    let weight = who == "Jev" && FilmStudio.jevCounts ? "follows < 0.30 算不过" : "只显示，不参与决定"
+                    lines.append("     \(who)（\(weight)）：" + said.joined(separator: " · "))
                 }
                 if let said = shot.narration { lines.append("     旁白：\(said)") }
             }
             if film.state == .done { lines.append("成片：\(film.file.path)") }
+            if FilmStudio.jevOn, let trouble = studio.jevTrouble { lines.append("Jev 没答上来：\(trouble)") }
+            if studio.jevTokens > 0 { lines.append("Jev 这次开机以来读了 \(studio.jevTokens) 个 token（$0.042 / 百万）") }
             return (lines.joined(separator: "\n"), false)
         }
         var header: [String] = []

@@ -208,6 +208,199 @@ in one place, so between them only her state changes.
   companion who cannot answer "where are you" from her own tools will
   make something up.
 
+### Added — Jev: a decision model plays games, one multiple-choice question a move
+
+An eighth tab, grown from the `jev-tetris` example: TypeSafe's Jev answers
+typed questions — here, one Choice per move — in about 150 ms, with a
+probability for every option and never an illegal one. What the example
+learned is the design: *the measuring happens in the program and only the
+judgment is left to the model.* Jev reads text and is weak at arithmetic, so
+a game does not hand over a board; it lists the legal moves, works out what
+each one does, and says it in words — small counts as numbers, larger
+quantities as named buckets ("stack 12 rows high (high); surface bumpy").
+
+- **Three games, one shape** (`JevGame`: what it is, how to judge a move, the
+  position in words, the options in words, a grid to draw): **Tetris**, the
+  example's, ported — every straight drop of every rotation, described by
+  lines, holes, height and surface; **2048** — four moves at most and a long
+  way to look, described by what merges, how much room is left, whether the
+  big tile keeps its corner, how orderly the board is; **Snake** — a choice
+  about space: closer to the food or not, and how many free cells lie ahead
+  against how long the snake is ("a trap"). Adding a game is writing those
+  five things.
+- **Players are interchangeable, because the point is the comparison**: Jev
+  (the user's own key, typed into the tab, kept in the Keychain, sent only as
+  the Authorization header); **Laya**, the open local model of the same kind,
+  through `scripts/laya_judge.py`; a local chat model asked the same question
+  and told to answer with the option's key; the game's own evaluator, as the
+  yardstick; and random, as the floor. The same seed deals the same game to
+  all of them. Beside the board: what was chosen, the probability the player
+  gave each option, its confidence, the milliseconds, and whether it agreed
+  with the yardstick; underneath, the running totals, and for Jev the tokens
+  and what they cost.
+- Measured on seed 100/101, Tetris: the evaluator 2000 pieces and 796 lines
+  and still going; a local chat model 83% agreement at three to four seconds
+  a move; Laya, zero-shot, 8% agreement and dead at 23 pieces — which is what
+  its own card says to expect, and why it is a player here rather than a
+  judge anywhere else. Jev itself is untested from the app: it needs a key
+  only its owner can enter. The wire format is the example's, which works.
+- Two things the first build got wrong, both about lists. Options were capped
+  at sixteen "to bound tokens", which cut the best placement off the end and
+  had the yardstick lose a game it should play for ever (451 pieces). And
+  moves that *read* the same are one option — a model cannot tell them apart
+  — played by a plain tie-break rather than the evaluator's favourite, or
+  every model would be quietly playing with its help; but the yardstick must
+  judge the moves themselves, so an option carries both.
+- **Chess, and games for two** ("可以让jev和laya一起玩chess吗… 对阵那种，在包括大模型"). A
+  game can have sides, and any player can sit on either: Jev against Laya, a
+  chat model against the yardstick, one chat model against another (a seat
+  whose player is 本地大模型 gets its own model menu). The rules are a real
+  engine (`JevChessEngine`, no SwiftUI in it so it can be compiled alone):
+  castling, en passant, promotion, check, mate, stalemate, threefold
+  repetition, fifty moves, dead positions — and its move generator agrees
+  with the published perft counts on five standard positions, which is the
+  only way to know. The division of labour is the same with more to measure:
+  for each legal move the program looks at the opponent's best reply, and one
+  recapture past it, and says what it found — what is captured, check or
+  mate, what it does for development, and how the material stands afterwards
+  ("after the best reply comes out 3 behind in material: it loses
+  material"). The players choose among a dozen candidates: a dozen because
+  that is what Laya can read at once and both sides must be asked the same
+  question; and not the evaluator's best dozen, which would be the evaluator
+  playing — every castle, the checks and the tempting captures are in the
+  list whether they are good or not. First results: the yardstick mates a
+  random mover in 24 moves and draws itself by repetition; Laya, zero-shot,
+  cannot mate a random mover in 200; a chat model against Laya was 15 points
+  up after 14 moves. Jev needs its owner's key and has not played yet.
+- **The box's Ollama can be picked too** ("加盒子ollama可选"). Wherever a chat
+  model is chosen — a 本地大模型 seat in the Jev tab, 分镜 in the Film tab — the
+  menu is grouped by machine: 本机, 盒子. A seat remembers the machine as well
+  as the name ("host|model"), because the same name is on both and the point
+  of choosing the box's is that it runs there: its local 35B plays chess at
+  1.7 s a move, costs this Mac nothing and no cloud quota (cloud models are
+  marked ☁︎). What is picked *automatically* still comes from the configured
+  host and this Mac, so adding a machine to the menus changes nobody's
+  default.
+- **Laya lives on the box now** ("把laya部署到盒子上，这样节省本机资源"). Earlier the
+  advice was to keep it on the Mac, because it had no job; it has two now, and
+  measured, the box is simply better at it: 23 ms a question on the box's GPU
+  and about 45 over the LAN, against 150–490 on this Mac's CPU — and the Mac
+  gets back the gigabyte and a half two resident checkpoints were holding. It
+  is a sixth row in Settings → Backend → 盒子上的服务 (start, stop, started when
+  something needs it), in its own virtualenv under `~/.kinclaw/laya` so that
+  the diffusion servers' torch is nobody's to move; with a box configured and
+  no address typed in, the app uses the box's. Found on the way: its options
+  were being sent as a dictionary, so they reached the model in a different
+  order every time and one seed played four different games — a model that
+  leans toward the first thing it reads was answering the shuffle. Written in
+  order, the same seed is the same game three times out of three. And one
+  legal move is no longer a question: a snake in a corridor asked Laya to
+  choose among one option and got an error from inside torch.
+- `jev_play {game, player, moves, seed}` for her and for agents; it plays at
+  full speed, stops at 55 seconds whatever happens, and says so. The board is
+  redrawn at most thirty times a second — drawn once a move, a game that
+  takes a second took two minutes.
+- **中国象棋.** Xiangqi is the fifth game and the second for two. The engine
+  (`JevXiangqiEngine.swift`, Foundation only) knows the blocked horse, the
+  elephant's eye, the cannon's screen, the palace, the river, the generals
+  who may not face each other, and that a side with no move has lost whether
+  or not it is in check; its move generator agrees with all 44 published
+  perft counts — eleven positions, four plies deep, 6.9 million leaves. The
+  players are asked in English and coordinates, a dozen candidates a move as
+  in chess; the person watching reads the move under the board the way every
+  xiangqi book writes it — 炮二平五, 马8进7, 前车退一 — and the men are discs
+  with characters on them, on a board with a river and two palaces.
+  The evaluator looks further than chess's does, because it had to: one
+  recapture past the reply was enough to make it open every game with 炮八进七,
+  cannon takes horse through the screen — the chariot beside the horse takes
+  the cannon back, and counting half of that twice looked like winning two
+  horses. It now plays the captures out (four plies, either side free to stop)
+  before it says how a move comes out. And "has the side any move at all" is
+  asked after every reply with a test that stops at the first legal move:
+  listing them all cost twice the time, and only looking when few pieces
+  were left was wrong — 困毙 happens with a full palace, and the shortcut
+  changed the evaluator's own game at move 59. The yardstick mates dice in 7
+  moves as Red and 32 as Black; a move costs about 120 ms in a debug build.
+  `jev_play {game: "xiangqi", red, black}`.
+- `jev_status` looks without touching: which game, who is playing, whether it
+  is running, how it stands. `jev_play` deals a new game over whatever is on
+  the board, so there was no way to find out that somebody was in the middle
+  of one except by ending it.
+- **Jev judges film takes too.** Settings → Backend → 片场 · Jev 判断, off by
+  default. Jev cannot see any more than Laya can, so the split is the one the
+  review already had — the vision model writes down what her body did, and a
+  text model judges that description against the plan — with Jev asked the
+  same four things as Laya (follows the plan, the activity done properly,
+  leaves, how much of her moves), its line under Laya's on the shot card and
+  in `film_status`, a purple badge beside the blue one. Choice is the only
+  question type this app has seen Jev answer, so a yes-or-no is two options
+  and the number is the probability of the yes; "how much" is three options
+  and the number is where the probabilities balance between 0 and 2 — which
+  makes the two judges' numbers mean the same thing. The description, the
+  planned movement and the film's idea go to api.typesafe.ai when it is on,
+  and the card says so.
+  The first eight takes it read, against what the reviewer had made of them:
+  the three that were a different movement from the planned one (hands over
+  the head instead of to the chest; frozen; stood up and turned away) it gave
+  0.02, 0.00 and 0.28 for "follows the plan", the other five 0.56 to 1.00 —
+  and "how much of her moves" came out at exactly 1.0 for the four takes whose
+  descriptions say only the arms moved, 0.36 for the frozen one, 2.0 for the
+  three with bent knees and shifting weight. Laya gave all eight 0.78 to 0.95
+  and called arms-only takes whole-body. Four questions are one request of
+  about 430 tokens: the eight takes cost $0.0003.
+- **Shown by default; it can be made to count.** A second switch, 让它的判断
+  算数（试验）, adds one rule, and only downward: a take the reviewer let
+  through is failed (4/10) when Jev reads the reviewer's own description as a
+  different movement from the plan (follows < 0.30), and is retaken from the
+  same words — the reviewer had no complaint to rewrite them by — within the
+  usual retake limit. Jev never rescues a take the reviewer failed; it cannot
+  see an extra arm or a changed coat. The model that looks is good at saying
+  what it saw and moody about what that amounts to; comparing two pieces of
+  text is what Jev is for.
+  「只问第二意见」 (and `film_review {opinions_only}`) asks Laya and Jev again
+  about descriptions already written: a second a shot, no frames looked at,
+  none of the vision model's quota. A judge that is off, or does not answer,
+  leaves the numbers it gave before where they are — the description has not
+  changed, so they still stand.
+- The Jev API call moved out of the arcade into `JevClient` — any number of
+  Choice questions in one request, asked one at a time if the server will not
+  take several — so a game move and a film verdict are the same code.
+
+### Fixed — a password dialog at every launch, waiting to happen
+
+- The TypeSafe key is in the Keychain, this app is signed ad hoc, and to the
+  Keychain an ad-hoc app is its exact bytes: every rebuild is a stranger to
+  the item the last build stored, and reading the secret raises "KinClaw Mac
+  wants to use your confidential information". The Jev tab read the secret
+  when its view was made — at launch — merely to know whether to say 换 key
+  or 填 key. Now "is there a key" asks for the item's attributes, which no
+  access list guards and no dialog attends; the secret is read once a launch
+  and kept; and a read that nobody is there to consent to — a film reviewed
+  shot by shot, a tool call — is made with the Keychain's dialogs off, so a
+  refusal is an error that says what to do (-25293, seen on the first try)
+  instead of a dialog in the middle of somebody's evening. Only 开始 and
+  走一步 in the Jev tab may raise it: somebody just pressed them.
+- Laya's film questions reached it in a different order at every launch: the
+  request was serialized from a dictionary, as the games' once were. One
+  description of one take scored 0.09 for "the activity, done properly" on
+  one launch and 0.83 on the next. Written out in order now, by hand, and the
+  same description gets the same numbers.
+
+### Added — a film can be deleted
+
+Eight films on the shelf, five of them experiments nobody will watch again,
+and the only way to be rid of one was Finder. There is a trash button on the
+film itself, one on each row of the library under the pointer, and 删除整部影片…
+in the row's menu. All three ask first, and what they do is move the film's
+folder — storyboard, stills, clips, the takes set aside, the cut — to the
+Trash, where Put Back still works: a film is a quarter of an hour of the
+box's time and sometimes the only good take of something. The film being
+shot is not offered; nothing is while the studio is reviewing.
+
+Laya's card says where Laya runs now — on the box when there is one, the same
+service the Jev tab plays against — instead of "on this Mac", which stopped
+being true when it moved.
+
 ### Added — Motion: a movement from a real performance, performed by her
 
 An evening went into asking a video model for tai chi in words, and what it

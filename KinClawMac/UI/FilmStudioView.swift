@@ -26,6 +26,8 @@ struct FilmStudioView: View {
     /// The voice-over's language: a tag, "none", or "" to follow the idea's.
     @AppStorage(FilmStudio.tongueKey) private var tongue = ""
     @AppStorage(FilmStudio.layaOnKey) private var layaOn = false
+    @AppStorage(FilmStudio.jevOnKey) private var jevOn = false
+    @AppStorage(FilmStudio.jevCountsKey) private var jevCounts = false
     /// Automatic retakes per shot on the reviewer's say-so; 0 is no reviewer.
     @AppStorage(FilmStudio.retakesKey) private var retakes = 1
     @State private var tick = 0
@@ -37,6 +39,11 @@ struct FilmStudioView: View {
     /// A shot is there to be looked at the moment it is filmed — not when
     /// the last one is, a quarter of an hour later.
     @State private var watching: [String: Int] = [:]
+    /// The film somebody has asked to delete, until they say yes or no.
+    @State private var doomed: FilmStudio.Film?
+    /// The row under the pointer: its delete button shows only then.
+    @State private var hovered: String?
+    @State private var complaint: String?
 
     struct Words: Equatable {
         var film: String
@@ -64,6 +71,13 @@ struct FilmStudioView: View {
             }
         }
         .onAppear { studio.reload() }
+        .confirmationDialog(doomed.map { "把「\($0.title)」整部删掉？" } ?? "", isPresented: Binding(
+            get: { doomed != nil }, set: { if !$0 { doomed = nil } }), titleVisibility: .visible) {
+            Button("移到废纸篓", role: .destructive) { if let film = doomed { remove(film) } }
+            Button("取消", role: .cancel) { doomed = nil }
+        } message: {
+            Text("分镜、每个镜头的画面和视频、留下来的旧镜头、成片，整个文件夹一起移到废纸篓；想要回来，到废纸篓里「放回原处」。")
+        }
         .onReceive(NotificationCenter.default.publisher(for: .kinclawFilmShow)) { show($0) }
         // Stills and clips land on disk one by one; a glance every two
         // seconds is how they show up here as they do.
@@ -93,6 +107,25 @@ struct FilmStudioView: View {
                             .fill(film.id == self.film?.id ? Color.white.opacity(0.09) : .clear))
                     }
                     .buttonStyle(.plain)
+                    .overlay(alignment: .trailing) {
+                        if hovered == film.id, studio.shooting != film.id {
+                            Button { doomed = film } label: {
+                                Image(systemName: "trash").font(.system(size: 10))
+                                    .padding(5).background(Circle().fill(Color.black.opacity(0.55)))
+                            }
+                            .buttonStyle(.plain).foregroundColor(.red).padding(.trailing, 6)
+                            .help("删除整部影片（移到废纸篓）")
+                        }
+                    }
+                    .onHover { inside in hovered = inside ? film.id : (hovered == film.id ? nil : hovered) }
+                    .contextMenu {
+                        Button("在访达里显示") { NSWorkspace.shared.activateFileViewerSelecting([film.folder]) }
+                        Divider()
+                        Button("删除整部影片…", role: .destructive) { doomed = film }.disabled(studio.shooting == film.id)
+                    }
+                }
+                if let complaint {
+                    Text(complaint).font(.system(size: 9)).foregroundColor(.orange).padding(.horizontal, 8)
                 }
                 if studio.films.isEmpty {
                     Text("拍过的片子会在这儿").font(.system(size: 10)).foregroundColor(.secondary).padding(8)
@@ -117,12 +150,26 @@ struct FilmStudioView: View {
                         Text(busy).font(.system(size: 9)).foregroundColor(.secondary).lineLimit(1)
                     }
                     if film.state == .done {
+                        if (layaOn || jevOn), film.shots.contains(where: { $0.saw != nil }) {
+                            Button("只问第二意见") { studio.reassess(film: film.id, opinionsOnly: true) }
+                                .controlSize(.small)
+                                .disabled(studio.shooting != nil || studio.revising != nil)
+                                .help("不看画面：把把关已经写下的「看到的动作」再交给 \(judges) 判一遍。一个镜头一秒左右，不花看图模型的额度")
+                        }
                         Button("重新把关") { studio.reassess(film: film.id) }
                             .controlSize(.small)
                             .disabled(studio.shooting != nil || studio.revising != nil)
-                            .help("不重拍，只把每个镜头再看一遍：动作到不到位、有没有出错，以及 Laya 的打分")
+                            .help("不重拍，只把每个镜头再看一遍：动作到不到位、有没有出错，以及 Laya / Jev 的第二意见")
                         Button("在访达里显示") { NSWorkspace.shared.activateFileViewerSelecting([film.file]) }
                             .controlSize(.small)
+                    }
+                    // Any film that is not being shot this minute — the
+                    // finished, the failed, the ones abandoned half way.
+                    if studio.shooting != film.id {
+                        Button(role: .destructive) { doomed = film } label: { Image(systemName: "trash") }
+                            .controlSize(.small)
+                            .disabled(studio.revising != nil)
+                            .help("删除整部影片（移到废纸篓，可以放回）")
                     }
                 }
                 if let playing = playing(film) {
@@ -230,6 +277,9 @@ struct FilmStudioView: View {
                             if layaOn, let right = shot.laya?["activity"] {
                                 badge("Laya \(String(format: "%.2f", right))", Color.blue)
                             }
+                            if jevOn, let right = shot.jev?["activity"] {
+                                badge("Jev \(String(format: "%.2f", right))", Color.purple)
+                            }
                         }
                         .padding(6)
                     }
@@ -263,9 +313,13 @@ struct FilmStudioView: View {
             if let verdict = verdict(shot) {
                 Text(verdict).font(.system(size: 9)).foregroundColor(.secondary).lineLimit(2)
             }
-            if layaOn, let second = second(shot) {
+            if layaOn, let second = second("Laya", shot.laya) {
                 Text(second).font(.system(size: 9)).foregroundColor(.secondary).lineLimit(2)
                     .help("Laya 对「看到的动作」的打分，只显示、不参与决定。\n看到的：\(shot.saw ?? "")")
+            }
+            if jevOn, let second = second("Jev", shot.jev) {
+                Text(second).font(.system(size: 9)).foregroundColor(.secondary).lineLimit(2)
+                    .help("Jev 对同一段「看到的动作」的判断，和 Laya 问的是同样四件事。" + (jevCounts ? "按计划低于 0.30 的镜头算不过。" : "只显示、不参与决定。") + "\n看到的：\(shot.saw ?? "")")
             }
             if film.state == .done || film.state == .failed {
                 Button("改这个镜头…") { open(film, shot) }
@@ -339,13 +393,33 @@ struct FilmStudioView: View {
         .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.06)))
     }
 
-    /// Laya's numbers on the take that was kept, as one line.
-    private func second(_ shot: FilmStudio.Shot) -> String? {
-        guard let read = shot.laya, !read.isEmpty else { return nil }
+    /// Off the shelf, and the selection on to whatever is next to it.
+    private func remove(_ film: FilmStudio.Film) {
+        doomed = nil
+        let index = studio.films.firstIndex { $0.id == film.id }
+        switch studio.remove(film: film.id) {
+        case .failure(let failure): complaint = failure.localizedDescription
+        case .success:
+            complaint = nil
+            watching[film.id] = nil
+            if editing?.film == film.id { editing = nil; opened = nil }
+            if selected == film.id || selected == nil {
+                let left = studio.films
+                selected = left.isEmpty ? nil : left[min(index ?? 0, left.count - 1)].id
+            }
+        }
+    }
+
+    /// Who would be asked for a second opinion, for the button's words.
+    private var judges: String { [layaOn ? "Laya" : nil, jevOn ? "Jev" : nil].compactMap { $0 }.joined(separator: " 和 ") }
+
+    /// A judge's numbers on the take that was kept, as one line.
+    private func second(_ who: String, _ numbers: [String: Double]?) -> String? {
+        guard let read = numbers, !read.isEmpty else { return nil }
         func part(_ key: String, _ name: String) -> String? { read[key].map { "\(name) \(String(format: "%.2f", $0))" } }
         let parts = [part("follows", "按计划"), part("activity", "动作到位"), part("leaves", "走掉"),
                      read["amount"].map { "幅度 \(String(format: "%.1f", $0))/2" }].compactMap { $0 }
-        return "Laya：" + parts.joined(separator: " · ")
+        return "\(who)：" + parts.joined(separator: " · ")
     }
 
     /// What the reviewer made of the take that was kept.
@@ -480,7 +554,7 @@ struct FilmStudioView: View {
                 Label("自动（挑最强的那个）", systemImage: writerModel.isEmpty ? "checkmark" : "")
             }
             ForEach(writers, id: \.host) { entry in
-                Section(entry.host == OllamaCatalog.defaultBaseURL ? "本机" : entry.host.replacingOccurrences(of: "http://", with: "")) {
+                Section(BoxServices.place(of: entry.host)) {
                     ForEach(entry.models, id: \.self) { model in
                         Button { writerModel = model; writerHost = entry.host; Task { await describeWriter() } } label: {
                             Label(model, systemImage: writerModel == model && writerHost == entry.host ? "checkmark" : "")

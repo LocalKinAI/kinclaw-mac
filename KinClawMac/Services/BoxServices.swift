@@ -24,7 +24,7 @@ final class BoxServices: ObservableObject {
     static let binaryKey = "kinclaw.box.diffuser"
     static let defaultBinary = "~/.ollamadiffuser/venv/bin/ollamadiffuser"
 
-    enum Kind: String, CaseIterable { case draw, edit, film, filmHQ, brain }
+    enum Kind: String, CaseIterable { case draw, edit, film, filmHQ, brain, laya }
 
     struct Service: Identifiable, Equatable {
         let kind: Kind
@@ -40,6 +40,7 @@ final class BoxServices: ObservableObject {
         Service(kind: .film, title: "出片", cost: "空闲不占，拍的时候约 25 GB"),
         Service(kind: .filmHQ, title: "出片 · 精修 (q8)", cost: "拍的时候约 45 GB，一个镜头 9 分钟"),
         Service(kind: .brain, title: "kinfer 大模型", cost: "模型常驻，35B 约 35 GB，不会自己卸载"),
+        Service(kind: .laya, title: "Laya（打分 / 下棋）", cost: "约 2 GB；第一道题加载 5 秒，之后一道 23 ms"),
     ]
 
     enum State: Equatable { case unknown, up, down, starting, stopping }
@@ -66,6 +67,7 @@ final class BoxServices: ObservableObject {
         case .film:   return "ltx-2.3-mlx-q4"
         case .filmHQ: return "ltx-2.3-mlx-q8"
         case .brain:  return "ai.localkin.kinfer"          // a launchd label, not a model
+        case .laya:   return "laya_judge.py"               // a script, not a model
         }
     }
 
@@ -81,7 +83,24 @@ final class BoxServices: ObservableObject {
             let configured = OllamaCatalog.baseURL
             return configured == OllamaCatalog.defaultBaseURL
                 ? replacingPort(of: DiffuserClient.videoHost, with: 11590) : configured
+        case .laya:   return replacingPort(of: DiffuserClient.videoHost, with: 8005)
         }
+    }
+
+    /// The box's own Ollama, when there is a box: the same machine as the
+    /// video server, on Ollama's port. Its local models (a 35B that this Mac
+    /// would not want to hold) run on the box's memory and cost no cloud quota.
+    static var ollama: String? {
+        guard !ssh.isEmpty || !DiffuserClient.videoHost.contains("localhost") && !DiffuserClient.videoHost.contains("127.0.0.1") else { return nil }
+        let address = replacingPort(of: DiffuserClient.videoHost, with: 11434)
+        return address == OllamaCatalog.defaultBaseURL ? nil : address
+    }
+
+    /// "本机", "盒子", or the address: what to call an Ollama in a menu.
+    static func place(of host: String) -> String {
+        if host == OllamaCatalog.defaultBaseURL { return "本机" }
+        if let box = ollama, host == box { return "盒子" }
+        return host.replacingOccurrences(of: "http://", with: "")
     }
 
     private static func replacingPort(of address: String, with port: Int) -> String {
@@ -112,7 +131,7 @@ final class BoxServices: ObservableObject {
     }
 
     nonisolated private static func answers(_ kind: Kind) async -> Bool {
-        let path = kind == .brain ? "/api/tags" : "/api/health"
+        let path = kind == .brain ? "/api/tags" : kind == .laya ? "/health" : "/api/health"
         guard let url = await URL(string: base(kind) + path) else { return false }
         var request = URLRequest(url: url, timeoutInterval: 3)
         request.httpMethod = "GET"
@@ -139,6 +158,19 @@ final class BoxServices: ObservableObject {
         let command: String
         if kind == .brain {
             command = "launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/\(Self.model(.brain)).plist 2>&1; true"
+        } else if kind == .laya {
+            // Its own virtualenv under ~/.kinclaw/laya — not the diffusion
+            // servers', whose torch and transformers it has no business moving.
+            // On the box because it is a quarter of the time there (23 ms a
+            // question on its GPU, against 150–490 on this Mac's CPU) and
+            // because two resident checkpoints are this Mac's gigabyte and a half.
+            command = """
+                pgrep -f laya_judge.py >/dev/null && echo already || { \
+                mkdir -p ~/Library/Logs/kinclaw; cd ~; \
+                PATH=/opt/homebrew/bin:/usr/local/bin:$PATH LAYA_JUDGE_HOST=0.0.0.0 LAYA_JUDGE_PORT=\(Self.port(.laya)) \
+                USE_TF=0 HF_HUB_OFFLINE=1 TOKENIZERS_PARALLELISM=false \
+                nohup ~/.kinclaw/laya/venv/bin/python ~/.kinclaw/laya/laya_judge.py > ~/Library/Logs/kinclaw/laya.log 2>&1 & echo started; }
+                """
         } else {
             let model = Self.model(kind), binary = Self.binary
             // The way they were always started by hand, with the two things
@@ -173,6 +205,7 @@ final class BoxServices: ObservableObject {
         note = nil
         let command = kind == .brain
             ? "launchctl bootout gui/$(id -u)/\(Self.model(.brain)) 2>&1; true"
+            : kind == .laya ? "pkill -f laya_judge.py; true"
             : "pkill -f \"ollamadiffuser run \(Self.model(kind)) \"; true"
         _ = await Self.run(command)
         for _ in 0..<10 {

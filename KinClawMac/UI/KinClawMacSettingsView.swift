@@ -525,6 +525,7 @@ private struct BackendSettingsTab: View {
 
             BoxServicesCard()
             LayaCard()
+            JevJudgeCard()
 
             SettingsCard("Sidecars") {
                 SettingsRow(label: "Ollama host") {
@@ -1895,14 +1896,16 @@ private struct LayaCard: View {
                 HStack(spacing: 8) {
                     Circle().fill(answers == true ? Color.green : answers == false ? Color.red : Color.gray)
                         .frame(width: 8, height: 8)
-                    TextField(FilmStudio.layaDefault, text: $address)
+                    TextField(BoxServices.ssh.isEmpty ? FilmStudio.layaDefault : BoxServices.base(.laya), text: $address)
                         .textFieldStyle(.roundedBorder).frame(maxWidth: 240)
                         .onSubmit { Task { answers = await FilmStudio.layaAnswers() } }
                     Text(answers == true ? "在" : answers == false ? "没起来" : "…")
                         .font(.system(size: 10)).foregroundColor(.secondary)
                 }
             }
-            if answers == false {
+            if !BoxServices.ssh.isEmpty, address.trimmingCharacters(in: .whitespaces).isEmpty {
+                SettingsCaption("留空就用盒子上的那份（上面「盒子上的服务」里能启停，用到时自动起）：盒子的 GPU 上一道题 23 毫秒，这台 Mac 的 CPU 上要 150–490，还省下本机一个多 GB 内存。")
+            } else if answers == false {
                 HStack(spacing: 6) {
                     Text(start).font(.system(size: 9, design: .monospaced)).foregroundColor(.secondary)
                         .textSelection(.enabled).lineLimit(2)
@@ -1912,11 +1915,51 @@ private struct LayaCard: View {
                     }.controlSize(.mini)
                 }
             }
-            SettingsCaption("Laya 是一个 0.4B 的文字判断模型，跑在这台 Mac 上，一次约 0.2 秒。它看不了画面：把关的模型把「她的身体实际做了什么」写下来，Laya 拿这段话对着计划打分——按计划、动作到位、走掉、幅度——显示在镜头卡片上把关那一行下面。只显示，不参与把关的决定：实测它零样本读这些描述并不可靠（模型卡自己也说要微调），开着是为了看数据。默认关；开了之后新拍的镜头和「重新把关」才会有这一行。服务得自己起（上面那条命令），没起来就只是少一行。")
+            SettingsCaption("Laya 是一个 0.4B 的文字判断模型，配了盒子就跑在盒子上（一道题约 23 毫秒，片场和 Jev 标签用的是同一份），没配盒子才跑在本机。它看不了画面：把关的模型把「她的身体实际做了什么」写下来，Laya 拿这段话对着计划打分——按计划、动作到位、走掉、幅度——显示在镜头卡片上把关那一行下面。只显示，不参与把关的决定：实测它零样本读这些描述并不可靠（模型卡自己也说要微调），开着是为了看数据。默认关；开了之后新拍的镜头和「重新把关」才会有这一行。盒子上的那份用到时自动起；自己填了地址的，服务得自己起，没起来就只是少一行。")
         }
         .task {
             while !Task.isCancelled {
                 answers = await FilmStudio.layaAnswers()
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+            }
+        }
+    }
+}
+
+/// Jev's second opinion on each filmed shot: a switch, whether there is a key
+/// to ask with, and what went wrong the last time it was asked.
+private struct JevJudgeCard: View {
+    @AppStorage(FilmStudio.jevOnKey) private var on = false
+    @AppStorage(FilmStudio.jevCountsKey) private var counts = false
+    @ObservedObject private var studio = FilmStudio.shared
+    @State private var hasKey = false
+
+    var body: some View {
+        SettingsCard("片场 · Jev 判断") {
+            SettingsRow(label: "给每个镜头判断") {
+                Toggle("", isOn: $on).labelsHidden().toggleStyle(.switch).controlSize(.small)
+            }
+            SettingsRow(label: "让它的判断算数（试验）") {
+                Toggle("", isOn: $counts).labelsHidden().toggleStyle(.switch).controlSize(.small).disabled(!on)
+            }
+            SettingsRow(label: "TypeSafe key") {
+                HStack(spacing: 8) {
+                    Circle().fill(hasKey ? Color.green : Color.red).frame(width: 8, height: 8)
+                    Text(hasKey ? "在钥匙串里（Jev 标签里填的那个）" : "还没有：到 Jev 标签里填")
+                        .font(.system(size: 10)).foregroundColor(.secondary)
+                    if studio.jevTokens > 0 {
+                        Text("已读 \(studio.jevTokens) token").font(.system(size: 10)).foregroundColor(.secondary)
+                    }
+                }
+            }
+            if on, let trouble = studio.jevTrouble {
+                Text(trouble).font(.system(size: 10)).foregroundColor(.orange).lineLimit(3).textSelection(.enabled)
+            }
+            SettingsCaption("Jev 是 TypeSafe 的判断模型，也看不了画面：把关的模型把「她的身体实际做了什么」写下来，Jev 拿这段话对着计划回答和 Laya 一样的四件事——按计划、动作到位、走掉、幅度——显示在镜头卡片上 Laya 那一行旁边，两个可以同时开着对照。默认只显示，不参与把关的决定。「让它的判断算数」打开后只多一条规则，而且只往下：把关放过的镜头，如果 Jev 读把关自己写的描述、认为做的不是计划的动作（按计划 < 0.30），这一条就算不过（4 分），按原来的词重拍，次数还是受「自动重拍」的上限管；把关判不过的，Jev 不会捞回来。头一回拿 8 个镜头试：动作不对的 3 个它给了 0.02 / 0.00 / 0.28，其余 5 个 0.56–1.00；同样 8 个，Laya 全给 0.78–0.95。打开之后，每个镜头的这段描述、计划的动作和片子的主题会发到 api.typesafe.ai；一个镜头约几百 token，$0.042 / 百万。默认关；开了之后新拍的镜头、「重新把关」和「只问第二意见」才会有这一行。")
+        }
+        .task {
+            while !Task.isCancelled {
+                hasKey = JevKey.present
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
             }
         }

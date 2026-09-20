@@ -15,6 +15,14 @@ behind the description and the verdict it would need to be fine-tuned on.
     pip install laya fastapi uvicorn
     python3 scripts/laya_judge.py            # http://127.0.0.1:8005
 
+On another machine — a box on the LAN, to keep this Mac's memory and cores for
+other things — it has to listen on more than the loopback:
+
+    LAYA_JUDGE_HOST=0.0.0.0 python3 laya_judge.py
+
+`LAYA_JUDGE_DEVICE` picks where the model runs (cpu, mps, cuda); by default it
+tries Apple's GPU and falls back to the CPU.
+
     POST /decide  {"state": {...}, "questions": {...}}  ->  Laya's answers
     GET  /health
 
@@ -23,6 +31,7 @@ it serves what is on the disk and does not go looking).
 """
 import os
 import time
+from typing import Optional
 
 os.environ.setdefault("USE_TF", "0")               # TF's abseil can deadlock model construction
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
@@ -40,14 +49,23 @@ def router():
     global _router
     if _router is None:
         from laya import Router
-        _router = Router(max_loaded=2)             # english + multilingual both stay warm
+        wanted = os.environ.get("LAYA_JUDGE_DEVICE", "")
+        for device in ([wanted] if wanted else ["mps", "cpu"]):
+            try:
+                _router = Router(max_loaded=2, device=device)      # english + multilingual both stay warm
+                _router.device_name = device
+                break
+            except Exception:                      # no such device here, or Router takes no such argument
+                _router = None
+        if _router is None:
+            _router = Router(max_loaded=2)
     return _router
 
 
 class Decide(BaseModel):
     state: dict
     questions: dict
-    model: str | None = None
+    model: Optional[str] = None          # not `str | None`: the box's system Python is 3.9
 
 
 @app.get("/health")
@@ -67,4 +85,5 @@ def decide(ask: Decide):
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("LAYA_JUDGE_PORT", "8005")), log_level="warning")
+    uvicorn.run(app, host=os.environ.get("LAYA_JUDGE_HOST", "127.0.0.1"),
+                port=int(os.environ.get("LAYA_JUDGE_PORT", "8005")), log_level="warning")
