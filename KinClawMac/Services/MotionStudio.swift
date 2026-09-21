@@ -58,6 +58,11 @@ final class MotionStudio: ObservableObject {
         var cut: [Double]?
         /// Scale and shift that lay the skeleton over her: a, tx, ty.
         var fit: [Double]?
+        /// The 3D route, when it is one: how the camera moves, and on what set
+        /// (`MotionStage`). Nil is the skeleton route, filmed from where the
+        /// reference was.
+        var camera: MotionStage.Camera?
+        var place: MotionStage.Place?
         var created = Date()
 
         enum State: String, Codable { case waiting, tracking, drawing, filming, joining, done, failed }
@@ -68,6 +73,8 @@ final class MotionStudio: ObservableObject {
         @MainActor var still: URL { folder.appendingPathComponent("start.png") }
         @MainActor var sourceFirst: URL { folder.appendingPathComponent("source-first.png") }
         @MainActor var track: URL { folder.appendingPathComponent("track.json") }
+        @MainActor var track3D: URL { folder.appendingPathComponent("track3d.json") }
+        @MainActor var blockout: URL { folder.appendingPathComponent("stage/out/blockout-first.png") }
         @MainActor func clip(_ n: Int) -> URL { folder.appendingPathComponent(String(format: "seg-%02d.mp4", n)) }
         @MainActor func pose(_ n: Int) -> URL { folder.appendingPathComponent(String(format: "pose-%02d.mp4", n)) }
         @MainActor func last(_ n: Int) -> URL { folder.appendingPathComponent(String(format: "seg-%02d.last.png", n)) }
@@ -107,13 +114,14 @@ final class MotionStudio: ObservableObject {
     // MARK: - Making one
 
     /// Start a take. Returns at once; the work runs for minutes.
-    func make(video: URL, title: String, start: Double, seconds: Double, scene: String, credit: String? = nil)
-        -> Result<Take, FilmStudio.Failure> {
+    func make(video: URL, title: String, start: Double, seconds: Double, scene: String, credit: String? = nil,
+              camera: MotionStage.Camera? = nil, place: MotionStage.Place = .park) -> Result<Take, FilmStudio.Failure> {
         guard working == nil else { return .failure(.message("正在拍「\(working!)」，等它拍完")) }
         guard FilmStudio.shared.shooting == nil else { return .failure(.message("片场正在拍片，两边用的是同一个出片服务，等它拍完")) }
         guard FileManager.default.fileExists(atPath: video.path) else { return .failure(.message("找不到这段视频：\(video.path)")) }
         guard CompanionCharacter.shared.anchorURL != nil else { return .failure(.message("她还没有锚图：先 character_new 定一张脸")) }
         if let trouble = CompanionArt.unreachableVolume(Self.root) { return .failure(.message(trouble)) }
+        if camera != nil, BoxServices.ssh.isEmpty { return .failure(.message(MotionStage.Failure.noBox.localizedDescription)) }
         let length = min(max(seconds, 2), 120)
         let stretch = min(length, 10)
         let count = Int((length / stretch).rounded(.up))
@@ -122,6 +130,8 @@ final class MotionStudio: ObservableObject {
         var take = Take(id: "\(Self.slug(name))-\(stamp)", title: name, source: "source." + (video.pathExtension.isEmpty ? "mp4" : video.pathExtension),
                         credit: credit, start: max(start, 0), seconds: length, scene: scene, stretch: stretch,
                         segments: (1...count).map { Segment(id: $0) })
+        take.camera = camera
+        take.place = camera == nil ? nil : place
         do {
             try FileManager.default.createDirectory(at: take.folder, withIntermediateDirectories: true)
             try FileManager.default.copyItem(at: video, to: take.reference)
@@ -155,6 +165,11 @@ final class MotionStudio: ObservableObject {
             let fm = FileManager.default
             let client = DiffuserClient.shared
             do {
+                if let camera = take.camera {
+                    try await produce3D(&take, camera: camera)
+                    save(take)
+                    return
+                }
                 // 1. The movement. Kept on disk: a carried-on take should not track again.
                 let total = take.segments.count * (take.frames - 1) + 1
                 var frames: [[CGPoint?]]
@@ -253,6 +268,113 @@ final class MotionStudio: ObservableObject {
             }
             save(take)
         }
+    }
+
+    /// The same take by the other route: her body tracked in 3D, put on a set
+    /// in the box's Blender, a camera moved through it, the depth of every
+    /// frame rendered — and the video model follows that instead of a flat
+    /// skeleton. Same stretches, same joins, same files; only what is followed
+    /// and how the first picture is made are different.
+    private func produce3D(_ take: inout Take, camera: MotionStage.Camera) async throws {
+        let fm = FileManager.default, client = DiffuserClient.shared
+        let total = take.segments.count * (take.frames - 1) + 1
+
+        // 1. The movement, in three dimensions. Kept: tracking is a fifth of a second a frame.
+        var frames: [MotionPose3D.Pose]
+        if let kept = Self.readTrack3D(take.track3D), kept.count >= total { frames = kept } else {
+            take.state = .tracking; save(take)
+            let reference = take.reference, start = take.start
+            frames = try await MotionPose3D.track(reference, from: start, frames: total) { done in
+                Task { @MainActor in MotionStudio.shared.progress = "在提取三维动作 \(done)/\(total)" }
+            }
+            try? MotionPose3D.json(frames).write(to: take.track3D)
+        }
+
+        // 2. The set, the camera's walk, the depth of every frame — once, for the whole take.
+        let stage = take.folder.appendingPathComponent("stage/out")
+        var depth = ((try? fm.contentsOfDirectory(at: stage, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.lastPathComponent.hasPrefix("depth-") }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+        if depth.count < total || !fm.fileExists(atPath: take.blockout.path) {
+            take.state = .drawing; save(take)
+            progress = "盒子上的 Blender 在搭景"
+            since = Date()
+            depth = try await MotionStage.render(Array(frames.prefix(total)), camera: camera, place: take.place ?? .park,
+                                                 id: take.id, into: take.folder) { done in
+                Task { @MainActor in
+                    if MotionStudio.shared.working != nil { MotionStudio.shared.progress = "盒子上的 Blender 在渲染深度 \(done)/\(total)" }
+                }
+            }.depth
+            since = nil
+        }
+
+        // 3. Her first frame: the blockout's, re-rendered as a photograph with her in it.
+        if !fm.fileExists(atPath: take.still.path) {
+            take.state = .drawing; save(take)
+            progress = "在画她的起始画面"
+            guard let anchor = CompanionCharacter.shared.anchorURL else { throw FilmStudio.Failure.message("她还没有锚图") }
+            let scene = await FilmStudio.english(take.scene, as: "place she is in and what she is wearing")
+            // Said loosely ("turn this blockout into a photograph") the editor
+            // composed its own picture: the pavilion moved to the middle and she
+            // put her hands in her pockets. Told that nothing moves, it kept the
+            // layout, her place in it and her stance.
+            let prompt = """
+                Re-render this exact picture as a photograph. Do not move, add or remove anything: the camera, the horizon, every \
+                structure, the trees and the figure stay exactly where they are, at the same size, and the figure keeps exactly the \
+                same pose, the same stance and the same arm positions. The figure is the woman in image 2: her exact face and hair. \
+                \((take.place ?? .park).words) \(scene). Photorealistic. \(CompanionCharacter.shared.sheet.style)
+                """
+            let made = try await client.edit(prompt: prompt, from: take.blockout, also: [anchor], into: take.folder,
+                                             seed: CompanionCharacter.seed(for: take.id))
+            try? fm.moveItem(at: URL(fileURLWithPath: made.path + ".txt"), to: URL(fileURLWithPath: take.still.path + ".txt"))
+            try fm.moveItem(at: made, to: take.still)
+            await restoreFace(in: take)
+        }
+
+        // 4. Filmed, a stretch at a time, each from where the last one stopped.
+        take.state = .filming; save(take)
+        await BoxServices.shared.refreshMemory()
+        let scene = await FilmStudio.english(take.scene, as: "place she is in and what she is wearing")
+        let words = "\(scene). She follows the reference movement exactly, slowly and continuously, her whole body taking part. "
+            + "She stays in the frame. \(camera.words) Ambient sound only: wind, birds, her breath."
+        for index in take.segments.indices where take.segments[index].state != .done {
+            let number = take.segments[index].id
+            progress = "在拍第 \(number)/\(take.segments.count) 段"
+            since = Date()
+            take.segments[index].state = .filming; save(take)
+            let from = index * (take.frames - 1)
+            guard from + take.frames <= depth.count else { throw FilmStudio.Failure.message("动作不够长了") }
+            try await MotionStage.video(from: Array(depth[from..<(from + take.frames)]), to: take.pose(number))
+            let opening: URL
+            if index == 0 { opening = take.still } else {
+                opening = try await FilmStudio.lastFrame(of: take.clip(take.segments[index - 1].id),
+                                                         to: take.last(take.segments[index - 1].id), fresh: true)
+            }
+            if fm.fileExists(atPath: take.clip(number).path) {
+                try? fm.moveItem(at: take.clip(number), to: take.folder.appendingPathComponent(
+                    String(format: "seg-%02d.take-\(Int(Date().timeIntervalSince1970)).mp4", number)))
+            }
+            _ = try await client.generateVideo(prompt: words, to: take.clip(number), seconds: take.stretch,
+                                               width: 704, height: 704, from: opening, following: take.pose(number),
+                                               lowRAM: Self.boxHasRoom ? false : nil, timeout: 3600)
+            if let began = since { usual = Date().timeIntervalSince(began) }
+            take.segments[index].state = .done; save(take)
+        }
+
+        // 5. Joined end to end.
+        take.state = .joining; save(take)
+        progress = "在接起来"
+        if fm.fileExists(atPath: take.file.path) {
+            try? fm.moveItem(at: take.file, to: take.folder.appendingPathComponent("take.cut-\(Int(Date().timeIntervalSince1970)).mp4"))
+        }
+        try await Self.join(take.segments.map { take.clip($0.id) }, to: take.file)
+        take.state = .done
+        take.note = nil
+    }
+
+    private static func readTrack3D(_ file: URL) -> [MotionPose3D.Pose]? {
+        guard let data = try? Data(contentsOf: file), let read = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let rows = read["frames"] as? [[[Double]]] else { return nil }
+        return rows.map { $0.compactMap { $0.count == 3 ? SIMD3($0[0], $0[1], $0[2]) : nil } }
     }
 
     /// Her face, put back: at full length it is forty pixels across and an

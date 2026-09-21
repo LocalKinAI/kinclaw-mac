@@ -18,6 +18,10 @@ struct MotionStudioView: View {
     @State private var start = 0.0
     @State private var seconds = 10.0
     @State private var credit = ""
+    /// "" is the skeleton route, filmed from where the reference was; the
+    /// others are `MotionStage.Camera`s — her body in 3D, on a set, walked round.
+    @AppStorage("kinclaw.motion.camera") private var camera = ""
+    @AppStorage("kinclaw.motion.place") private var place = MotionStage.Place.park.rawValue
     @State private var trouble: String?
     @State private var showing: [String: String] = [:]      // take id → "take" | "source" | "pose"
     @State private var tick = 0
@@ -209,6 +213,22 @@ struct MotionStudioView: View {
                 TextField("动作来源（标题 / 作者 / 链接 / 许可），发布时要署名", text: $credit)
                     .textFieldStyle(.plain).font(.system(size: 10))
             }
+            HStack(spacing: 10) {
+                Picker("机位", selection: $camera) {
+                    Text("骨架 · 原视频的机位").tag("")
+                    ForEach(MotionStage.Camera.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
+                }
+                .pickerStyle(.menu).controlSize(.small).fixedSize()
+                if !camera.isEmpty {
+                    Picker("布景", selection: $place) {
+                        ForEach(MotionStage.Place.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
+                    }
+                    .pickerStyle(.menu).controlSize(.small).fixedSize()
+                }
+                Text(camera.isEmpty ? "照参考视频的机位拍，动作可以走动、转身"
+                     : "三维骨架 → 盒子上的 Blender 搭景、走机位、渲染深度 → 照着深度拍。她可以走动、转身；侧身时单个镜头估不准的几帧会被补上，实在估不稳的会直说")
+                    .font(.system(size: 9)).foregroundColor(.secondary).lineLimit(2)
+            }
             if let trouble { Text(trouble).font(.system(size: 10)).foregroundColor(.orange) }
             if character.anchorURL == nil { Text("她还没有锚图，先给她定一张脸").font(.system(size: 10)).foregroundColor(.orange) }
         }
@@ -338,7 +358,8 @@ struct MotionStudioView: View {
         let words = scene.trimmingCharacters(in: .whitespacesAndNewlines)
         switch studio.make(video: video, title: "", start: start, seconds: seconds,
                            scene: words.isEmpty ? "a quiet park in soft morning light, she wears a plain long-sleeved top, loose trousers and flat shoes" : words,
-                           credit: credit.trimmingCharacters(in: .whitespaces).isEmpty ? nil : credit) {
+                           credit: credit.trimmingCharacters(in: .whitespaces).isEmpty ? nil : credit,
+                           camera: MotionStage.Camera(rawValue: camera), place: MotionStage.Place(rawValue: place) ?? .park) {
         case .success(let take): selected = take.id
         case .failure(let failure): trouble = failure.localizedDescription
         }

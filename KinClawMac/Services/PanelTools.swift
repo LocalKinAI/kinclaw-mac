@@ -512,6 +512,8 @@ enum PanelTools {
                     "rights": ["type": "boolean", "description": "true ONLY when the user has told you, in this conversation, that the video is theirs or that they have permission to use it. Never assume it."],
                     "scene": ["type": "string", "description": "Where she is and what she wears, one sentence, in any language: \"清晨起雾的公园，圆形砖地，穿蓝色棉袄、灰色长裤、白布鞋\"."],
                     "start": ["type": "number", "description": "Second of the reference to start from. Default 0."],
+                    "camera": ["type": "string", "description": "skeleton (default: filmed from where the reference was; the movement may travel and turn) | static | orbit | push — the last three are the 3D route: her body is tracked in 3D, put on a blockout set in Blender on the box, and the camera holds still at a quarter view, walks an arc round her, or moves in. She may step and turn: frames one camera cannot read (side-on, front and back look alike) are repaired or filled in, and a track that is still unsteady after that is refused with a sentence."],
+                    "place": ["type": "string", "description": "For the 3D route, the blockout set: park (a pavilion, trees, a bench; default) | open (empty ground, trees far off). What it looks like is still said in `scene`."],
                     "seconds": ["type": "number", "description": "How long, 4–120. Default 10."],
                     "title": ["type": "string", "description": "A short title."],
                     "credit": ["type": "string", "description": "Where the movement came from: title, author, address, licence."],
@@ -521,12 +523,12 @@ enum PanelTools {
         ],
         [
             "name": "jev_play",
-            "description": "Have a decision model play a game in the Jev tab: each move is one multiple-choice question whose options are the legal moves described in words. Games: tetris, 2048, snake, and two for two players — chess (`white` against `black`) and xiangqi, Chinese chess (`red` against `black`). Players: jev (TypeSafe's API — needs the user's key, which only they can enter in the tab), laya (the open local model of the same kind), llm (a local chat model), heuristic (the game's own evaluator, the yardstick), random. The same seed deals the same game to every player, so they can be compared. Plays up to `moves` moves and reports the score, how often the player agreed with the heuristic, and the time per move.",
+            "description": "Have a decision model play a game in the Jev tab: each move is one multiple-choice question whose options are the legal moves described in words. Games: tetris, 2048, snake, blackjack (200 hands against the dealer; the yardstick is exact basic strategy, so chips and agreement mean something), and three for two players — chess (`white` against `black`), xiangqi, Chinese chess (`red` against `black`), and gomoku, five in a row (`black`, who moves first, against `white`). Players: jev (TypeSafe's API — needs the user's key, which only they can enter in the tab), laya (the open local model of the same kind), llm (a local chat model), duoJev and duoLaya (the fast judge first; when it is unsure, its best three go to the chat model, which is shown the board), deep (the program itself looking as far as the words for a reader look — what a perfect reader could do), heuristic (the game's own evaluator, the yardstick), random. The same seed deals the same game to every player, so they can be compared. Plays up to `moves` moves and reports the score, how often the player agreed with the heuristic, and the time per move.",
             "inputSchema": [
                 "type": "object",
                 "properties": [
-                    "game": ["type": "string", "description": "tetris | 2048 | snake | chess | xiangqi. Default: the one showing."],
-                    "player": ["type": "string", "description": "jev | laya | llm | heuristic | random — for the games played alone. Default: the one selected."],
+                    "game": ["type": "string", "description": "tetris | 2048 | snake | blackjack | gomoku | chess | xiangqi. Default: the one showing."],
+                    "player": ["type": "string", "description": "jev | laya | llm | duoJev | duoLaya | deep | heuristic | random — for the games played alone. Default: the one selected."],
                     "model": ["type": "string", "description": "When player is llm: which chat model, as for white_model."],
                     "white": ["type": "string", "description": "For chess: who plays White, same choices. Any two can meet: jev against laya, a chat model against the yardstick."],
                     "red": ["type": "string", "description": "For xiangqi: who plays Red, who moves first. Same as `white`."],
@@ -750,9 +752,11 @@ enum PanelTools {
             let start = (args["start"] as? Double) ?? Double((args["start"] as? Int) ?? 0)
             switch MotionStudio.shared.make(video: URL(fileURLWithPath: (path as NSString).expandingTildeInPath),
                                             title: (args["title"] as? String) ?? "", start: start, seconds: seconds,
-                                            scene: (args["scene"] as? String) ?? "", credit: args["credit"] as? String) {
+                                            scene: (args["scene"] as? String) ?? "", credit: args["credit"] as? String,
+                                            camera: MotionStage.Camera(rawValue: (args["camera"] as? String) ?? ""),
+                                            place: MotionStage.Place(rawValue: (args["place"] as? String) ?? "") ?? .park) {
             case .success(let take):
-                let minutes = max(1, Int((take.seconds * 27 / 60).rounded()))
+                let minutes = max(1, Int((take.seconds * 27 / 60).rounded())) + (take.camera == nil ? 0 : 2)
                 return ("开拍了：「\(take.title)」\(Int(take.seconds)) 秒，分 \(take.segments.count) 段，大约 \(minutes + 2) 分钟。motion_status 看进度；成片会在 \(take.file.path)", false)
             case .failure(let failure): return (failure.localizedDescription, true)
             }
@@ -762,11 +766,14 @@ enum PanelTools {
             NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: ["mode": "jev"])
             if let game = args["game"] as? String { arcade.choose(game) }
             if let name = args["player"] as? String, let player = JevArcade.Player(rawValue: name) { arcade.player = player }
-            if let name = (args["white"] ?? args["red"]) as? String, let player = JevArcade.Player(rawValue: name) { arcade.rivals[0] = player }
-            if let name = args["black"] as? String, let player = JevArcade.Player(rawValue: name) { arcade.rivals[1] = player }
+            // The first seat is whoever moves first: White at chess, Red at xiangqi, Black at gomoku.
+            let gomoku = (args["game"] as? String ?? arcade.game.id) == "gomoku"
+            let first = gomoku ? args["black"] : (args["white"] ?? args["red"]), second = gomoku ? args["white"] : args["black"]
+            if let name = first as? String, let player = JevArcade.Player(rawValue: name) { arcade.rivals[0] = player }
+            if let name = second as? String, let player = JevArcade.Player(rawValue: name) { arcade.rivals[1] = player }
             if let model = args["model"] as? String { arcade.models[0] = model }
-            if let model = (args["white_model"] ?? args["red_model"]) as? String { arcade.models[0] = model }
-            if let model = args["black_model"] as? String { arcade.models[1] = model }
+            if let model = (gomoku ? args["black_model"] : (args["white_model"] ?? args["red_model"])) as? String { arcade.models[0] = model }
+            if let model = (gomoku ? args["white_model"] : args["black_model"]) as? String { arcade.models[1] = model }
             if let seed = args["seed"] as? Int, seed > 0 { arcade.seed = UInt64(seed) }
             arcade.restart()
             let limit = min(max((args["moves"] as? Int) ?? 50, 1), 2000)

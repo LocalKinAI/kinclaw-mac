@@ -41,9 +41,13 @@ struct JevOption: Identifiable {
     /// The evaluator's own favourite among them, which is what the heuristic
     /// player plays: the yardstick judges moves, not descriptions of them.
     var strongest: Int? = nil
+    /// What the program makes of the move when it looks as far as the words
+    /// for a reader do — further than `merit`, which is what the evaluator
+    /// that plays sees. Nil where a game looks no further for anybody.
+    var insight: Double? = nil
 
     /// This option as the heuristic would play it.
-    var judged: JevOption { JevOption(id: id, label: label, merit: merit, move: strongest ?? move) }
+    var judged: JevOption { JevOption(id: id, label: label, merit: merit, move: strongest ?? move, insight: insight) }
 }
 
 @MainActor
@@ -68,11 +72,22 @@ protocol JevGame: AnyObject {
     /// Empty for a game played alone.
     var sides: [String] { get }
     var turn: Int { get }
+    /// The position itself, for a player that can read one: a chat model
+    /// knows what a chess board is, and the words about each move are only
+    /// what the evaluator made of them. Empty when the words are all there is.
+    var position: String { get }
+    /// Who the next `options()` are for: a player that reads the words (a
+    /// model), or one that does not (the evaluator, dice). A game may measure
+    /// more for a reader than the evaluator that plays against it looks at —
+    /// which is the only way a reader has ever beaten it.
+    func prepare(reader: Bool)
 }
 
 extension JevGame {
     var sides: [String] { [] }
     var turn: Int { 0 }
+    var position: String { "" }
+    func prepare(reader: Bool) {}
 }
 
 /// The same seed deals the same game to every player, so they can be compared.

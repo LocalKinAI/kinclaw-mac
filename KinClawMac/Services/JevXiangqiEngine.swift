@@ -41,6 +41,23 @@ struct XiangqiPosition {
         redToMove = parts.count < 2 || parts[1] == "w" || parts[1] == "r"
     }
 
+    /// The position as xiangqi programs write it (n is the horse, b the elephant).
+    func fen(move number: Int) -> String {
+        var rows: [String] = []
+        for row in 0..<10 {
+            var text = "", gap = 0
+            for col in 0..<9 {
+                let piece = board[row * 9 + col]
+                if piece == 0 { gap += 1; continue }
+                if gap > 0 { text += String(gap); gap = 0 }
+                let letter = String(Array("pabncrk")[Int(abs(piece)) - 1])
+                text += piece > 0 ? letter.uppercased() : letter
+            }
+            rows.append(text + (gap > 0 ? String(gap) : ""))
+        }
+        return "\(rows.joined(separator: "/")) \(redToMove ? "w" : "b") - - \(quiet) \(number)"
+    }
+
     /// What repeats when a position repeats: the points, and whose move.
     var key: String { board.map { String($0) }.joined(separator: ",") + (redToMove ? "r" : "b") }
 
@@ -305,6 +322,64 @@ struct XiangqiPosition {
             if line.value < worst.value { worst = (line.value, mine * line.material) }
         }
         return worst
+    }
+
+    /// The position's worth to the side to move, `depth` plies on with both sides
+    /// playing their best and the captures settled at the end — and the material
+    /// there, from Red's side. Plain alpha-beta, the biggest captures tried first.
+    func search(_ depth: Int, _ alpha: Int, _ beta: Int) -> (value: Int, material: Int) {
+        if depth <= 0 { return settled(alpha, beta, depth: 4) }
+        var moves = legalMoves()
+        if moves.isEmpty { return (-1_000_000 - depth, material) }            // having no move is losing, and sooner is worse
+        moves.sort { Self.worth[Int(abs(board[$0.to]))] > Self.worth[Int(abs(board[$1.to]))] }
+        var alpha = alpha, best = (value: -2_000_000, material: material)
+        for move in moves {
+            var next = self
+            next.play(move)
+            let reply = next.search(depth - 1, -beta, -alpha)
+            if -reply.value > best.value { best = (-reply.value, reply.material) }
+            alpha = max(alpha, best.value)
+            if alpha >= beta { break }
+        }
+        return best
+    }
+
+    /// What a move comes to `plies` further on than the move itself — for the
+    /// words about it. The evaluator that PLAYS looks one reply ahead
+    /// (`outcome`); what is SAID about a move may look further, and a player who
+    /// reads that knows something the evaluator does not.
+    func foresight(of move: Move, plies: Int) -> (value: Int, material: Int) {
+        let mine = redToMove ? 1 : -1
+        var next = self
+        next.play(move)
+        let line = next.search(plies, -2_000_000, 2_000_000)
+        return (-line.value, mine * line.material)
+    }
+
+    /// What a move threatens: what the mover could do next if the other side did
+    /// nothing about it — mate, or material won once the captures are played out
+    /// (in half points). A third move deep, which is one more than the evaluator
+    /// looks when it chooses: it parries a threat it can see coming in one move,
+    /// and does not go looking for one to make. Nothing is reported for a move
+    /// that gives check; a side in check cannot do nothing, and "gives check" is
+    /// already said.
+    func threat(after move: Move) -> (mate: Bool, gain: Int) {
+        let mine = redToMove ? 1 : -1
+        var next = self
+        next.play(move)
+        guard !next.inCheck(red: next.redToMove) else { return (false, 0) }
+        next.redToMove.toggle()                                   // the other side passes
+        let now = mine * next.material
+        var best = 0
+        for follow in next.legalMoves() {
+            var after = next
+            after.play(follow)
+            if !after.canMove { return (true, 0) }
+            guard next.board[follow.to] != 0 else { continue }   // only what is taken can be won next move
+            let line = after.settled(-2_000_000, 2_000_000, depth: 3)
+            best = max(best, mine * line.material - now)
+        }
+        return (false, best)
     }
 
     /// Nothing left on either side that can cross the river: nobody can be mated.

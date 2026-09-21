@@ -15,6 +15,17 @@ import Security
 ///     `scripts/laya_judge.py`. Same question, no key, no cost.
 ///   - **本地大模型** — a chat model on the user's Ollama, asked the same
 ///     question and told to answer with the option's key.
+///   - **Jev＋大模型**, **Laya＋大模型** — the two kinds of mind together, which
+///     was Jacky's answer to "why can't Jev beat the yardstick": the fast one
+///     does what it is for — a probability for every option in 150 ms — and
+///     when it is sure, that is the move; when it is not, the three it likes
+///     best go to a chat model, which is shown *the board itself* and thinks.
+///     Shown only the words, the pair would know no more than either alone:
+///     the words are the evaluator's own summary of its search, and nobody
+///     beats a judge by reading the judge's notes.
+///   - **深算** — the program looking as far as the words for a reader look
+///     (three plies at chess and xiangqi, four stones at gomoku): what a
+///     perfect reader could do. Where a game looks no further, the same as 启发式.
 ///   - **启发式** — the game's own evaluator: the yardstick.
 ///   - **随机** — the floor.
 @MainActor
@@ -22,13 +33,18 @@ final class JevArcade: ObservableObject {
     static let shared = JevArcade()
 
     enum Player: String, CaseIterable, Identifiable {
-        case jev, laya, llm, heuristic, random
+        case jev, laya, llm, duoJev, duoLaya, deep, heuristic, random
+        /// Does this player need a chat model chosen for it?
+        var thinks: Bool { self == .llm || self == .duoJev || self == .duoLaya }
         var id: String { rawValue }
         @MainActor var title: String {
             switch self {
             case .jev: return "Jev（云）"
             case .laya: return FilmStudio.layaURL == BoxServices.base(.laya) ? "Laya（盒子）" : "Laya（本机）"
             case .llm: return "本地大模型"
+            case .duoJev: return "Jev＋大模型"
+            case .duoLaya: return "Laya＋大模型"
+            case .deep: return "深算"
             case .heuristic: return "启发式"
             case .random: return "随机"
             }
@@ -48,7 +64,7 @@ final class JevArcade: ObservableObject {
         var side: String? = nil
     }
 
-    let games: [JevGame] = [JevTetris(), Jev2048(), JevSnake(), JevChess(), JevXiangqi()]
+    let games: [JevGame] = [JevTetris(), Jev2048(), JevSnake(), JevBlackjack(), JevGomoku(), JevChess(), JevXiangqi()]
     /// A game for two has a player a side, and any player can sit on either:
     /// Jev against Laya, a chat model against the yardstick, one chat model
     /// against another.
@@ -124,11 +140,12 @@ final class JevArcade: ObservableObject {
     /// One move. False when the game is over or the player could not answer.
     @discardableResult
     func step() async -> Bool {
+        let seat = game.sides.isEmpty ? 0 : min(game.turn, 1)
+        let mover = game.sides.isEmpty ? player : rivals[seat]
+        game.prepare(reader: mover != .heuristic && mover != .random)
         let options = game.options()
         guard !options.isEmpty, !game.over else { show(now: true); return false }
         let best = options.max { $0.merit < $1.merit }!
-        let seat = game.sides.isEmpty ? 0 : min(game.turn, 1)
-        let mover = game.sides.isEmpty ? player : rivals[seat]
         let began = Date()
         do {
             // One legal move is not a question. Asking anyway costs a call,
@@ -173,11 +190,49 @@ final class JevArcade: ObservableObject {
         case .heuristic:
             let best = options.max { $0.merit < $1.merit }!
             return Decision(chosen: best.id, options: options, milliseconds: 0, by: "启发式", agreed: true)
+        case .deep:
+            // The program itself, looking as far as the words for a reader look:
+            // what a perfect reader of them could do, and the top of the ladder
+            // 随机 < 启发式 < 深算 that a model is somewhere on.
+            let best = options.max { ($0.insight ?? $0.merit) < ($1.insight ?? $1.merit) }!
+            return Decision(chosen: best.id, options: options, milliseconds: 0, by: "深算", agreed: false)
         case .random:
             return Decision(chosen: options[Int.random(in: 0..<options.count)].id, options: options, milliseconds: 0, by: "随机", agreed: false)
         case .jev: return try await askJev(game, options)
         case .laya: return try await askLaya(game, options)
         case .llm: return try await askChat(game, options, model: model)
+        case .duoJev: return try await askDuo(game, options, fast: .jev, model: model)
+        case .duoLaya: return try await askDuo(game, options, fast: .laya, model: model)
+        }
+    }
+
+    /// Sure enough not to ask anybody else.
+    static let sure = 0.75
+    /// Whether the chat model in a pair may think before it answers.
+    static let thinkKey = "kinclaw.jev.think"
+
+    /// The fast judge first; the slow one only when the fast one is unsure, and
+    /// only about the few moves the fast one could not choose between.
+    private static func askDuo(_ game: JevGame, _ options: [JevOption], fast: Player, model: String) async throws -> Decision {
+        var first = try await (fast == .jev ? askJev(game, options) : askLaya(game, options))
+        let ranked = options.sorted { (first.chances[$0.id] ?? 0) > (first.chances[$1.id] ?? 0) }
+        let top = first.chances[ranked[0].id] ?? 0
+        if top >= sure || ranked.count <= 2 {
+            first.by += " · 有把握，没问大模型"
+            return first
+        }
+        let few = Array(ranked.prefix(3))
+        let hint = few.map { "\($0.id) \(Int(((first.chances[$0.id] ?? 0) * 100).rounded()))%" }.joined(separator: ", ")
+        do {
+            let second = try await askChat(game, few, model: model, board: true,
+                                           note: "A fast judge that cannot see the board narrowed the legal moves to these and rated them: \(hint). It was not sure. You can see the board: decide.")
+            guard few.contains(where: { $0.id == second.chosen }) else { throw Failure.message("选了不在这三个里的") }
+            return Decision(chosen: second.chosen, options: options, chances: first.chances, confidence: first.confidence,
+                            milliseconds: 0, by: "\(first.by) → \(second.by)", agreed: false)
+        } catch {
+            // The slow judge not answering is no reason to stop a game the fast one can carry on.
+            first.by += " · 大模型没答上（\(error.localizedDescription.prefix(40))）"
+            return first
         }
     }
 
@@ -237,7 +292,8 @@ final class JevArcade: ObservableObject {
     /// Which machine has a chat model, remembered: asked once a game, not once a move.
     private static var homes: [String: String] = [:]
 
-    private static func askChat(_ game: JevGame, _ options: [JevOption], model named: String = "") async throws -> Decision {
+    private static func askChat(_ game: JevGame, _ options: [JevOption], model named: String = "",
+                                board: Bool = false, note: String = "") async throws -> Decision {
         // A seat names its model as "host|model": the same name can be on two
         // machines (kimi's cloud model is on both), and the point of choosing
         // the box's is that it runs there. A bare name is looked up.
@@ -253,23 +309,41 @@ final class JevArcade: ObservableObject {
         guard let writer = chosen, let url = URL(string: writer.host + "/api/chat") else {
             throw Failure.message(named.isEmpty ? "没找到能用的本地对话模型" : "没找到 \(named)：它在哪台机器的 Ollama 上？")
         }
+        // The board, for a player asked to judge rather than to read: what the
+        // options say about each move is the evaluator's opinion of it, and a
+        // chat model that knows the game can have one of its own.
+        let seen = board ? await MainActor.run { game.position } : ""
         let ask = """
             \(game.rules)
             Position before the move: \(game.situation)
-            \(game.question) \(game.howToJudge)
+            \(seen.isEmpty ? "" : seen + "\n")\(note.isEmpty ? "" : note + "\n")\(game.question) \(game.howToJudge)
             Options:
             \(options.map { "\($0.id): \($0.label)" }.joined(separator: "\n"))
-            Answer with the option's key only, for example p03. Nothing else.
+            \(board && !seen.isEmpty ? "The descriptions come from a shallow two-move search; use your own knowledge of the game and the board above where they fall short. " : "")Answer with the option's key only, for example p03. Nothing else.
             """
-        let body: [String: Any] = ["model": writer.model, "stream": false, "think": false, "messages": [["role": "user", "content": ask]]]
-        var request = URLRequest(url: url, timeoutInterval: 90)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        guard let (data, _) = try? await URLSession.shared.data(for: request),
-              let reply = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let text = (reply["message"] as? [String: Any])?["content"] as? String else { throw Failure.message("\(writer.model) 没回答") }
-        guard let range = text.range(of: #"p\d\d"#, options: .regularExpression) else {
+        // Asked to judge, a model is allowed to think first — it is what
+        // separated the chat models in the Tetris runs — and one that cannot
+        // is asked again plainly.
+        // …when the tab says it may: a local 9B thinking about one chess move
+        // took forty-four seconds, and a game at that pace is nobody's idea of
+        // watching a game. Off, the same model answers in two or three.
+        var text: String?
+        let mayThink = board && UserDefaults.standard.bool(forKey: Self.thinkKey)
+        for think in (mayThink ? [true, false] : [false]) {
+            let body: [String: Any] = ["model": writer.model, "stream": false, "think": think, "messages": [["role": "user", "content": ask]]]
+            var request = URLRequest(url: url, timeoutInterval: think ? 240 : 90)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+            guard let (data, response) = try? await URLSession.shared.data(for: request),
+                  (response as? HTTPURLResponse)?.statusCode == 200,
+                  let reply = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  let said = (reply["message"] as? [String: Any])?["content"] as? String else { continue }
+            text = said
+            break
+        }
+        guard let text else { throw Failure.message("\(writer.model) 没回答") }
+        guard let range = text.range(of: #"p\d\d"#, options: [.regularExpression, .backwards]) else {
             throw Failure.message("\(writer.model) 没按要求只答编号：\(text.prefix(80))")
         }
         return Decision(chosen: String(text[range]), options: options, milliseconds: 0,

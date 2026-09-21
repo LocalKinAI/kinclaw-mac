@@ -44,6 +44,25 @@ struct ChessPosition {
         halfmoves = parts.count > 4 ? Int(parts[4]) ?? 0 : 0
     }
 
+    /// The position as chess programs and chess books write it.
+    func fen(move number: Int) -> String {
+        var rows: [String] = []
+        for row in 0..<8 {
+            var text = "", gap = 0
+            for col in 0..<8 {
+                let piece = board[row * 8 + col]
+                if piece == 0 { gap += 1; continue }
+                if gap > 0 { text += String(gap); gap = 0 }
+                let letter = Array("pnbrqk")[Int(abs(piece)) - 1]
+                text += piece > 0 ? String(letter).uppercased() : String(letter)
+            }
+            rows.append(text + (gap > 0 ? String(gap) : ""))
+        }
+        let rights = (castling.wk ? "K" : "") + (castling.wq ? "Q" : "") + (castling.bk ? "k" : "") + (castling.bq ? "q" : "")
+        return "\(rows.joined(separator: "/")) \(whiteToMove ? "w" : "b") \(rights.isEmpty ? "-" : rights) "
+            + "\(enPassant.map(Self.square) ?? "-") \(halfmoves) \(number)"
+    }
+
     /// What repeats when a position repeats: the squares, whose move, the rights.
     var key: String {
         board.map { String($0) }.joined(separator: ",") + (whiteToMove ? "w" : "b")
@@ -86,8 +105,18 @@ struct ChessPosition {
 
     // MARK: Moves
 
-    func legalMoves() -> [Move] {
+    func legalMoves(capturesOnly: Bool = false) -> [Move] {
         pseudoMoves().filter { move in
+            if capturesOnly, board[move.to] == 0, !move.enPassant { return false }
+            var next = self
+            next.play(move)
+            return !next.inCheck(white: whiteToMove)
+        }
+    }
+
+    /// Has the side to move anything legal at all? Stops at the first move that is.
+    var canMove: Bool {
+        pseudoMoves().contains { move in
             var next = self
             next.play(move)
             return !next.inCheck(white: whiteToMove)
@@ -225,6 +254,94 @@ struct ChessPosition {
             if value < worst.value { worst = (value, mine * after.material) }
         }
         return worst
+    }
+
+    // MARK: Looking further, for what is said to a reader
+
+    /// What the position is worth to the side to move once the captures have
+    /// been played out — either side may stop and stand on what it has, a side
+    /// in check has to answer it — with the material (from White's side, in
+    /// pawns) where the taking stopped. Being mated is a very large loss; having
+    /// no move and not being in check is a draw, which is nothing.
+    func settled(_ alpha: Int, _ beta: Int, depth: Int) -> (value: Int, material: Int) {
+        let sign = whiteToMove ? 1 : -1, checked = inCheck(white: whiteToMove)
+        var alpha = alpha, best = (value: sign * evaluation(), material: material)
+        var moves: [Move]
+        if checked {
+            moves = legalMoves()
+            if moves.isEmpty { return (-1_000_000, material) }
+            best.value = -999_999                                  // no standing pat in check
+        } else {
+            if depth <= 0 || best.value >= beta { return best }
+            alpha = max(alpha, best.value)
+            moves = legalMoves(capturesOnly: true)
+        }
+        if depth <= 0 { return (sign * evaluation(), material) }
+        moves.sort { Self.worth[Int(abs(board[$0.to]))] > Self.worth[Int(abs(board[$1.to]))] }
+        for move in moves {
+            var next = self
+            next.play(move)
+            let reply = next.settled(-beta, -alpha, depth: depth - 1)
+            if -reply.value > best.value { best = (-reply.value, reply.material) }
+            alpha = max(alpha, best.value)
+            if alpha >= beta { break }
+        }
+        return best
+    }
+
+    /// `depth` plies on with both sides playing their best and the captures
+    /// settled at the end. Plain alpha-beta, the biggest captures tried first.
+    func search(_ depth: Int, _ alpha: Int, _ beta: Int) -> (value: Int, material: Int) {
+        if depth <= 0 { return settled(alpha, beta, depth: 4) }
+        var moves = legalMoves()
+        if moves.isEmpty { return (inCheck(white: whiteToMove) ? -1_000_000 - depth : 0, material) }
+        moves.sort { Self.worth[Int(abs(board[$0.to]))] + Int($0.promotion) > Self.worth[Int(abs(board[$1.to]))] + Int($1.promotion) }
+        var alpha = alpha, best = (value: -2_000_000, material: material)
+        for move in moves {
+            var next = self
+            next.play(move)
+            let reply = next.search(depth - 1, -beta, -alpha)
+            if -reply.value > best.value { best = (-reply.value, reply.material) }
+            alpha = max(alpha, best.value)
+            if alpha >= beta { break }
+        }
+        return best
+    }
+
+    /// What a move comes to `plies` further on than the move itself — for the
+    /// words about it. The evaluator that PLAYS looks one reply ahead
+    /// (`outcome`); what is SAID about a move may look further, and a player who
+    /// reads that knows something the evaluator does not.
+    func foresight(of move: Move, plies: Int) -> (value: Int, material: Int) {
+        let mine = whiteToMove ? 1 : -1
+        var next = self
+        next.play(move)
+        let line = next.search(plies, -2_000_000, 2_000_000)
+        return (-line.value, mine * line.material)
+    }
+
+    /// What a move threatens: what the mover could do next if the other side did
+    /// nothing about it — mate, or material won once the captures are played
+    /// out, in pawns. Nothing for a move that gives check: a side in check
+    /// cannot do nothing, and "gives check" is already said.
+    func threat(after move: Move) -> (mate: Bool, gain: Int) {
+        let mine = whiteToMove ? 1 : -1
+        var next = self
+        next.play(move)
+        guard !next.inCheck(white: next.whiteToMove) else { return (false, 0) }
+        next.whiteToMove.toggle()                                 // the other side passes
+        next.enPassant = nil
+        let now = mine * next.material
+        var best = 0
+        for follow in next.legalMoves() {
+            var after = next
+            after.play(follow)
+            if !after.canMove { if after.inCheck(white: after.whiteToMove) { return (true, 0) } else { continue } }
+            guard next.board[follow.to] != 0 || follow.enPassant || follow.promotion != 0 else { continue }
+            let line = after.settled(-2_000_000, 2_000_000, depth: 3)
+            best = max(best, mine * line.material - now)
+        }
+        return (false, best)
     }
 
     /// Too little left on the board for anybody to be mated.

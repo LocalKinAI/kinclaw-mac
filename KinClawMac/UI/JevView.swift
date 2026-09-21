@@ -6,6 +6,7 @@ struct JevView: View {
     @ObservedObject private var arcade = JevArcade.shared
     @State private var key = ""
     @State private var hasKey = JevKey.present
+    @AppStorage(JevArcade.thinkKey) private var think = false
     @State private var enteringKey = false
     @State private var chatModels: [(host: String, models: [String])] = []
 
@@ -162,7 +163,7 @@ struct JevView: View {
                 ForEach(JevArcade.Player.allCases) { Text($0.title).tag($0) }
             }
             .labelsHidden().controlSize(.small).fixedSize()
-            if player.wrappedValue == .llm {
+            if player.wrappedValue.thinks {
                 // Every Ollama within reach, by machine: this Mac's, the box's.
                 // A model on the box runs on the box — a 35B costs this Mac
                 // nothing, and a local one costs no cloud quota.
@@ -202,13 +203,17 @@ struct JevView: View {
                 Button("重来") { arcade.restart() }.controlSize(.small)
                 Stepper("种子 \(arcade.seed)", value: $arcade.seed, in: 1...9999).font(.system(size: 10)).fixedSize()
                 Spacer(minLength: 0)
-                if arcade.game.sides.isEmpty ? arcade.player == .jev : arcade.rivals.contains(.jev) {
+                if usesJev {
                     Button(hasKey ? "换 key" : "填 TypeSafe key") { enteringKey.toggle() }.controlSize(.small)
                 }
             }
             HStack(spacing: 8) {
                 Text("每步停 \(Int(arcade.pause * 1000)) ms").font(.system(size: 10)).foregroundColor(.secondary)
                 Slider(value: $arcade.pause, in: 0...1).controlSize(.mini).frame(width: 140)
+                if (arcade.game.sides.isEmpty ? [arcade.player] : arcade.rivals).contains(where: { $0 == .duoJev || $0 == .duoLaya }) {
+                    Toggle("大模型先想再答（慢很多）", isOn: $think).toggleStyle(.checkbox).controlSize(.mini).font(.system(size: 10))
+                        .help("「Jev＋大模型」里的大模型看着棋盘在三个候选里挑。让它先想，棋会好一些；本地 9B 想一步要四十多秒，不想两三秒")
+                }
                 Spacer(minLength: 0)
             }
             if enteringKey {
@@ -222,11 +227,17 @@ struct JevView: View {
         .padding(.horizontal, 14).padding(.vertical, 10)
     }
 
+    /// Is TypeSafe's key going to be needed for the game as it is set up?
+    private var usesJev: Bool {
+        let seated = arcade.game.sides.isEmpty ? [arcade.player] : arcade.rivals
+        return seated.contains(.jev) || seated.contains(.duoJev)
+    }
+
     /// Somebody pressed a button and is here: if Jev is to play and the
     /// Keychain wants consent before it hands the key over, now is when it may
     /// ask. Off the main thread — the read waits for the dialog.
     private func unlock() async {
-        guard arcade.game.sides.isEmpty ? arcade.player == .jev : arcade.rivals.contains(.jev), hasKey else { return }
+        guard usesJev, hasKey else { return }
         _ = await Task.detached { JevKey.read(asking: true) }.value
     }
 }

@@ -48,6 +48,13 @@ targets:
       - package: KeyboardShortcuts
       - package: SwiftTerm
     settings:
+      configs:
+        Debug:
+          # The games search. Unoptimized, xiangqi looking three plies past each
+          # move for a reader took eleven seconds a turn; optimized, a fifth of
+          # one. Nobody steps through this app in a debugger, and the rest of it
+          # is quicker for it too. Compilation stays incremental.
+          SWIFT_OPTIMIZATION_LEVEL: "-O"
       base:
         INFOPLIST_FILE: KinClawMac/Info.plist
         PRODUCT_BUNDLE_IDENTIFIER: dev.localkin.kinclawmac

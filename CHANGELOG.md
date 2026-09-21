@@ -386,6 +386,192 @@ quantities as named buckets ("stack 12 rows high (high); surface bumpy").
   one launch and 0.83 on the next. Written out in order now, by hand, and the
   same description gets the same numbers.
 
+### Added — Motion in three dimensions: a set, and a camera that moves
+
+The skeleton route films her from where the reference was filmed, because a
+flat skeleton is all it has. The Motion tab's 机位 menu now has three more
+cameras — 3D · 固定, 3D · 环绕, 3D · 推近 — and a 布景 beside them:
+
+- **Her body, in 3D** (`MotionPose3D`). Vision estimates seventeen joints a
+  frame in three dimensions — a separate guess for every frame, and four
+  repairs make a movement of them. *The pose*: the joints are in the pelvis's
+  own frame, turned to the camera's by the camera matrix (the matrix, not its
+  inverse — the camera looks down −z). Side-on, front and back look alike to
+  one camera, and for a few frames the estimate is the depth-mirrored body,
+  or has left and right swapped, or is neither; each frame is compared with
+  the last one believed, as it is and in its three disguises, the nearest
+  taken if a body could have got there in the time, and otherwise the frame
+  is dropped and filled in (Brush Knee, ten seconds: 222 as they were, 3
+  mirrored, 16 dropped — before this, its right ankle "jumped" a metre and
+  the take was refused). *Where she is*: Vision's own estimate of where the
+  pelvis is, steady to millimetres sideways and in height and wandering by
+  centimetres in depth, so depth is averaged over most of a second. The first
+  idea — chain her feet, each planted foot carrying the body — turned a
+  sidestep into a metre's walk away from the camera: the relative depth of
+  two feet is what one camera sees worst. *Upright*: the reference camera's
+  downward tilt is undone from the fact that she starts standing straight
+  (10.5° on the first clip). *Feet on the ground stay put*, as a correction
+  and no more: a planted foot's drift is taken out of the whole body,
+  smoothly; a lock that would drag her more than ten centimetres is let go;
+  what the feet ask for fades; both feet down, a small slow turn is allowed.
+  "Is the foot down" is asked of heights averaged over five frames, with six
+  centimetres' margin and three frames' persistence — asked of raw heights,
+  a foot "lifted" for one frame and was locked again somewhere else.
+- **A set, in the box's Blender** (`MotionStage`). Headless over ssh: a
+  blockout — ground, a pavilion, trees, a bench, a hedge; or open ground — a
+  mannequin of capsules keyed to the joints on every frame, and one camera
+  move from the first frame to the last however many stretches it is filmed
+  in. Rendered as depth, near is white (an emission shader fed by the camera
+  distance, view transform Raw), which LTX's union-control LoRA follows as it
+  follows a skeleton; 97 frames in 39 seconds. Blender 5.2 lives at
+  `~/.kinclaw/blender/` on the box; the script is embedded in the app and
+  kept, with its two prototypes, in `scripts/motion3d/`.
+- **Her first frame** is the blockout's first frame, plainly lit, re-rendered
+  by the image editor as a photograph with her in it. Asked to "turn this
+  blockout into a photograph" it composed its own picture — pavilion to the
+  middle, hands in her pockets; told that nothing moves, it kept the layout
+  and her stance. Then the usual head pass.
+- First result: the same woman, clothes and pavilion for 97 frames while the
+  camera walked thirty degrees round her, the pavilion sliding behind her
+  with parallax — and the stance, the shift of weight and the rising hands
+  followed. About three and a half minutes for four seconds.
+- **She may walk and turn.** The camera keeps its path round where she
+  started and turns its head after her, a second behind. A track in which a
+  joint still moves a quarter of a metre between frames after all of the
+  above is refused, with a sentence that says to use the skeleton camera —
+  the last resort, not the rule it was for the first day.
+- `motion_make {camera: static | orbit | push, place: park | open}`.
+
+### Added — two minds at one board
+
+"Why can't Jev beat the yardstick at chess?" Because what it reads about each
+move is the yardstick's own two-move search, put into words; nobody beats a
+judge by reading the judge's notes, and the moves it chooses differently are,
+by the only measure either has, worse (46% agreement, mated in 54). Jacky's
+answer: Jev should do what Jev is for, and a big model should judge. So:
+
+- **Jev＋大模型** and **Laya＋大模型**: the fast judge rates every option as
+  before; at 0.75 or more for its favourite, that is the move and nobody else
+  is asked; under that, its best three go to a chat model — any Ollama model
+  on this Mac or the box — which is told that the descriptions come from a
+  shallow search. It may think first if the tab's 大模型先想再答 is ticked:
+  off by default, because a local 9B thinking about one chess move took
+  forty-four seconds.
+- The chat model is shown **the board**: a game can now say its position
+  (`JevGame.position`) — chess as FEN, a diagram and the moves so far; xiangqi
+  as FEN, a diagram in the men's own characters, and the moves as a book
+  writes them. Shown only the words, two minds would know what one does.
+- If the slow judge does not answer, the fast one's choice stands and the
+  game goes on.
+
+### Changed — xiangqi: what it takes for a reader to beat the evaluator
+
+"Jev＋大模型 still cannot win, but the chat model alone can." One game had
+said so. Replayed outside the app — same seed, same model, same words — the
+chat model was mated in 58: a chat model's answers are drawn at random, and
+one game is an anecdote. Six seeds each, the box's 35B as Red against the
+evaluator, no thinking:
+
+    what the reader was given                          won  drawn  lost
+    the words (the app's 本地大模型)                     0     1     5
+    the words and the board                              0     2     4
+    + what each move threatens, judging rules in order   0     1     5
+    + moves the words already condemn taken off the list 0     5     0*
+    + the words look three plies on, not one             3     3     0
+
+    * a sixth game was unfinished at move 82
+
+- **Why it lost.** Not steadily: by one move a game whose own description
+  said "it loses material" — preferred, typically, to a retreat, because the
+  rules also say to avoid retreating. Saying the rules in strict order did
+  not cure it. So **the program no longer asks what it already knows**: for
+  a reader, moves that come out worse in material than another move on the
+  list are taken off it, and a forced mate is the only option offered. What
+  is left to judge is what measuring cannot settle. Losses became draws.
+- **Why it then won.** A reader beats the evaluator only by knowing
+  something the evaluator does not, and the program is where that comes
+  from: for a reader the words now look three plies past the move (plain
+  alpha-beta, captures settled at the end) where the evaluator that plays
+  looks one; they say what a move threatens, and when it repeats a position;
+  and the moves that look best further on are on the shortlist. The
+  evaluator that *plays* is untouched — `JevGame.prepare(reader:)` tells a
+  game who the next options are for — so it is still the same yardstick, and
+  its own games came out move for move as before.
+- In the app, the box's 35B against the evaluator: mate in 35, then a draw
+  by repetition it was told about and walked into anyway. Jev has not been
+  tried on this yet (its key locks with every rebuild).
+- **Chess the same way**, and more plainly still: the box's 35B as White
+  against the evaluator, six seeds — with the old words 0 won, 1 drawn, 5
+  lost; with what a reader gets now 5 won, 1 drawn, 0 lost. The engine gained
+  the same three things xiangqi's has (captures settled, alpha-beta to three
+  plies, what a move threatens), stalemate counted as the draw it is; its
+  perft counts are unchanged on all five positions. In the app: mate in 56.
+- The app is compiled optimized, Debug or not: looking three plies on took
+  eleven seconds a turn unoptimized and a fifth of a second optimized.
+
+### Added — 五子棋, and what did not transfer
+
+Gomoku, free style, on 15 by 15: the third game for two, and the first where
+the chess recipe did **not** work. Worth writing down.
+
+- The engine asks one question — *what does a stone on this point make along
+  this line?* — of the nine points through it, and answers by trying rather
+  than by listing shapes: a line is a four if one more stone makes five, an
+  OPEN four if two different stones would, an open three if one more stone
+  makes an open four, and so on down. Broken shapes (X·XX) come out right
+  with nobody naming them; all 3⁹ answers are kept. Checked against the
+  shapes every player knows.
+- The words say what a player would say: "makes a four and an open three at
+  once: a winning double threat", "takes the point where the opponent would
+  make an open four", "makes an open three, which threatens an open four".
+  The evaluator that plays is the classic one-look one — what the stone
+  makes and what it denies — and is the yardstick.
+- **The recipe from chess: looking further, saying more, and not asking what
+  the program already knows.** For a reader the program also finds forced
+  wins by continuous fours, searches four stones on among each side's best
+  few points, and takes off the list the moves it can already see lose. The
+  box's 35B against the evaluator, six seeds each colour: with plain words
+  0 won, 0 drawn, 8 lost; with all of that, 1 won, 1 drawn, 10 lost. It
+  stopped losing in twenty stones and started losing in seventy, and that
+  was all.
+- **Why it did not work.** At chess the yardstick is a two-ply search that
+  can be out-seen. At gomoku the one-look evaluator is already most of the
+  game — it blocks every four and every open three the move it appears —
+  and a four-stone beam search past it is not enough to out-see it. The
+  claim from the chess work survives, but with its condition showing: a
+  reader beats the yardstick only when the words know more than the
+  yardstick does, and here they do not yet.
+- **深算** is a new player, in every game: the program itself, following its
+  own deeper opinion of each option (three plies at chess and xiangqi, four
+  stones at gomoku) rather than the evaluator's. It is the top of the ladder
+  随机 < 启发式 < 深算 that a model can be placed on — and at gomoku it is
+  not above 启发式, which is the same finding again.
+
+### Added — 21 点: a test of judgment about risk, with a yardstick that is right
+
+Chess taught two things about testing a model with a game: one game is an
+anecdote, and a yardstick that is only a shallow search says little about
+who disagrees with it. Blackjack has neither problem. Every hand is its own
+game and two hundred are a minute; and what each action is worth is worked
+out exactly (an endless shoe, the dealer stands on every 17 — the numbers
+agree with the published tables to four places: hard 16 against a 10 is
+−0.5404 to stand and −0.5398 to hit; a dealer's 6 busts 42.3% of the time),
+so a disagreement with the yardstick is a mistake of a known size.
+
+- The player is told what can be measured at a glance — how often the dealer
+  busts from that card, how often one more card busts the hand, how often
+  standing wins — and is NOT told what each action is worth: a program that
+  knows that has nothing left to ask. Weighing a 60% chance of busting
+  against losing three times in four by standing is the judgment. No
+  splitting, no surrender; a natural pays three to two.
+- The number to read is **因为选错少拿** — chips given up by choosing worse
+  than the best action, summed over the session — which takes the luck of
+  the cards out. Same 200 hands, seed 7: the yardstick 0; the box's 35B 39
+  in 139 decisions (79% agreement); dice 787, broke at hand 187; Laya 990,
+  broke at hand 144, agreeing 6% of the time — worse than dice, which is
+  what choosing the same wrong thing every time looks like.
+- `jev_play {game: "blackjack", player}`.
+
 ### Added — a film can be deleted
 
 Eight films on the shelf, five of them experiments nobody will watch again,
