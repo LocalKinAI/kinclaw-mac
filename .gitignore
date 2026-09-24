@@ -55,3 +55,4 @@ notarize-output/
 # Cached path stash from `make build` — recomputed every build, not
 # meaningful to commit.
 .last-app-path
+__pycache__/

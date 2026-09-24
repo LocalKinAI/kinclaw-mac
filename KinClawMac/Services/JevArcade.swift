@@ -469,6 +469,7 @@ enum JevKey {
     /// every launch.
     static var present: Bool {
         if !(ProcessInfo.processInfo.environment["TYPESAFE_API_KEY"] ?? "").isEmpty { return true }
+        if outside() != nil { return true }
         var ask = query
         ask[kSecReturnAttributes as String] = true
         ask[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -485,6 +486,9 @@ enum JevKey {
     static func read(asking: Bool = false) -> String? {
         lock.lock(); defer { lock.unlock() }
         if let held { return held }
+        // A key the user keeps outside the app wins, and asks nobody: no
+        // Keychain dialog, and no lock after every rebuild.
+        if let kept = outside() { held = kept; refusal = nil; return kept }
         var ask = query
         ask[kSecReturnData as String] = true
         ask[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -497,8 +501,21 @@ enum JevKey {
             return key
         }
         refusal = status == errSecItemNotFound ? nil : status
-        // A key exported before the app was launched from a shell counts too.
-        return ProcessInfo.processInfo.environment["TYPESAFE_API_KEY"]
+        return nil
+    }
+
+    /// The key where the user keeps it for everything else: the environment,
+    /// then `~/.typesafe_key` (the jev-tetris program's file). The environment
+    /// only reaches this app when it was launched from a shell — `.zshrc` is
+    /// not read by anything the Dock or `open` starts — so the file is what
+    /// actually works day to day.
+    private static func outside() -> String? {
+        let env = (ProcessInfo.processInfo.environment["TYPESAFE_API_KEY"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !env.isEmpty { return env }
+        let file = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".typesafe_key")
+        guard let text = try? String(contentsOf: file, encoding: .utf8) else { return nil }
+        let key = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return key.isEmpty ? nil : key
     }
 
     @discardableResult

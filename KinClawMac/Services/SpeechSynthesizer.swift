@@ -54,6 +54,9 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
 
     override init() {
         super.init()
+        // Learn what the TTS server can do before the first reply needs it:
+        // whether its voices are multilingual decides how text is split.
+        Task { @MainActor in await TTSVoices.shared.refresh() }
         synthesizer.delegate = self
     }
 
@@ -107,7 +110,7 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
             let preferred = (pref == "auto" || pref.isEmpty) ? "" : pref
             let segments: [TextSegmenter.Segment]
             if isLocal {
-                segments = TextSegmenter.splitByLang(sentence, preferredVoice: preferred)
+                segments = Self.localSegments(sentence, preferredVoice: preferred)
             } else {
                 let cleaned = TextSegmenter.stripNonSpeakable(sentence)
                 segments = cleaned.isEmpty ? []
@@ -192,7 +195,7 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         let preferred = (pref == "auto" || pref.isEmpty) ? "" : pref
         let segments: [TextSegmenter.Segment]
         if isLocal {
-            segments = TextSegmenter.splitByLang(text, preferredVoice: preferred)
+            segments = Self.localSegments(text, preferredVoice: preferred)
         } else {
             let cleaned = TextSegmenter.stripNonSpeakable(text)
             segments = cleaned.isEmpty
@@ -253,9 +256,13 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         guard isLocal, !isSpeaking else { return }
         let pref = UserDefaults.standard.string(forKey: "kinclaw.voice.tts.speaker") ?? "auto"
         let preferred = (pref == "auto" || pref.isEmpty) ? "" : pref
-        let zh = TextSegmenter.splitByLang("嗯。", preferredVoice: preferred)
-        let en = TextSegmenter.splitByLang("Hi.", preferredVoice: preferred)
-        for seg in zh + en {
+        Task { @MainActor in await TTSVoices.shared.refresh() }
+        // One voice reads everything on a multilingual server; Kokoro needs
+        // both its Chinese and English voice warm.
+        let warm = TTSVoices.multilingual
+            ? Self.localSegments("嗯。", preferredVoice: preferred)
+            : Self.localSegments("嗯。", preferredVoice: preferred) + Self.localSegments("Hi.", preferredVoice: preferred)
+        for seg in warm {
             Task.detached(priority: .utility) {
                 _ = await self.synthesizeSegment(seg, isLocal: true, hostname: hostname)
             }
@@ -336,10 +343,13 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
                 // Kokoro wants a bare language tag, not a locale: "zh", not
                 // "zh-CN". Derive it from the voice prefix so it can never
                 // disagree with the speaker being sent alongside it.
+                // A multilingual server gets no language: its voices aren't
+                // named by language ("vivian"), and deriving one from the
+                // prefix would read Chinese as English. It detects from the text.
                 request.httpBody = try JSONEncoder().encode(KokoroRequest(
                     text: segment.text,
                     speaker: voice,
-                    language: TextSegmenter.language(forVoice: voice),
+                    language: TTSVoices.multilingual ? "" : TextSegmenter.language(forVoice: voice),
                     speed: speed > 0 ? speed : 1.0
                 ))
             } else {
@@ -470,6 +480,18 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         // per unit since each is a full word, not a letter; bias
         // toward CJK at 0.5x ratio.
         return Double(cjk) >= Double(latin) * 0.3 ? "zh-CN" : "en-US"
+    }
+
+    /// Text for the local TTS server as (text, voice) runs. Kokoro voices speak
+    /// one language, so mixed text is split between voices; a multilingual
+    /// server (Qwen3-TTS) reads the whole sentence in one voice — splitting it
+    /// there switched voice mid-sentence and broke the intonation.
+    static func localSegments(_ text: String, preferredVoice: String) -> [TextSegmenter.Segment] {
+        guard TTSVoices.multilingual else {
+            return TextSegmenter.splitByLang(text, preferredVoice: preferredVoice)
+        }
+        let cleaned = TextSegmenter.stripNonSpeakable(text)
+        return cleaned.isEmpty ? [] : [TextSegmenter.Segment(text: cleaned, voice: preferredVoice)]
     }
 
     /// Pick a Kokoro / server TTS voice based on detected language

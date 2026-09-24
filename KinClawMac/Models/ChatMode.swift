@@ -24,6 +24,9 @@ import Foundation
 ///             one button from the agent
 ///   .motion → a movement taken from a real performance, performed by her:
 ///             a reference video's pose skeleton drives the video model
+///   .comfy  → ComfyUI's ready-made workflows on the box, as forms, with
+///             the writer model to pick and change them and the node
+///             editor one button away
 ///   .film   → one sentence in, a short film out: a storyboard, a still
 ///             and a clip per shot on the user's own image and video
 ///             servers, cut together
@@ -41,6 +44,7 @@ enum ChatMode: String, CaseIterable, Identifiable {
     case film
     case motion
     case jev
+    case comfy
 
     var id: String { rawValue }
 
@@ -55,6 +59,7 @@ enum ChatMode: String, CaseIterable, Identifiable {
         case .film:   return "Film"
         case .motion: return "Motion"
         case .jev:    return "Jev"
+        case .comfy:  return "Comfy"
         }
     }
 
@@ -71,6 +76,7 @@ enum ChatMode: String, CaseIterable, Identifiable {
         case .film:   return "film"
         case .motion: return "figure.taichi"
         case .jev:    return "gamecontroller"
+        case .comfy:  return "point.3.connected.trianglepath.dotted"
         }
     }
 
@@ -93,6 +99,8 @@ enum ChatMode: String, CaseIterable, Identifiable {
             return "Motion — 找一段真人动作的视频，只取骨架，让她照着做：太极、舞蹈、任何说不清的动作"
         case .jev:
             return "Jev — 让决策模型玩游戏：每一步是一道选择题，俄罗斯方块、2048、贪吃蛇"
+        case .comfy:
+            return "Comfy — 盒子上 ComfyUI 的现成工作流：挑模板、填表、运行；或者一句话让 agent 挑和改"
         }
     }
 }

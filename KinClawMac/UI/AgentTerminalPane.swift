@@ -68,7 +68,12 @@ final class AgentTerminalSessions: ObservableObject {
     private static let sessionsKey = "kinclaw.term.sessions"
     private static let selectedKey = "kinclaw.term.selected"
 
-    private init() { load() }
+    private init() {
+        load()
+        // The Term tab is where terminals come from, so it is also where the
+        // wheel forwarding they need gets wired in. See TerminalScrollForwarder.
+        TerminalScrollForwarder.install()
+    }
 
     var selected: Session? {
         sessions.first { $0.id == selectedID } ?? sessions.first

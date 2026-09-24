@@ -223,7 +223,10 @@ final class DiffuserClient: ObservableObject {
     /// model just takes longer. The timeout is generous because the first
     /// request after a model loads can be minutes.
     @discardableResult
-    func generate(prompt: String, into folder: URL, steps: Int = 4,
+    /// `steps` nil lets the server use the model's own — 4 for boogu's turbo,
+    /// 25 for Qwen-Image-2.1. A fixed 4 sent to every model was boogu's number,
+    /// and Qwen asked for four steps draws a smudge.
+    func generate(prompt: String, into folder: URL, steps: Int? = nil,
                   width: Int = 768, height: Int = 768,
                   seed: Int? = nil, timeout: TimeInterval = 600) async throws -> URL {
         guard let url = Self.url("api/generate") else {
@@ -237,9 +240,10 @@ final class DiffuserClient: ObservableObject {
         defer { busy = false }
 
         var body: [String: Any] = [
-            "prompt": cleaned, "steps": steps, "width": width, "height": height,
+            "prompt": cleaned, "width": width, "height": height,
         ]
         if let seed { body["seed"] = seed }
+        if let steps { body["steps"] = steps }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.timeoutInterval = timeout

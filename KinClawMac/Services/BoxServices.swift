@@ -24,7 +24,7 @@ final class BoxServices: ObservableObject {
     static let binaryKey = "kinclaw.box.diffuser"
     static let defaultBinary = "~/.ollamadiffuser/venv/bin/ollamadiffuser"
 
-    enum Kind: String, CaseIterable { case draw, edit, film, filmHQ, brain, laya }
+    enum Kind: String, CaseIterable { case draw, edit, film, filmHQ, brain, laya, comfy, narrator }
 
     struct Service: Identifiable, Equatable {
         let kind: Kind
@@ -41,6 +41,8 @@ final class BoxServices: ObservableObject {
         Service(kind: .filmHQ, title: "出片 · 精修 (q8)", cost: "拍的时候约 45 GB，一个镜头 9 分钟"),
         Service(kind: .brain, title: "kinfer 大模型", cost: "模型常驻，35B 约 35 GB，不会自己卸载"),
         Service(kind: .laya, title: "Laya（打分 / 下棋）", cost: "约 2 GB；第一道题加载 5 秒，之后一道 23 ms"),
+        Service(kind: .comfy, title: "ComfyUI", cost: "空闲不占；跑工作流时装着那个工作流的模型，跑完留在内存里直到被让出来"),
+        Service(kind: .narrator, title: "电影旁白（Qwen3-TTS 1.7B VoiceDesign）", cost: "约 3 GB；一段 100 字的旁白 9 秒读完。和对话用的快速语音（8101）分开"),
     ]
 
     enum State: Equatable { case unknown, up, down, starting, stopping }
@@ -68,6 +70,8 @@ final class BoxServices: ObservableObject {
         case .filmHQ: return "ltx-2.3-mlx-q8"
         case .brain:  return "ai.localkin.kinfer"          // a launchd label, not a model
         case .laya:   return "laya_judge.py"               // a script, not a model
+        case .comfy:  return "ComfyUI"                     // a program with its own models
+        case .narrator: return "qwen3-tts:1.7b-voicedesign" // a kin audio model
         }
     }
 
@@ -84,6 +88,12 @@ final class BoxServices: ObservableObject {
             return configured == OllamaCatalog.defaultBaseURL
                 ? replacingPort(of: DiffuserClient.videoHost, with: 11590) : configured
         case .laya:   return replacingPort(of: DiffuserClient.videoHost, with: 8005)
+        case .comfy:
+            let set = (UserDefaults.standard.string(forKey: "kinclaw.comfy.url") ?? "").trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
+            return set.isEmpty ? replacingPort(of: DiffuserClient.videoHost, with: 8188) : set
+        case .narrator:
+            let set = (UserDefaults.standard.string(forKey: "kinclaw.film.narrator.url") ?? "").trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
+            return set.isEmpty ? replacingPort(of: DiffuserClient.videoHost, with: 8102) : set
         }
     }
 
@@ -131,7 +141,7 @@ final class BoxServices: ObservableObject {
     }
 
     nonisolated private static func answers(_ kind: Kind) async -> Bool {
-        let path = kind == .brain ? "/api/tags" : kind == .laya ? "/health" : "/api/health"
+        let path = kind == .brain ? "/api/tags" : (kind == .laya || kind == .narrator) ? "/health" : kind == .comfy ? "/system_stats" : "/api/health"
         guard let url = await URL(string: base(kind) + path) else { return false }
         var request = URLRequest(url: url, timeoutInterval: 3)
         request.httpMethod = "GET"
@@ -158,6 +168,29 @@ final class BoxServices: ObservableObject {
         let command: String
         if kind == .brain {
             command = "launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/\(Self.model(.brain)).plist 2>&1; true"
+        } else if kind == .comfy {
+            // AIOHTTP_NOSENDFILE=1 is not a preference. With aiohttp's sendfile
+            // on this Mac, every file ComfyUI sends over the network — its own
+            // editor page, the templates, the pictures it made — arrives with
+            // no HTTP headers in front of it (on the loopback it happens to be
+            // fine, so it works on the box and fails everywhere else). Measured:
+            // the same picture, sendfile on, "000 0 bytes"; off, 200 and 2.3 MB.
+            command = """
+                lsof -nP -iTCP:\(Self.port(.comfy)) -sTCP:LISTEN -t >/dev/null && echo already || { \
+                mkdir -p ~/Library/Logs/kinclaw; cd ~/ComfyUI; \
+                PATH=/opt/homebrew/bin:/usr/local/bin:$PATH AIOHTTP_NOSENDFILE=1 \
+                nohup venv/bin/python main.py --listen 0.0.0.0 --port \(Self.port(.comfy)) > ~/Library/Logs/kinclaw/comfy.log 2>&1 & echo started; }
+                """
+        } else if kind == .narrator {
+            // The film narrator: kin audio serving a voice-design model — a
+            // voice made from a description, for films; the companion's quick
+            // conversational voice stays on its own server.
+            command = """
+                pgrep -f "kin audio serve \(Self.model(.narrator)) " >/dev/null && echo already || { \
+                mkdir -p ~/Library/Logs/kinclaw; cd ~/localkin-service-audio; \
+                PATH=/opt/homebrew/bin:/usr/local/bin:$PATH nohup .venv/bin/kin audio serve \(Self.model(.narrator)) \
+                --host 0.0.0.0 --port \(Self.port(.narrator)) > ~/Library/Logs/kinclaw/narrator.log 2>&1 & echo started; }
+                """
         } else if kind == .laya {
             // Its own virtualenv under ~/.kinclaw/laya — not the diffusion
             // servers', whose torch and transformers it has no business moving.
@@ -206,6 +239,8 @@ final class BoxServices: ObservableObject {
         let command = kind == .brain
             ? "launchctl bootout gui/$(id -u)/\(Self.model(.brain)) 2>&1; true"
             : kind == .laya ? "pkill -f laya_judge.py; true"
+            : kind == .comfy ? "lsof -nP -iTCP:\(Self.port(.comfy)) -sTCP:LISTEN -t | xargs kill 2>/dev/null; true"
+            : kind == .narrator ? "pkill -f \"kin audio serve \(Self.model(.narrator)) \"; true"
             : "pkill -f \"ollamadiffuser run \(Self.model(kind)) \"; true"
         _ = await Self.run(command)
         for _ in 0..<10 {

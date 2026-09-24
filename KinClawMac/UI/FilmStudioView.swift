@@ -30,6 +30,13 @@ struct FilmStudioView: View {
     @AppStorage(FilmStudio.jevCountsKey) private var jevCounts = false
     /// Automatic retakes per shot on the reviewer's say-so; 0 is no reviewer.
     @AppStorage(FilmStudio.retakesKey) private var retakes = 1
+    /// The shape of the picture: a phone holds a portrait one.
+    @AppStorage("kinclaw.film.shape") private var shape = FilmStudio.Shape.square.rawValue
+    /// 自动 reads the sentence; the other two overrule the reading.
+    @AppStorage("kinclaw.film.kind") private var kind = FilmStudio.Kind.auto.rawValue
+    /// What films a story: LTX from each still, or H3 from a cast.
+    @AppStorage("kinclaw.film.engine") private var engine = FilmStudio.Engine.ltx.rawValue
+    @AppStorage(FilmStudio.musicKey) private var musicOn = true
     @State private var tick = 0
     /// One shot's words, open for rewriting, and what they were when opened.
     @State private var editing: Words?
@@ -76,7 +83,8 @@ struct FilmStudioView: View {
             Button("移到废纸篓", role: .destructive) { if let film = doomed { remove(film) } }
             Button("取消", role: .cancel) { doomed = nil }
         } message: {
-            Text("分镜、每个镜头的画面和视频、留下来的旧镜头、成片，整个文件夹一起移到废纸篓；想要回来，到废纸篓里「放回原处」。")
+            Text((doomed.map { studio.shooting == $0.id ? "这部正在拍，会先停下来。" : "" } ?? "")
+                 + "分镜、每个镜头的画面和视频、留下来的旧镜头、成片，整个文件夹一起移到废纸篓；想要回来，到废纸篓里「放回原处」。")
         }
         .onReceive(NotificationCenter.default.publisher(for: .kinclawFilmShow)) { show($0) }
         // Stills and clips land on disk one by one; a glance every two
@@ -108,7 +116,7 @@ struct FilmStudioView: View {
                     }
                     .buttonStyle(.plain)
                     .overlay(alignment: .trailing) {
-                        if hovered == film.id, studio.shooting != film.id {
+                        if hovered == film.id {
                             Button { doomed = film } label: {
                                 Image(systemName: "trash").font(.system(size: 10))
                                     .padding(5).background(Circle().fill(Color.black.opacity(0.55)))
@@ -121,7 +129,7 @@ struct FilmStudioView: View {
                     .contextMenu {
                         Button("在访达里显示") { NSWorkspace.shared.activateFileViewerSelecting([film.folder]) }
                         Divider()
-                        Button("删除整部影片…", role: .destructive) { doomed = film }.disabled(studio.shooting == film.id)
+                        Button(studio.shooting == film.id ? "停下来并删除…" : "删除整部影片…", role: .destructive) { doomed = film }
                     }
                 }
                 if let complaint {
@@ -149,6 +157,11 @@ struct FilmStudioView: View {
                         ProgressView().controlSize(.mini)
                         Text(busy).font(.system(size: 9)).foregroundColor(.secondary).lineLimit(1)
                     }
+                    if studio.shooting == film.id || studio.revising != nil {
+                        Button("停") { studio.stop() }
+                            .controlSize(.small)
+                            .help("停下手上这一步。已经拍好的镜头留着，盒子上正在渲染的那一段会自己跑完但不要了；之后点「接着拍」继续")
+                    }
                     if film.state == .done {
                         if (layaOn || jevOn), film.shots.contains(where: { $0.saw != nil }) {
                             Button("只问第二意见") { studio.reassess(film: film.id, opinionsOnly: true) }
@@ -156,6 +169,12 @@ struct FilmStudioView: View {
                                 .disabled(studio.shooting != nil || studio.revising != nil)
                                 .help("不看画面：把把关已经写下的「看到的动作」再交给 \(judges) 判一遍。一个镜头一秒左右，不花看图模型的额度")
                         }
+                        Button("重新配音配乐") {
+                            if case .failure(let failure) = studio.rescore(film: film.id, music: musicOn) { trouble = failure.localizedDescription }
+                        }
+                        .controlSize(.small)
+                        .disabled(studio.shooting != nil || studio.revising != nil)
+                        .help("不重拍：按片子的内容重新挑旁白的声音和语气、重读每一句旁白，\(musicOn ? "再在盒子上作一段配乐，" : "")然后重新剪。原来的旁白和成片留着")
                         Button("重新把关") { studio.reassess(film: film.id) }
                             .controlSize(.small)
                             .disabled(studio.shooting != nil || studio.revising != nil)
@@ -163,14 +182,13 @@ struct FilmStudioView: View {
                         Button("在访达里显示") { NSWorkspace.shared.activateFileViewerSelecting([film.file]) }
                             .controlSize(.small)
                     }
-                    // Any film that is not being shot this minute — the
-                    // finished, the failed, the ones abandoned half way.
-                    if studio.shooting != film.id {
-                        Button(role: .destructive) { doomed = film } label: { Image(systemName: "trash") }
-                            .controlSize(.small)
-                            .disabled(studio.revising != nil)
-                            .help("删除整部影片（移到废纸篓，可以放回）")
-                    }
+                    // Any film at all: finished, failed, abandoned half way —
+                    // or being shot this minute, which stops first.
+                    Button(role: .destructive) { doomed = film } label: { Image(systemName: "trash") }
+                        .controlSize(.small)
+                        .disabled(studio.revising != nil)
+                        .help(studio.shooting == film.id ? "停下来并删除整部影片（移到废纸篓，可以放回）"
+                              : "删除整部影片（移到废纸篓，可以放回）")
                 }
                 if let playing = playing(film) {
                     FilmPlayer(url: playing.url, autoplay: playing.shot != nil)
@@ -198,10 +216,55 @@ struct FilmStudioView: View {
                 if !film.look.isEmpty {
                     Text(film.look).font(.system(size: 10)).foregroundColor(.secondary)
                 }
+                if let tone = film.tone {
+                    Text(tone).font(.system(size: 10, weight: .medium)).foregroundColor(.secondary).textSelection(.enabled)
+                }
                 // Where it all happens: one place for the whole film, and the
                 // first thing to read when two shots do not look like one.
                 if let place = film.place {
                     Text(place).font(.system(size: 10)).foregroundColor(.secondary)
+                }
+                // Who tells it and what plays under it.
+                if film.narrator != nil || film.score != nil {
+                    VStack(alignment: .leading, spacing: 2) {
+                        if let narrator = film.narrator {
+                            Text("旁白：\(narrator.voice ?? narrator.speaker)\(narrator.instruct.map { " · \($0)" } ?? "")")
+                                .font(.system(size: 10)).foregroundColor(.secondary)
+                        }
+                        if let passage = film.voiceover {
+                            Text("「\(passage)」").font(.system(size: 10)).foregroundColor(.secondary).textSelection(.enabled)
+                        }
+                        if let score = film.score {
+                            HStack(spacing: 6) {
+                                Text("配乐：\(score)").font(.system(size: 10)).foregroundColor(.secondary).lineLimit(2)
+                                if FileManager.default.fileExists(atPath: film.music.path) {
+                                    Button { NSWorkspace.shared.open(film.music) } label: { Image(systemName: "music.note") }
+                                        .buttonStyle(.plain).help("听配乐")
+                                }
+                            }
+                        }
+                    }
+                }
+                // The cast of an H3 film: who every shot is filmed from.
+                if let cast = film.cast, !cast.isEmpty {
+                    ScrollView(.horizontal) {
+                        HStack(spacing: 8) {
+                            ForEach(Array(cast.enumerated()), id: \.offset) { i, member in
+                                VStack(spacing: 3) {
+                                    if let image = NSImage(contentsOf: film.castPicture(i)) {
+                                        Image(nsImage: image).resizable().scaledToFill()
+                                            .frame(width: 66, height: 88).clipShape(RoundedRectangle(cornerRadius: 6))
+                                            .onTapGesture { NSWorkspace.shared.open(film.castPicture(i)) }
+                                    } else {
+                                        RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.06))
+                                            .frame(width: 66, height: 88).overlay(ProgressView().controlSize(.mini))
+                                    }
+                                    Text(member.name).font(.system(size: 9)).lineLimit(1).frame(width: 70)
+                                }
+                                .help(member.look)
+                            }
+                        }
+                    }
                 }
                 if let words = editing, words.film == film.id { editor(film, words) }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10)], spacing: 10) {
@@ -532,7 +595,24 @@ struct FilmStudioView: View {
                 tongueMenu
                 reviewMenu
                 Stepper("\(shots) 个镜头", value: $shots, in: 2...8).font(.system(size: 10)).fixedSize()
+                Picker("", selection: $shape) {
+                    ForEach(FilmStudio.Shape.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
+                }
+                .labelsHidden().pickerStyle(.menu).controlSize(.small).fixedSize()
+                .help("画面的形状。竖屏 9:16 是手机拿着看的那种，576×1024；方形 704×704 是这个标签原来的样子")
+                Toggle("配乐", isOn: $musicOn).font(.system(size: 10)).toggleStyle(.checkbox).fixedSize()
+                    .help("在盒子上用 kin audio 的 MusicGen 按片子的内容作一段配乐，垫在整部片子下面，旁白说话时自动压低。第一次用要在盒子上下载 MusicGen（约 4 GB）")
                 Toggle("她当主角", isOn: $lead).font(.system(size: 10)).toggleStyle(.checkbox).fixedSize()
+                Picker("", selection: $kind) {
+                    ForEach(FilmStudio.Kind.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
+                }
+                .labelsHidden().pickerStyle(.menu).controlSize(.small).fixedSize()
+                .help("自动：先读一遍这句话，看它是一段连续的动作还是一串发生的事，由它决定怎么拍。故事：强制当成一串事——每镜独立画，可以换景，镜头拍物、拍景、拍人影。连续动作：强制当成一个人在一个地方做一件连贯的事")
+                Picker("", selection: $engine) {
+                    ForEach(FilmStudio.Engine.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
+                }
+                .labelsHidden().pickerStyle(.menu).controlSize(.small).fixedSize()
+                .help("拍故事用哪个模型。LTX：每镜从一张画出来的图拍，快（约 100 秒一镜），但人每镜长得不一样，所以故事里的人只拍手、背影。H3：先选角、给每个人画一张定妆照，每镜照着这些人和那一镜的布景拍，脸和衣服前后一致，自带环境声；慢（约 5–7 分钟一镜），要盒子上的 ComfyUI 和 H3 模型。连续动作的片子总是用 LTX")
                     .disabled(character.anchorURL == nil)
                     .help(character.anchorURL == nil ? "她还没有锚图" : "每个镜头里都是同一个她")
                 Spacer(minLength: 0)
@@ -618,7 +698,10 @@ struct FilmStudioView: View {
         let wanted = idea.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !wanted.isEmpty, studio.writing == nil, studio.shooting == nil else { return }
         trouble = nil
-        studio.make(from: wanted, shots: shots, lead: lead && character.anchorURL != nil) { result in
+        studio.make(from: wanted, shots: shots, lead: lead && character.anchorURL != nil,
+                    shape: FilmStudio.Shape(rawValue: shape) ?? .square,
+                    kind: FilmStudio.Kind(rawValue: kind) ?? .auto,
+                    engine: FilmStudio.Engine(rawValue: engine) ?? .ltx) { result in
             switch result {
             case .success(let film): selected = film.id; idea = ""
             case .failure(let failure): trouble = failure.localizedDescription
@@ -650,6 +733,7 @@ struct FilmStudioView: View {
     }
 
     private func status(_ film: FilmStudio.Film) -> String {
+        (film.engine == .h3 ? "H3 · " : "") + {
         switch film.state {
         case .waiting:  return "等着开拍"
         case .shooting: return "在拍 \(film.finished)/\(film.shots.count)"
@@ -657,6 +741,7 @@ struct FilmStudioView: View {
         case .done:     return "\(film.shots.count) 个镜头 · \(Int(Double(film.finished) * film.seconds)) 秒"
         case .failed:   return "没拍成"
         }
+        }()
     }
 }
 

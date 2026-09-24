@@ -251,9 +251,14 @@ print(",".join(parts).rstrip(","))' 2>/dev/null); \
 	  echo "  → corelocationcli not installed (skip GPS context; \`brew install corelocationcli\` to enable)"; \
 	fi; \
 	KINCODE_DEV_SKILLS="$(KINCODE_REPO)/skills"; \
+	STT_VAL=$$(defaults read dev.localkin.kinclawmac kinclaw.backend.stt 2>/dev/null); \
+	TTS_VAL=$$(defaults read dev.localkin.kinclawmac kinclaw.backend.tts 2>/dev/null); \
+	[[ -n "$$STT_VAL$$TTS_VAL" ]] && echo "  → voice from Settings: STT=$${STT_VAL:-default} TTS=$${TTS_VAL:-default}"; \
 	SEARXNG_VAL=""; \
-	if curl -s -o /dev/null -m 1 -w "%{http_code}" "http://localhost:8080/" 2>/dev/null | grep -q "^[23]"; then \
-	  SEARXNG_VAL="http://localhost:8080"; \
+	SEARXNG_TRY="$${SEARXNG_ENDPOINT:-$$(defaults read dev.localkin.kinclawmac kinclaw.backend.searxng 2>/dev/null)}"; \
+	SEARXNG_TRY="$${SEARXNG_TRY:-http://localhost:8080}"; \
+	if curl -s -o /dev/null -m 2 -w "%{http_code}" "$$SEARXNG_TRY/" 2>/dev/null | grep -q "^[23]"; then \
+	  SEARXNG_VAL="$$SEARXNG_TRY"; \
 	  printf "  → SearXNG ✓ ($$SEARXNG_VAL)\n"; \
 	else \
 	  printf "  → SearXNG :8080 not reachable — web_search will degrade to web_scrape\n"; \
@@ -267,6 +272,7 @@ print(",".join(parts).rstrip(","))' 2>/dev/null); \
 	      KINCLAW_SOUL_DIRS="$(KINCLAW_REPO)/souls" \
 	      KINCLAW_LOCATION="$$KINCLAW_LOCATION_VAL" \
 	      SEARXNG_ENDPOINT="$$SEARXNG_VAL" \
+	      STT_ENDPOINT="$$STT_VAL" TTS_ENDPOINT="$$TTS_VAL" \
 	      "$(LOCALKIN_BIN)/kinclaw" serve -port 5001 -no-record \
 	      -soul "$(PILOT_SOUL)" >$(LOG_DIR)/kinclaw.log 2>&1 & ); \
 	  else \
@@ -274,6 +280,7 @@ print(",".join(parts).rstrip(","))' 2>/dev/null); \
 	      KINCLAW_SOUL_DIRS="$(KINCLAW_REPO)/souls" \
 	      KINCLAW_LOCATION="$$KINCLAW_LOCATION_VAL" \
 	      SEARXNG_ENDPOINT="$$SEARXNG_VAL" \
+	      STT_ENDPOINT="$$STT_VAL" TTS_ENDPOINT="$$TTS_VAL" \
 	      "$(LOCALKIN_BIN)/kinclaw" serve -port 5001 -no-record \
 	      >$(LOG_DIR)/kinclaw.log 2>&1 & ); \
 	  fi; \

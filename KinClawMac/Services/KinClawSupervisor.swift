@@ -267,6 +267,22 @@ final class KinClawSupervisor: ObservableObject {
             }
         }
 
+        // STT_ENDPOINT / TTS_ENDPOINT — the same Settings → Backend values
+        // the app itself uses for voice. kinclaw's /api/voice/* proxy (the
+        // web UI's mic and speaker) reads these and otherwise assumes
+        // localhost:8000/8001, so once voice moved to the box the app
+        // worked and the web UI didn't. No default here: kinclaw has its own.
+        for (key, pref) in [("STT_ENDPOINT", "kinclaw.backend.stt"),
+                            ("TTS_ENDPOINT", "kinclaw.backend.tts")]
+        where env[key] == nil {
+            let value = UserDefaults.standard.string(forKey: pref)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !value.isEmpty {
+                env[key] = value
+                print("[KinClawSupervisor] \(key) from Settings: \(value)")
+            }
+        }
+
         // KINCLAW_SOUL_DIRS — tells the kinclaw spawn skill where to
         // find sibling souls (researcher / eye / critic). When pilot
         // calls `spawn(soul="researcher")`, kinclaw resolves the name

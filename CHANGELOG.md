@@ -8,6 +8,190 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Added — other people's best image prompts, and a named look for every film
+
+- **提示词库 in the Comfy tab.** devanshug2307/Awesome-AI-Image-Prompts (MIT,
+  235 prompts in 17 categories, each with its example picture), fetched from
+  the repository and kept. Search, open one in Qwen 2.1 (or Qwen edit for the
+  51 written for your own photo), put it into the open workflow, or
+  **换主题**: the writer keeps its structure, camera, light, textures, look and
+  negative list and changes only what it is of. One of its prompts is itself a
+  guide full of code fences, so numbered headings start entries whatever the
+  fences say (a fence-trusting parse found 60).
+- **Film's photography pass learned from them.** It is the director of
+  photography *and unit still photographer* on a high-budget feature, first
+  names one real film whose cinematography the whole film should look like —
+  "In the visual tone of … (year), cinematography by …" — then writes every
+  shot against it: at least five textures you could touch, and a closing
+  "Must not appear:" list. The look is kept on the film, shown on its page,
+  and given to every H3 prompt.
+
+### Added — Film: a narrator, and music under the film
+
+The voice-over was read in her voice — the companion's, bright and young,
+over the feeding of the five thousand — and there was no music at all. The
+box's kin audio has both, so each film is now given a narrator and a score
+once, by the writer, from what the film is about:
+
+- **The narrator** is a voice picked from the box's TTS server's own list
+  (`/voices`) and an `instruct` — how to read it, in words ("用低沉、庄重、
+  缓慢的语气，像在讲述古老的经文"). For 五饼二鱼 it chose Uncle Fu · 成熟男声.
+- **The music** is a MusicGen description in the story's own time and place
+  ("oud and ney flute with frame drum and sustained drone, adagio,
+  reverent… instrumental, no vocals"), made on the box by `kin audio music`
+  and laid under the whole cut: looped if the film is longer than 30 s,
+  faded in and out, and lowered while the narrator speaks. 配乐 toggle.
+- **The film narrator is its own tier.** Chat keeps the fast voice (qwen3-tts
+  0.6B on :8101); films get a *designed* voice — Qwen3-TTS 1.7B VoiceDesign as
+  its own box service on :8102 (Settings → 盒子上的服务), made from a sentence
+  the writer composes for each film ("老年男性，嗓音低沉温润如古木……像在黄昏
+  中亲口讲述自己少年时亲眼所见的神迹"). Chosen by ear against VoxCPM2 and the old
+  voice. And the voice-over is no longer four captions read one by one: it is
+  ONE continuous passage, written to the film's length and read in one go —
+  the take that won the listening test was the long sentence, not the short
+  lines. Laid from 0.6 s over the whole film; a passage slightly too long is
+  read up to 12% faster (pitch kept) rather than cut, because the writer does
+  not always keep to the length it is given (70 characters for 59 once).
+- **重新配音配乐** (and `film_rescore`) does it for a finished film without
+  filming anything; the old voice files and cut are kept aside.
+- Two fixes found on the way: a slow narrator's line (4.9 s) ran into the
+  next shot's and the overlap stopped the export ("Operation Stopped") — a
+  line now waits for the one before it; and the first voice request of a run
+  went out on a kept-alive connection the server had closed and was never
+  retried — it was always shot 1's line that was missing. It is retried once.
+
+### Added — Film: stories shot on MiniMax H3, with a cast
+
+What the video model could not do was keep a person: every still was drawn
+on its own, the man in shot 3 was not the man in shot 5, and the story
+rules learned to hide faces — hands, backs, silhouettes. H3 films from
+references, a picture of each person and a picture of the place, and keeps
+the faces and the clothes. "H3（人物一致）" beside the story picker:
+
+- **Cast first.** The writer names the people the story is about (at most
+  four) and what each looks like in the period; each is drawn once as a
+  chest-up portrait on a plain backdrop, and shown on the film's page.
+  The storyboard is told the film has a cast and to show their faces.
+- **Every still is the set.** The photographer's pictures are passed once
+  more through a single-job rewrite that takes the people out — told only
+  as an override inside the long brief, it drew headless torsos; told
+  "take them out", it hung their robes on posts; told "the place before
+  anyone arrived, never name clothes or posts", it drew the place.
+- **Each shot in H3's own words.** One call writes every shot's prompt in
+  the six-part form of MiniMax's official guide for reference mode (fetched
+  from their repository), with the portraits and the set labelled per shot.
+- **Two passes, because 96 GB is not both.** All portraits and sets are
+  drawn while the image model is loaded; then the diffusion servers are
+  stopped and every shot is filmed on H3 (4-step LoRA, about 5 s a shot,
+  native sound). A retake that needs a new set brings the image model back
+  for it. The graph is built directly — no ComfyUI page in the way.
+- The reviewer does not count a face against an H3 shot.
+- **Props carry across shots.** A shot's `props` names pictures in the film
+  folder (`shot-04.png`, the basket with the five loaves); H3 gets them after
+  the portraits and before the set, labelled "must look exactly like it".
+  Described only in words, the bread in 五饼二鱼's shot 7 came out as pale
+  white rolls beside shot 4's golden-brown barley loaves.
+
+### Added — Comfy: ComfyUI's ready-made workflows, as forms
+
+ComfyUI on the box does things nothing else here does, and it asks for a
+node graph. Most people who want what it makes do not build graphs — and
+do not need to: it ships about three hundred workflows that people who do
+built and tested. The Comfy tab lists them (thumbnail, what it does, how
+many gigabytes of models), opens one as a form, runs it on the box and
+brings back what it made to the art folder's `comfy/`, with the exact
+graph and prompt beside it so any run can be opened again.
+
+- **The graph lives in ComfyUI's own page**, in a web view that is usually
+  off screen. A template is a UI workflow — subgraphs, widgets promoted out
+  of them — and the server runs an API prompt; the conversion is the
+  frontend's own code, always the version that matches the server, so it
+  is asked rather than imitated. The form is the page's widgets; "编辑器"
+  shows the same page, and what is changed there is what runs.
+- **Words instead of a template.** "说你想要什么" has the writer model pick
+  the template and fill it; with one open, it changes what was asked and
+  nothing else, and a length or a shape goes into the setting that holds
+  it, not only into the prompt. It is told the inputs are the user's and
+  unseen — the first try described the template's sample picture (a boy
+  in a red cape) as if it were theirs.
+- **Official prompt guides.** For MiniMax H3 the writer is given MiniMax's
+  own prompting guide (fetched from their repo once and kept, not shipped),
+  and writes H3's structure: `subject_definitions`, `summary`, … .
+- **What is missing is said before running.** Models the workflow names
+  that the box lacks are listed with their size; the box downloads one
+  only after a confirm that names it. A loader still pointing at the
+  template's sample file (which is not on the box) blocks the run until a
+  file is chosen.
+- **Which ones run is on the list.** Every local template's graph is read
+  (240 of them, five seconds) and checked against the box's model folders
+  and node types: ✓ 能跑, 缺 N 个模型, or 缺插件, what runs sorted first and
+  a "只看能跑的" filter. Measured the day it was built: 3 of 240.
+- **Workflows from elsewhere.** Import a .json, a PNG ComfyUI made (the
+  graph is in its text chunks — drop it on the tab), or a link (GitHub
+  page links are turned into raw ones); API-format prompts load too. Custom
+  nodes a community workflow needs that the box lacks are named, and block
+  the run. "去哪找工作流" links the official and community collections.
+- **Pulling models from the tab.** "全部拉取" gets everything the open
+  workflow lacks after one confirm listing each file and the total; "拉模型…"
+  takes any Hugging Face file link, guesses the folder from its path
+  (Comfy-Org repos use ComfyUI's folder names) and shows the size and the
+  box's free space. The box downloads with its own Hugging Face login, read
+  there and never sent to the Mac, and resumes a broken download.
+- **Half a download is not a model.** curl -o writes under the final name
+  as it goes, so a download that broke off (the H3 transformer: 8.75 of
+  20.97 GB, connection reset) looked present to a check of names and could
+  not be loaded. Every present file is now checked against the size its own
+  safetensors header promises; a short one is listed as "只下了 42%" and
+  resumed from where it stopped.
+- **ollamadiffuser's models in ComfyUI workflows**, through the node pack in
+  ollamadiffuser's `integrations/comfyui` (text to image, edit with up to four
+  references, video with first frame / audio / control video / LoRA), which
+  calls its HTTP API rather than loading its MLX weights; four starter
+  workflows in 我的. Qwen first frame → LTX 2.5 clip: 130 s.
+- **Ollama's models in ComfyUI workflows** — `scripts/comfy/comfyui-ollama`,
+  one node (Ollama · Chat): text and pictures in, text out, from whatever the
+  box's Ollama serves (local and :cloud), instead of ComfyUI's LLM templates
+  loading another copy of a language model. Tasks: image prompt, video
+  prompt, H3 prompt (MiniMax's guide), translate, describe the image. Three
+  starter workflows; one Chinese sentence → kimi writes both prompts → Qwen
+  first frame → LTX clip, 199 s.
+- **What the box already has is linked, not downloaded again.** ollamadiffuser's
+  models are MLX conversions ComfyUI (PyTorch) cannot read, but a file it
+  keeps in the original format — the LTX IC-LoRAs — and single files in the
+  Hugging Face cache are found by name and symlinked into ComfyUI's folder.
+- **Memory is shared, not fought over.** A run first stops the Film tab's
+  draw/edit servers (they come back on demand); Film and Motion ask
+  ComfyUI to let go of its models before they shoot; a run is refused while
+  either is shooting.
+- **For agents:** `comfy_templates` (with `runnable`), `comfy_run` (template /
+  ask / changes / files), `comfy_import`, `comfy_status`, `comfy_stop`. Measured: Qwen Image 2.1 text-to-
+  image at 768×1376, 133 s; the same picture edited to night, 192 s.
+- ComfyUI is a service in Settings → Backend → 盒子上的服务, started with
+  `AIOHTTP_NOSENDFILE=1`: with sendfile on, every file it serves over the
+  network arrives without headers (fine on the loopback, which is why it
+  looks fine on the box).
+
+### Added — Jev's book shelf, and smaller things from the same days
+- **书架 in the Jev tab.** A folder of books (.txt/.md/.pdf/.epub) is listed
+  from filenames alone — `书名-朝代-作者` gives the title, dynasty and
+  author — and each book is one Choice question to Jev with the shelves as
+  options. A probability for every shelf comes back, so a book the model is
+  unsure of is set aside rather than filed quietly. About 150 ms and 400
+  tokens a book. MCP: `books_scan`, `books_sort`, `books_status`.
+- **The TypeSafe key from outside the app.** `TYPESAFE_API_KEY` or
+  `~/.typesafe_key` is used first — no Keychain dialog after every rebuild.
+- **Voice pickers list the TTS server's own voices** (`GET /voices`), with
+  Kokoro's list only when the server can't say. Sixteen Kokoro names had
+  folded onto a handful of Qwen3 speakers.
+- **The mouse wheel reaches full-screen programs in the Term tab.** SwiftTerm
+  never passes the wheel on in the alternate screen; it is forwarded as the
+  mouse reports the program asked for (Claude Code scrolls again).
+- **Motion's 「停」** (and `film_stop`, which stops Film or Motion): a take
+  can be called off; what is filmed stays, 「接着拍」 carries on.
+- kinclaw's web UI voice follows Settings → Backend (`STT_ENDPOINT` /
+  `TTS_ENDPOINT`); a picture is cut to the film's shape before it becomes a
+  first frame; the draw server picks its own step count per model.
+
 ### Companion mode (⇧⌘M)
 
 The panel becomes a picture and a voice. No transcript, no buttons —

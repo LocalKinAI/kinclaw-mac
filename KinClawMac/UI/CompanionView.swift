@@ -73,6 +73,7 @@ struct CompanionView: View {
     // voice mode uses the same speaker. It is offered here because this
     // is the one view where you are listening to it.
     @AppStorage("kinclaw.voice.tts.speaker") private var voice = "auto"
+    @ObservedObject private var ttsVoices = TTSVoices.shared
     @AppStorage("kinclaw.voice.tts.speed") private var speed: Double = 1.0
 
     @State private var current: URL?
@@ -513,12 +514,11 @@ struct CompanionView: View {
     private var voiceMenu: some View {
         Menu {
             Picker("声音", selection: $voice) {
-                Text("自动（中文晓晓 · 英文 Bella）").tag("auto")
-                Section("中文") {
-                    ForEach(KokoroVoice.chinese) { v in Text(v.label).tag(v.id) }
-                }
-                Section("English") {
-                    ForEach(KokoroVoice.english) { v in Text(v.label).tag(v.id) }
+                Text(ttsVoices.autoLabel).tag("auto")
+                ForEach(ttsVoices.groups) { group in
+                    Section(group.title) {
+                        ForEach(group.voices, id: \.id) { v in Text(v.label).tag(v.id) }
+                    }
                 }
             }
             .pickerStyle(.inline)
@@ -655,7 +655,7 @@ struct CompanionView: View {
     }
 
     private var voiceLabel: String {
-        let name = KokoroVoice.all.first { $0.id == voice }?.label ?? "自动"
+        let name = ttsVoices.label(for: voice) ?? "自动"
         let rate = abs(speed - 1.0) < 0.01 ? "" : String(format: " · %.1fx", speed)
         return name + rate
     }

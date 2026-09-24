@@ -99,6 +99,10 @@ struct MotionStudioView: View {
                     Text(status(take)).font(.system(size: 10)).foregroundColor(.secondary)
                     Spacer()
                     if take.state == .failed {
+                        if studio.working == take.id {
+                            Button("停") { studio.stop() }.controlSize(.small)
+                                .help("停下这一段。已经拍好的段留着，之后点「接着拍」继续")
+                        }
                         Button("接着拍") { if case .failure(let f) = studio.resume(take.id) { trouble = f.localizedDescription } }
                             .controlSize(.small).disabled(studio.working != nil)
                     }

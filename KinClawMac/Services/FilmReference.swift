@@ -161,6 +161,30 @@ enum FilmReference {
         return (try? CIContext().writePNGRepresentation(of: picture, to: file, format: .RGBA8, colorSpace: space)) != nil
     }
 
+    /// Cut a picture to a shape and scale it to exactly that size: the middle
+    /// is kept, the sides (or the top and bottom) go. Needed because an edit
+    /// comes back the shape of what it was given — her anchor is square — and
+    /// a film with a shape has to hand the video model a first frame of that
+    /// shape, or the model letterboxes it or stretches her.
+    @discardableResult
+    static func reshape(_ file: URL, to size: CGSize) -> Bool {
+        guard size.width > 0, size.height > 0, let picture = CIImage(contentsOf: file) else { return false }
+        let have = picture.extent
+        guard have.width > 0, have.height > 0 else { return false }
+        if abs(have.width - size.width) < 1, abs(have.height - size.height) < 1 { return true }
+        let wanted = size.width / size.height, mine = have.width / have.height
+        let cut = mine > wanted
+            ? CGRect(x: have.midX - have.height * wanted / 2, y: have.minY, width: have.height * wanted, height: have.height)
+            : CGRect(x: have.minX, y: have.midY - have.width / wanted / 2, width: have.width, height: have.width / wanted)
+        let middle = picture.cropped(to: cut.integral)
+        let scale = size.width / middle.extent.width
+        let made = middle
+            .transformed(by: CGAffineTransform(translationX: -middle.extent.minX, y: -middle.extent.minY))
+            .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+            .cropped(to: CGRect(origin: .zero, size: size))
+        return write(made, to: file)
+    }
+
     /// How wide her face is in a picture, in pixels — what a reviewer, or a
     /// log line, can say about whether a frame is close enough to hold her.
     static func faceWidth(in url: URL) -> Int? {

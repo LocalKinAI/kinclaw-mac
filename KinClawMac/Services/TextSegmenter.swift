@@ -203,7 +203,14 @@ enum TextSegmenter {
     static func voice(forLanguage language: String) -> String? { defaultVoices[language] }
 
     /// Kokoro wants a bare language tag ("zh"), derived from the voice prefix.
+    /// Other servers' voices ("vivian") aren't named by language; their
+    /// language comes from the server's own voice list.
     static func language(forVoice voice: String) -> String {
+        let chars = Array(voice)
+        let isKokoroID = chars.count > 3 && (chars[1] == "f" || chars[1] == "m") && chars[2] == "_"
+        if !isKokoroID, let lang = TTSVoices.language(ofServerVoice: voice) {
+            return lang
+        }
         guard let first = voice.first, let lang = prefixToLang[first] else { return "en" }
         return lang
     }

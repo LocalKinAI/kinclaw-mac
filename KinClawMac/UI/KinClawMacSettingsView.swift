@@ -728,6 +728,7 @@ private struct AgentsSettingsTab: View {
 private struct VoiceSettingsTab: View {
     @AppStorage("kinclaw.voice.tts.speaker") private var speaker = "auto"
     @AppStorage("kinclaw.voice.tts.speed") private var speed: Double = 1.0
+    @ObservedObject private var ttsVoices = TTSVoices.shared
     @AppStorage("kinclaw.voice.silenceMarginDB") private var silenceMargin: Double = 5
     @AppStorage("kinclaw.voice.wakeWord") private var wakeWord = ""
     @AppStorage("kinclaw.voice.wakeSessionSeconds") private var wakeSessionSeconds: Double = 45
@@ -781,17 +782,19 @@ private struct VoiceSettingsTab: View {
 
             SettingsCard("Text-to-Speech (replies spoken)") {
                 SettingsRow(label: "Voice") {
+                    // The voices the TTS server has (GET /voices); Kokoro's
+                    // list when the server can't say.
                     Picker("", selection: $speaker) {
-                        Text("Auto (zh: xiaoxiao · en: af_bella)").tag("auto")
-                        Section("中文") {
-                            ForEach(KokoroVoice.chinese) { v in Text("\(v.id) · \(v.label)").tag(v.id) }
-                        }
-                        Section("English") {
-                            ForEach(KokoroVoice.english) { v in Text("\(v.id) · \(v.label)").tag(v.id) }
+                        Text(ttsVoices.autoLabel).tag("auto")
+                        ForEach(ttsVoices.groups) { group in
+                            Section(group.title) {
+                                ForEach(group.voices, id: \.id) { v in Text(v.label).tag(v.id) }
+                            }
                         }
                     }
                     .labelsHidden()
                     .frame(maxWidth: 280)
+                    .task { await ttsVoices.refresh() }
                 }
                 SettingsRow(label: "Speed") {
                     HStack {

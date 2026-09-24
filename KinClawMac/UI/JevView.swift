@@ -1,7 +1,10 @@
 import SwiftUI
 
-/// The Jev tab: a decision model plays games, one multiple-choice question a
-/// move, and what it was choosing between is shown beside the board.
+/// The Jev tab: what a decision model does here. Games, where each move is
+/// one multiple-choice question and what it was choosing between is shown
+/// beside the board — and the shelf, where two thousand books on a disk are
+/// each one question of the same kind. Same model, same shape, same panel:
+/// the program measures, the model judges.
 struct JevView: View {
     @ObservedObject private var arcade = JevArcade.shared
     @State private var key = ""
@@ -9,20 +12,26 @@ struct JevView: View {
     @AppStorage(JevArcade.thinkKey) private var think = false
     @State private var enteringKey = false
     @State private var chatModels: [(host: String, models: [String])] = []
+    /// Nil is a game; "books" is the shelf.
+    @AppStorage("kinclaw.jev.doing") private var doing = ""
 
     var body: some View {
         HStack(spacing: 0) {
             games.frame(width: 150)
             Divider().opacity(0.15)
-            VStack(spacing: 0) {
-                HStack(alignment: .top, spacing: 14) {
-                    board
-                    thinking.frame(maxWidth: .infinity, alignment: .topLeading)
+            if doing == "books" {
+                BookShelfView()
+            } else {
+                VStack(spacing: 0) {
+                    HStack(alignment: .top, spacing: 14) {
+                        board
+                        thinking.frame(maxWidth: .infinity, alignment: .topLeading)
+                    }
+                    .padding(14)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    Divider().opacity(0.15)
+                    controls
                 }
-                .padding(14)
-                .frame(maxHeight: .infinity, alignment: .top)
-                Divider().opacity(0.15)
-                controls
             }
         }
     }
@@ -33,7 +42,7 @@ struct JevView: View {
         VStack(alignment: .leading, spacing: 6) {
             ForEach(arcade.games.map { $0.id }, id: \.self) { id in
                 let game = arcade.games.first { $0.id == id }!
-                Button { arcade.choose(id) } label: {
+                Button { arcade.choose(id); doing = "" } label: {
                     HStack(spacing: 8) {
                         Image(systemName: game.symbol).frame(width: 18)
                         Text(game.title).font(.system(size: 12, weight: .medium))
@@ -44,6 +53,21 @@ struct JevView: View {
                 }
                 .buttonStyle(.plain)
             }
+            Divider().opacity(0.12).padding(.vertical, 4)
+            // Not a game, and the same thing: one question a book.
+            Button { doing = "books" } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "text.book.closed").frame(width: 18)
+                    Text("书架").font(.system(size: 12, weight: .medium))
+                    Spacer(minLength: 0)
+                    if BookShelf.shared.books.count > 0 {
+                        Text("\(BookShelf.shared.books.count)").font(.system(size: 9)).foregroundColor(.secondary)
+                    }
+                }
+                .padding(8)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(doing == "books" ? 0.10 : 0)))
+            }
+            .buttonStyle(.plain)
             Spacer()
             Text("每一步是一道选择题：游戏把能走的每一步会造成什么写成字，模型只管挑。量由程序量，判断留给模型。")
                 .font(.system(size: 9)).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)

@@ -157,13 +157,28 @@ final class MotionStudio: ObservableObject {
         return .success(take)
     }
 
+    /// The work in hand, so that it can be called off: a ten-second stretch is
+    /// seven minutes of the box's time, and changing your mind should not cost
+    /// the app. What is filmed stays filmed; 「接着拍」 carries on.
+    private var work: Task<Void, Never>?
+
+    @discardableResult
+    func stop() -> String? {
+        guard work != nil, working != nil else { return nil }
+        let what = working
+        work?.cancel()
+        work = nil
+        return what
+    }
+
     private func produce(_ id: String) {
         working = id
-        Task { @MainActor in
-            defer { working = nil; progress = nil; since = nil }
+        work = Task { @MainActor in
+            defer { working = nil; work = nil; progress = nil; since = nil }
             guard var take = takes.first(where: { $0.id == id }) else { return }
             let fm = FileManager.default
             let client = DiffuserClient.shared
+            await ComfyStudio.yieldMemory()    // the room ComfyUI's last models are sitting in
             do {
                 if let camera = take.camera {
                     try await produce3D(&take, camera: camera)
@@ -261,7 +276,8 @@ final class MotionStudio: ObservableObject {
                 take.note = nil
             } catch {
                 take.state = .failed
-                take.note = FilmStudio.isUnreachable(error)
+                take.note = Task.isCancelled ? "停下了。「接着拍」从这一段继续"
+                    : FilmStudio.isUnreachable(error)
                     ? "盒子上的服务连不上（\(error.localizedDescription)）。起来之后点「接着拍」"
                     : error.localizedDescription
                 for index in take.segments.indices where take.segments[index].state == .filming { take.segments[index].state = .waiting }

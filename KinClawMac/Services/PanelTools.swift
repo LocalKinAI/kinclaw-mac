@@ -450,6 +450,9 @@ enum PanelTools {
                     "title": ["type": "string", "description": "A short title."],
                     "idea": ["type": "string", "description": "The user's idea, in their words. Given alone, with no shots, the studio writes the storyboard itself."],
                     "count": ["type": "integer", "description": "With idea alone: how many shots, 2–8. Default 4."],
+                    "shape": ["type": "string", "description": "square (1:1, 704×704 — the default) | portrait (9:16, 576×1024, what a phone holds upright) | landscape (16:9)."],
+                    "kind": ["type": "string", "description": "auto (default: the studio reads the idea and decides) | story (a sequence of events — each shot drawn on its own, the place may change, shots of things and places rather than of one person) | activity (one continuous performance in one place, every shot carrying on from the last). Pass story or activity only to overrule a reading that came out wrong."],
+                    "engine": ["type": "string", "description": "What films a story: ltx (default; ~100 s a shot, each shot from its own picture, so people are shown as hands and backs) | h3 (MiniMax H3 through ComfyUI on the box: the story's people are cast and drawn once, and every shot is filmed from their portraits and the shot's set — the same faces throughout, native sound; ~5–7 minutes a shot). Continuous-activity films always use ltx."],
                     "look": ["type": "string", "description": "Shared by every frame: \"35mm film still, golden hour, warm palette, shallow depth of field\"."],
                     "place": ["type": "string", "description": "The one location, said once: \"a stone-paved clearing beside a lake in a city park, a red wooden pavilion behind it, a large willow on the right, morning mist\"."],
                     "lead": ["type": "boolean", "description": "true: she (the companion) is in every shot. Default false."],
@@ -555,8 +558,104 @@ enum PanelTools {
             "inputSchema": ["type": "object", "properties": [:] as [String: Any]],
         ],
         [
+            "name": "books_scan",
+            "description": "Walk a folder for books — .txt, .md, .pdf, .epub over 2 KB — and list them on the shelf in the Jev tab. Only names are read, so it is a second for a few thousand files; the title, the dynasty and the author are taken from filenames of the form 书名-朝代-作者. Books already known keep the shelf they were put on.",
+            "inputSchema": [
+                "type": "object",
+                "properties": ["folder": ["type": "string", "description": "The folder to walk. Default: the one in the tab."]],
+            ],
+        ],
+        [
+            "name": "books_sort",
+            "description": "Put the books on shelves. Each one is a single Choice question to Jev — the shelves are the options — with the title, the dynasty, the author and the first page of the file as the state; what comes back is a probability for every shelf, so a book the model was not sure about is flagged rather than filed quietly. About 150 ms and a few hundred tokens a book. Needs the user's TypeSafe key, which only they can enter, in the Jev tab.",
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "limit": ["type": "integer", "description": "Only this many, for a look before spending on all of them."],
+                    "again": ["type": "boolean", "description": "Re-file the ones already done — what to do after the shelves change. Default false."],
+                ],
+            ],
+        ],
+        [
+            "name": "books_status",
+            "description": "What is on each shelf in the Jev tab, how many are still unsorted, how many the model was unsure about, and what Jev has cost so far.",
+            "inputSchema": ["type": "object", "properties": [String: Any]()],
+        ],
+        [
             "name": "jev_status",
             "description": "What the Jev tab is doing right now, without touching it: which game, who is playing, whether a game is running, how it stands, moves so far, agreement with the heuristic, time per move, Jev's tokens. Look here before jev_play, which deals a new game over whatever is on the board.",
+            "inputSchema": ["type": "object", "properties": [String: Any]()],
+        ],
+        [
+            "name": "comfy_templates",
+            "description": "ComfyUI's ready-made workflows on the user's box (about 300 that run locally: text-to-image, image editing, video, audio, 3D…), plus the ones the user saved. Search by words in the title, model or tags — e.g. \"qwen\", \"视频\", \"H3\", \"背景\". Returns name, title, category, models and download size. Pass a name to comfy_run.",
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "query": ["type": "string", "description": "Words to look for. Empty lists the categories and the user's saved workflows."],
+                    "cloud": ["type": "boolean", "description": "Include api_ templates, which call paid cloud services instead of the box. Default false."],
+                    "runnable": ["type": "boolean", "description": "Only the ones whose models and nodes are all on the box — what can run right now. Default false; each line says either way."],
+                ],
+            ],
+        ],
+        [
+            "name": "comfy_run",
+            "description": "Run a ComfyUI workflow on the box and bring back what it made (saved under the art folder's comfy/). Open a template by `template` (a name from comfy_templates), or give only `ask` and the writer model picks the template. `ask` is what the user wants in their words — the writer turns it into the workflow's settings, writing the prompt the way that model wants it (for MiniMax H3 it follows MiniMax's official prompt guide). `changes` sets exact values (node and name from comfy_status). Waits for the result unless wait is false; video workflows take many minutes. Refused while the Film or Motion tab is shooting.",
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "template": ["type": "string", "description": "Template name. Omit to keep the workflow that is open, or to let `ask` pick one."],
+                    "ask": ["type": "string", "description": "What the user wants, in their words."],
+                    "changes": ["type": "array", "description": "Exact values: [{\"node\": \"459\", \"name\": \"prompt\", \"value\": \"...\"}].",
+                                "items": ["type": "object"]],
+                    "files": ["type": "array", "description": "Local files for the workflow's inputs (pictures, videos, sounds): [{\"node\": \"137\", \"path\": \"/path/to/picture.png\"}]. Uploaded to the box. A template's own sample inputs are not on the box, so a workflow that starts from a picture needs this.",
+                              "items": ["type": "object"]],
+                    "run": ["type": "boolean", "description": "Default true. False only opens and fills the workflow, to look at it with comfy_status first."],
+                    "wait": ["type": "boolean", "description": "Default true: wait up to 20 minutes for the result."],
+                ],
+            ],
+        ],
+        [
+            "name": "comfy_import",
+            "description": "Import a ComfyUI workflow into the Comfy tab's 我的 and open it: a local .json, a PNG ComfyUI made (the graph is inside it), or a link to either (GitHub page links work). Says what the box is missing to run it — models, or community custom nodes.",
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "path": ["type": "string", "description": "A local .json or .png."],
+                    "url": ["type": "string", "description": "A link to a .json or .png."],
+                ],
+            ],
+        ],
+        [
+            "name": "comfy_status",
+            "description": "The Comfy tab right now: the open workflow and its settings (node, name, value — what comfy_run's `changes` take), models it needs that the box lacks, whether it is running, and the latest results with their file paths.",
+            "inputSchema": ["type": "object", "properties": [String: Any]()],
+        ],
+        [
+            "name": "comfy_stop",
+            "description": "Stop the ComfyUI workflow that is running (ComfyUI interrupts it on the box).",
+            "inputSchema": ["type": "object", "properties": [String: Any]()],
+        ],
+        [
+            "name": "film_recut",
+            "description": "Cut a film again from the files it has — shots, voice-over, music — without making anything new. Use after a shot, the narration or the music was replaced by hand.",
+            "inputSchema": ["type": "object", "properties": ["film": ["type": "string", "description": "The film's id or title."]], "required": ["film"]],
+        ],
+        [
+            "name": "film_rescore",
+            "description": "Give a finished film a fitting narrator and background music without filming anything: the writer picks a voice from the box's TTS (and how it should read — grave, warm…) and describes music for MusicGen; every voice-over line is read again in that voice, the music is made on the box (kin audio MusicGen; first use downloads it there, ~4 GB) and laid under the film, lower while the narrator speaks; then it is cut again. Old voice files and cut are kept aside. `music: false` does the voice only.",
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "film": ["type": "string", "description": "The film's id or title."],
+                    "music": ["type": "boolean", "description": "Default true."],
+                ],
+                "required": ["film"],
+            ],
+        ],
+        [
+            "name": "film_stop",
+            "description": "Stop what the Film tab or the Motion tab is doing right now — a film being shot, a take being filmed, a review in progress. What is already done stays done and can be carried on (film_reshoot with no shot, or 「接着拍」). The clip the box is already rendering finishes there and is thrown away, so the box is free again within a minute or two. Use it when the user says to stop, or when what is being made is plainly not what they asked for.",
             "inputSchema": ["type": "object", "properties": [String: Any]()],
         ],
         [
@@ -685,6 +784,30 @@ enum PanelTools {
         return lines
     }
 
+    private static func comfyReport() -> String {
+        let comfy = ComfyStudio.shared
+        var lines: [String] = []
+        if let working = comfy.working { lines.append("正在：\(working)\(comfy.progress.map { " \(Int($0 * 100))%" } ?? "")") }
+        if let note = comfy.note { lines.append(note) }
+        if let t = comfy.current {
+            lines.append("打开的工作流：\(t.name)（\(t.title)）")
+            for f in comfy.fields {
+                let value = f.value.count > 300 ? String(f.value.prefix(300)) + "…" : f.value
+                lines.append("  [\(f.node)] \(f.nodeTitle) · \(f.name) = \(value)\(f.options.map { " （可选 \($0.prefix(12).joined(separator: " | "))\($0.count > 12 ? " …" : "")）" } ?? "")")
+            }
+            for m in comfy.missing {
+                lines.append("  缺模型：\(m.directory)/\(m.name)" + (m.partial.map { "（只下了 \(ComfyStudio.gigabytes($0))，中途断了，可以接着下）" } ?? "") + (m.onBox.map { "（盒子上已有：\($0)，可以直接链接）" } ?? m.bytes.map { " \(ComfyStudio.gigabytes($0))" } ?? ""))
+            }
+        } else {
+            lines.append("没有打开的工作流")
+        }
+        if let run = comfy.runs.first {
+            lines.append("最近一次：\(run.title)，\(run.outputs.count) 个文件")
+            lines += run.outputs.map { "  \($0.path)" }
+        }
+        return lines.joined(separator: "\n")
+    }
+
     static func call(_ name: String, _ args: [String: Any]) async -> (String, Bool) {
         switch name {
         case "browser_open":  return await browserOpen(args)
@@ -792,6 +915,37 @@ enum PanelTools {
             var lines = jevReport(arcade)
             if cutShort { lines.append("到 55 秒先停在这儿了；在 Jev 标签里点「开始」可以接着玩。") }
             return (lines.joined(separator: "\n"), arcade.trouble != nil && arcade.moves == 0)
+        case "books_scan":
+            let shelf = BookShelf.shared
+            NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: ["mode": "jev"])
+            let folder = (args["folder"] as? String) ?? BookShelf.folder
+            if let given = args["folder"] as? String, !given.isEmpty { UserDefaults.standard.set(given, forKey: BookShelf.folderKey) }
+            switch shelf.scan(folder) {
+            case .success(let count):
+                let waiting = shelf.books.filter { $0.shelf == nil }.count
+                return ("在 \(folder) 下找到 \(count) 本，其中 \(waiting) 本还没分类。books_sort 分类", false)
+            case .failure(let failure): return (failure.localizedDescription, true)
+            }
+        case "books_sort":
+            let shelf = BookShelf.shared
+            guard shelf.working == nil else { return ("正在分类：\(shelf.working!)", true) }
+            NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: ["mode": "jev"])
+            shelf.sort(again: args["again"] as? Bool ?? false, limit: args["limit"] as? Int)
+            if let trouble = shelf.trouble { return (trouble, true) }
+            return ("开始分类了。books_status 看进度", false)
+        case "books_status":
+            let shelf = BookShelf.shared
+            var lines: [String] = []
+            if let busy = shelf.working { lines.append("正在：\(busy)") }
+            if let trouble = shelf.trouble { lines.append("上一次的问题：\(trouble)") }
+            let waiting = shelf.books.filter { $0.shelf == nil }.count
+            let unsure = shelf.books.filter { $0.shelf != nil && $0.unsure }.count
+            lines.append("一共 \(shelf.books.count) 本 · 分好 \(shelf.books.count - waiting) · 还没分 \(waiting) · 不确定 \(unsure)")
+            for entry in shelf.counted { lines.append("  \(entry.shelf)：\(entry.books.count)") }
+            if shelf.tokens > 0 {
+                lines.append("Jev 读了 \(shelf.tokens) token ≈ $\(String(format: "%.4f", Double(shelf.tokens) * 0.042 / 1_000_000))")
+            }
+            return (lines.joined(separator: "\n"), false)
         case "jev_status":
             let arcade = JevArcade.shared
             let state = arcade.running ? "正在玩" : arcade.game.over ? "这一局结束了" : arcade.moves > 0 ? "停着，没下完" : "还没开始"
@@ -828,6 +982,120 @@ enum PanelTools {
                 return "「\(take.title)」\(take.id)：\(Int(take.seconds)) 秒，\(state)"
             }
             return ((studio.progress.map { "正在：\($0)\n" } ?? "") + lines.joined(separator: "\n"), false)
+        case "comfy_templates":
+            let comfy = ComfyStudio.shared
+            if comfy.templates.isEmpty { await comfy.refresh() }
+            if comfy.templates.isEmpty { return (comfy.note ?? "拿不到 ComfyUI 的模板", true) }
+            let cloud = args["cloud"] as? Bool ?? false
+            let q = (args["query"] as? String ?? "").trimmingCharacters(in: .whitespaces).lowercased()
+            if q.isEmpty, args["runnable"] as? Bool == true {
+                if comfy.readiness.isEmpty { await comfy.scan() }
+                let ok = (comfy.saved + comfy.templates).filter { comfy.readiness[$0.name]?.runs == true }
+                return ("盒子上现在能跑的 \(ok.count) 个：\n" + ok.map { "· \($0.name) — \($0.title)" }.joined(separator: "\n"), false)
+            }
+            if q.isEmpty {
+                let counts = comfy.categories.map { c in "\(c) \(comfy.templates.filter { $0.category == c && (cloud || $0.local) }.count)" }
+                return ("分类：" + counts.joined(separator: " · ") + "\n我的：" + (comfy.saved.isEmpty ? "（没有）" : comfy.saved.map(\.name).joined(separator: "、")), false)
+            }
+            let words = q.split(separator: " ").map(String.init)
+            if comfy.readiness.isEmpty { await comfy.scan() }
+            let runnable = args["runnable"] as? Bool ?? false
+            let hits = (comfy.saved + comfy.templates).filter { t in
+                (cloud || t.local) && (!runnable || comfy.readiness[t.name]?.runs == true) && words.allSatisfy { w in
+                    [t.name, t.title, t.description, t.category, t.also.joined(separator: " "), t.models.joined(separator: " "), t.tags.joined(separator: " ")].contains { $0.lowercased().contains(w) }
+                }
+            }
+            if hits.isEmpty { return ("没有「\(q)」的模板", false) }
+            let lines = hits.prefix(25).map { t in
+                "· \(t.name) — \(t.title)（\(t.category)\(t.models.isEmpty ? "" : " · " + t.models.joined(separator: ", "))\(t.size.map { $0 > 0 ? " · " + ComfyStudio.gigabytes($0) : "" } ?? "")\(t.local ? "" : " · 云端付费")）" + {
+                    guard let r = comfy.readiness[t.name] else { return "" }
+                    return r.runs ? " ✓ 能跑" : !r.nodes.isEmpty ? " ✗ 缺插件" : r.lacking > 0 ? " ✗ 缺 \(r.lacking)/\(r.models) 个模型" : ""
+                }()
+            }
+            return ("\(hits.count) 个\(hits.count > 25 ? "，前 25 个" : "")：\n" + lines.joined(separator: "\n"), false)
+        case "comfy_run":
+            let comfy = ComfyStudio.shared
+            if let busy = comfy.busyElsewhere { return (busy + "，等它拍完", true) }
+            guard !comfy.running else { return ("ComfyUI 正在跑一个，先 comfy_status 看看或 comfy_stop", true) }
+            NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: ["mode": "comfy"])
+            if comfy.templates.isEmpty { await comfy.refresh() }
+            if let name = args["template"] as? String, !name.isEmpty {
+                guard let t = comfy.template(named: name) else { return ("没有叫 \(name) 的模板，用 comfy_templates 找", true) }
+                await comfy.open(t)
+                guard comfy.current?.id == t.id else { return (comfy.note ?? "打不开 \(name)", true) }
+            }
+            if let ask = args["ask"] as? String, !ask.trimmingCharacters(in: .whitespaces).isEmpty {
+                await comfy.ask(ask)
+            }
+            guard comfy.current != nil else { return (comfy.note ?? "没有打开的工作流：给 template 或 ask", true) }
+            for change in args["changes"] as? [[String: Any]] ?? [] {
+                guard let node = change["node"].map({ "\($0)" }), let name = change["name"] as? String, let value = change["value"],
+                      let field = comfy.fields.first(where: { $0.node == node && $0.name == name }) else { continue }
+                await comfy.set(field, to: value as? String ?? "\(value)")
+            }
+            for file in args["files"] as? [[String: Any]] ?? [] {
+                guard let node = file["node"].map({ "\($0)" }), let path = file["path"] as? String,
+                      FileManager.default.fileExists(atPath: (path as NSString).expandingTildeInPath),
+                      let field = comfy.fields.first(where: { $0.node == node && $0.isFile }) else {
+                    return ("files 里这一项用不了（node 不是读文件的节点，或文件不存在）：\(file)", true)
+                }
+                await comfy.upload(URL(fileURLWithPath: (path as NSString).expandingTildeInPath), into: field)
+            }
+            if args["run"] as? Bool != false, comfy.missing.isEmpty, comfy.fields.contains(where: \.needsInput), let why = comfy.blocked {
+                return (why + "。用 files 传本地文件：" + comfy.fields.filter(\.needsInput).map { "node \($0.node)（\($0.nodeTitle)）" }.joined(separator: "、"), true)
+            }
+            if !comfy.missing.isEmpty {
+                return ("「\(comfy.current?.title ?? "")」缺模型，盒子上没有：\n" + comfy.missing.map { "· \($0.directory)/\($0.name) \($0.bytes.map(ComfyStudio.gigabytes) ?? "")" }.joined(separator: "\n")
+                        + "\n下载要用户在 Comfy 标签里点「下载」确认。", true)
+            }
+            if args["run"] as? Bool == false { return (comfyReport(), false) }
+            comfy.run()
+            guard args["wait"] as? Bool ?? true else { return ("开始跑「\(comfy.current?.title ?? "")」，用 comfy_status 看结果", false) }
+            for _ in 0..<600 {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                if !comfy.running { break }
+            }
+            if comfy.running { return ("还在跑（20 分钟了），用 comfy_status 看", false) }
+            return (comfyReport(), false)
+        case "comfy_import":
+            let comfy = ComfyStudio.shared
+            guard !comfy.running else { return ("ComfyUI 正在跑，等它跑完", true) }
+            NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: ["mode": "comfy"])
+            if let path = args["path"] as? String, !path.isEmpty {
+                let file = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+                guard FileManager.default.fileExists(atPath: file.path) else { return ("没有这个文件：\(path)", true) }
+                await comfy.importWorkflow(from: file)
+            } else if let url = args["url"] as? String, !url.isEmpty {
+                await comfy.importWorkflow(from: url)
+            } else {
+                return ("comfy_import 需要 path 或 url", true)
+            }
+            var report = comfyReport()
+            if !comfy.missingNodes.isEmpty { report = "缺社区节点：\(comfy.missingNodes.joined(separator: "、"))\n" + report }
+            return (report, comfy.current == nil)
+        case "comfy_status":
+            return (comfyReport(), false)
+        case "comfy_stop":
+            guard ComfyStudio.shared.running else { return ("ComfyUI 没在跑", false) }
+            ComfyStudio.shared.stop()
+            return ("停了", false)
+        case "film_recut":
+            guard let id = args["film"] as? String else { return ("film_recut 需要 film", true) }
+            switch FilmStudio.shared.recut(film: id) {
+            case .success(let film): return ("在重新剪「\(film.title)」", false)
+            case .failure(let failure): return (failure.localizedDescription, true)
+            }
+        case "film_rescore":
+            guard let id = args["film"] as? String else { return ("film_rescore 需要 film", true) }
+            switch FilmStudio.shared.rescore(film: id, music: args["music"] as? Bool ?? true) {
+            case .success(let film): return ("在给「\(film.title)」重新配音\((args["music"] as? Bool ?? true) ? "配乐" : "")，完成后重新剪。film_status 看进度", false)
+            case .failure(let failure): return (failure.localizedDescription, true)
+            }
+        case "film_stop":
+            let film = FilmStudio.shared.stop(), motion = MotionStudio.shared.stop()
+            if film == nil, motion == nil { return ("片场和动作都没在忙，没什么可停的", false) }
+            let said = [film.map { "片场停了（\($0)）" }, motion.map { "动作停了（\($0)）" }].compactMap { $0 }
+            return (said.joined(separator: "；") + "。已经做好的留着，「接着拍」可以继续", false)
         case "film_review":
             guard let film = args["film"] as? String else { return ("film_review 需要 film", true) }
             guard FilmStudio.shared.shooting == nil, FilmStudio.shared.revising == nil else { return ("片场正忙，等这一条拍完", true) }
@@ -1025,18 +1293,33 @@ enum PanelTools {
         if shots.isEmpty, let idea = (args["idea"] as? String)?.trimmingCharacters(in: .whitespaces), !idea.isEmpty {
             guard FilmStudio.shared.shooting == nil else { return ("片场正在拍别的，等它拍完", true) }
             FilmStudio.shared.make(from: idea, shots: (args["count"] as? Int) ?? 4, lead: (args["lead"] as? Bool) ?? false,
-                                   tongue: args["narration_language"] as? String, retakes: args["retakes"] as? Int)
+                                   tongue: args["narration_language"] as? String, retakes: args["retakes"] as? Int,
+                                   shape: FilmStudio.Shape(rawValue: (args["shape"] as? String) ?? "") ?? .square,
+                                   kind: FilmStudio.Kind(rawValue: (args["kind"] as? String) ?? "") ?? .auto,
+                                   engine: FilmStudio.Engine(rawValue: (args["engine"] as? String) ?? "") ?? .ltx)
             return ("在写分镜了（十几秒），写好就开拍。film_status 看进度", false)
         }
         let seconds = (args["seconds"] as? Double) ?? Double((args["seconds"] as? Int) ?? 4)
+        // A shot list written by the caller can still be a story, shot on H3,
+        // in any shape: what the reading step would have said is said here.
+        let kind = FilmStudio.Kind(rawValue: (args["kind"] as? String) ?? "") ?? .auto
+        let source = (args["source"] as? String) ?? ""
+        let told: FilmStudio.Understanding? = kind == .auto && source.isEmpty ? nil
+            : FilmStudio.Understanding(about: (args["idea"] as? String) ?? "", continuous: kind == .activity,
+                                       source: source, lead: (args["lead"] as? Bool) ?? false,
+                                       text: (args["source_text"] as? String) ?? "")
         switch FilmStudio.shared.make(title: (args["title"] as? String) ?? "", idea: (args["idea"] as? String) ?? "",
                                       look: (args["look"] as? String) ?? "", place: (args["place"] as? String) ?? "",
                                       wears: (args["wears"] as? String) ?? "",
                                       lead: (args["lead"] as? Bool) ?? false,
                                       seconds: seconds, shots: shots,
                                       tongue: (args["narration_language"] as? String) ?? "",
-                                      retakes: args["retakes"] as? Int) {
+                                      retakes: args["retakes"] as? Int, read: told,
+                                      shape: FilmStudio.Shape(rawValue: (args["shape"] as? String) ?? "") ?? .square,
+                                      engine: FilmStudio.Engine(rawValue: (args["engine"] as? String) ?? "") ?? .ltx) {
         case .success(let film):
+            FilmStudio.shared.presetSound(film: film.id, voice: args["narrator_voice"] as? String,
+                                          voiceover: args["voiceover"] as? String, music: args["music"] as? String)
             let minutes = max(1, Int((Double(film.shots.count) * (20 + film.seconds * 21) / 60).rounded()))
             return ("开拍了：「\(film.title)」\(film.shots.count) 个镜头，大约 \(minutes) 分钟。"
                   + "film_status 看进度；成片会在 \(film.file.path)", false)
@@ -1055,6 +1338,15 @@ enum PanelTools {
             }
             var lines = ["「\(film.title)」\(film.id)：\(describe(film))"]
             if let place = film.place { lines.append("  地点：\(place)") }
+            if let narrator = film.narrator { lines.append("  旁白：\(narrator.voice ?? narrator.speaker)\(narrator.instruct.map { "（\($0)）" } ?? "")") }
+            if let passage = film.voiceover { lines.append("  旁白稿：\(passage)") }
+            if let score = film.score {
+                lines.append("  配乐：\(score)" + (FileManager.default.fileExists(atPath: film.music.path) ? " → \(film.music.path)" : "（还没做）"))
+            }
+            if film.engine == .h3 {
+                let cast = (film.cast ?? []).enumerated().map { "\($0.element.name)（\(film.castPicture($0.offset).path)）" }
+                lines.append("  用 H3 拍" + (cast.isEmpty ? (film.cast == nil ? "，还没选角" : "，没有要选的角色") : "，演员：" + cast.joined(separator: "、")))
+            }
             for shot in film.shots {
                 let camera = shot.framing.map { "〔\($0)〕" } ?? ""
                 lines.append("  \(shot.id). [\(words[shot.state] ?? "?")] \(camera)\(shot.pose.prefix(90))" + (shot.note.map { " —— \($0)" } ?? ""))
