@@ -164,6 +164,20 @@ final class FilmStudio: ObservableObject {
         /// the bread only in words, shot 7 tore pale white chunks while shot 4's
         /// basket held round golden-brown barley loaves.
         var props: [String]? = nil
+        /// How this shot is filmed when it is not the film's own way: from one
+        /// picture on LTX (`animate`), or by a camera moving over the picture with
+        /// no model at all (`move`, where `glide` says which way). Nil is the
+        /// film's engine. See FilmDirector.
+        var method: Method? = nil
+        var glide: Glide? = nil
+        /// Things whose number the story is about — five loaves, twelve baskets —
+        /// counted in the set before it is filmed and in the take after.
+        var checks: [Check]? = nil
+        /// Its light and colour brought into line with the shots around it.
+        var grade: Grade? = nil
+        /// A thing in it that must look as it does in another shot: its first
+        /// frame is changed to match before it is filmed from it.
+        var match: Match? = nil
 
         enum State: String, Codable { case waiting, drawing, filming, reviewing, done, failed }
 
@@ -231,6 +245,8 @@ final class FilmStudio: ObservableObject {
         /// narrator over the whole film — nil for films narrated shot by shot.
         var voiceover: String?
         var sounded: Bool?
+        /// Integrated loudness of the cut after mastering, in LUFS.
+        var loudness: Double?
         var seconds: Double
         var shots: [Shot]
         var state: State = .waiting
@@ -270,7 +286,8 @@ final class FilmStudio: ObservableObject {
 
     @Published private(set) var films: [Film] = []
     /// The film in production. One at a time: there is one video server.
-    @Published private(set) var shooting: String?
+    /// Set from FilmDirector too, hence not private.
+    @Published var shooting: String?
 
     init() {
         reload()
@@ -355,6 +372,8 @@ final class FilmStudio: ObservableObject {
         var framing = ""
         var narration = ""
         var subject = Subject.her
+        /// Things whose number the story turns on in this shot.
+        var counts: [Check] = []
 
         /// From a storyboard's JSON, whoever wrote it: the brain behind the
         /// tab or the one calling `film_make`.
@@ -365,6 +384,11 @@ final class FilmStudio: ObservableObject {
             framing = (item["framing"] as? String) ?? ""
             narration = (item["narration"] as? String) ?? ""
             subject = Subject(rawValue: (item["subject"] as? String) ?? "") ?? .her
+            counts = ((item["counts"] as? [[String: Any]]) ?? []).compactMap { row in
+                guard let thing = (row["thing"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !thing.isEmpty,
+                      let count = (row["count"] as? Int) ?? Int("\(row["count"] ?? "")"), count > 0 else { return nil }
+                return Check(thing: thing, count: count)
+            }
         }
     }
 
@@ -405,6 +429,7 @@ final class FilmStudio: ObservableObject {
             if !said.isEmpty, tongue != "none" { film.shots[index].narration = said }
             let camera = draft.framing.trimmingCharacters(in: .whitespacesAndNewlines)
             if !camera.isEmpty { film.shots[index].framing = camera }
+            if !draft.counts.isEmpty { film.shots[index].checks = draft.counts }
         }
         film.state = .shooting
         do {
@@ -472,13 +497,17 @@ final class FilmStudio: ObservableObject {
     /// goes to whoever writes or judges the shot from then on.
     func reshoot(film id: String, shot number: Int, framing: String? = nil, still: String?, motion: String?,
                  narration: String? = nil, hq: Bool = false, following: Bool = false,
-                 manual: Bool = true, wish: String? = nil) -> Result<Film, Failure> {
+                 manual: Bool = true, wish: String? = nil, method: Method? = nil, glide: Glide? = nil,
+                 h3: String? = nil, checks: [Check]? = nil, match: Match? = nil, later: Bool = false) -> Result<Film, Failure> {
         guard shooting == nil else { return .failure(.message("片场正在拍「\(shooting!)」，等它拍完")) }
         guard var film = films.first(where: { $0.id == id || $0.title == id }) else {
             return .failure(.message("没有这部片子：\(id)"))
         }
         guard let index = film.shots.firstIndex(where: { $0.id == number }) else {
             return .failure(.message("「\(film.title)」没有第 \(number) 个镜头，它有 \(film.shots.count) 个"))
+        }
+        if method == .h3, film.engine != .h3 {
+            return .failure(.message("「\(film.title)」不是用 H3 拍的，没有演员；method 用 animate 或 move"))
         }
         // The old take is kept beside the new one rather than thrown away.
         let stamp = Int(Date().timeIntervalSince1970)
@@ -516,6 +545,29 @@ final class FilmStudio: ObservableObject {
             // made of, not only the fields the rewrite happened to touch.
             if !manual { film.shots[index].seen = nil; film.shots[index].played = nil }
         }
+        // How it is filmed this time. A camera direction alone means a move.
+        if let method { film.shots[index].method = method == .h3 ? nil : method }
+        if let glide {
+            film.shots[index].glide = glide
+            if method == nil { film.shots[index].method = .move }
+        }
+        if let checks { film.shots[index].checks = checks.isEmpty ? nil : checks }
+        // A thing to match another shot: filmed from one changed frame, so
+        // on LTX, and the first frame made again for it.
+        if let match {
+            film.shots[index].match = match
+            if method == nil { film.shots[index].method = .animate }
+            aside(film.start(number), String(format: "shot-%02d.take-start-\(stamp).png", number))
+        }
+        // H3's own words: the director's, used as written and not reviewed.
+        // Otherwise words that changed are written again in H3's form — left
+        // alone, the old prompt went on filming the old shot.
+        if let words = given(h3) {
+            film.shots[index].h3 = words
+            film.shots[index].moved = true
+        } else if film.engine == .h3, newFrame || (action != nil && action != was.action) || given(wish) != nil {
+            film.shots[index].h3 = nil
+        }
         film.shots[index].score = nil
         film.shots[index].review = nil
         film.shots[index].retakes = nil
@@ -532,19 +584,27 @@ final class FilmStudio: ObservableObject {
         film.shots[index].note = nil
         film.shots[index].hq = hq ? true : nil
         if following {
-            for later in film.shots.indices where later > index {
-                let id = film.shots[later].id
+            for after in film.shots.indices where after > index {
+                let id = film.shots[after].id
                 aside(film.still(id), String(format: "shot-%02d.take-\(stamp).png", id))
                 aside(film.clip(id), String(format: "shot-%02d.take-\(stamp).mp4", id))
-                film.shots[later].state = .waiting
-                film.shots[later].note = nil
+                film.shots[after].state = .waiting
+                film.shots[after].note = nil
                 // What it saw and played belonged to the old take before it.
-                film.shots[later].seen = nil
-                film.shots[later].played = nil
-                film.shots[later].score = nil
-                film.shots[later].review = nil
-                film.shots[later].retakes = nil
+                film.shots[after].seen = nil
+                film.shots[after].played = nil
+                film.shots[after].score = nil
+                film.shots[after].review = nil
+                film.shots[after].retakes = nil
             }
+        }
+        // Set up now, filmed with the others: several shots redone in one
+        // run load each model once, and whoever asked waits once.
+        if later {
+            film.state = .waiting
+            film.note = "等着重拍：\(film.shots.filter { $0.state != .done }.map { "第 \($0.id) 镜" }.joined(separator: "、"))。film_reshoot 不带 shot 就一起开拍"
+            save(film)
+            return .success(film)
         }
         film.state = .shooting
         save(film)
@@ -554,7 +614,7 @@ final class FilmStudio: ObservableObject {
 
     /// A direction being followed: the quarter minute in which the shot's
     /// words are being rewritten and there is nothing else to show for it.
-    @Published private(set) var revising: String?
+    @Published var revising: String?
 
     /// Redo a shot to a direction given in a sentence — "手再慢一点，脚别动",
     /// "镜头近一点，只拍上半身". The model that can see looks at the current take
@@ -636,6 +696,7 @@ final class FilmStudio: ObservableObject {
                     (film.shots[index].laya, film.shots[index].jev) = await Self.opinions(on: saw, plan: film.shots[index].action, idea: film.idea)
                 }
                 verdict = Self.weigh(verdict, jev: film.shots[index].jev)
+                if let wrong = await Self.recount(film.shots[index], in: film) { verdict = Self.miscount(verdict, wrong) }
                 film.shots[index].score = verdict.score
                 film.shots[index].review = verdict.passed ? "" : verdict.problem
                 save(film)
@@ -650,7 +711,7 @@ final class FilmStudio: ObservableObject {
     /// film was lost mid-shot, and how its owner found out there was no other
     /// way. A film is half an hour of the box's time; changing your mind about
     /// one should not cost the app.
-    private var work: Task<Void, Never>?
+    var work: Task<Void, Never>?
 
     /// Stop whatever the studio is doing. The clip the box is already rendering
     /// finishes there and is thrown away — nothing reaches back into it — so a
@@ -810,6 +871,16 @@ final class FilmStudio: ObservableObject {
                             FilmReference.reshape(film.still(shot.id), to: film.size)
                             await restoreFace(in: film, shot.id)
                         }
+                        // A number the story turns on, checked in the picture
+                        // before minutes are spent filming it.
+                        if attempt == 0 { await settle(&film, index) }
+                        if film.shots[index].match != nil { try await prepareMatch(&film, index) }
+                        // No video model: the camera over the picture.
+                        if film.shots[index].method == .move {
+                            update(&film, index, .filming)
+                            try await filmOtherwise(&film, index)
+                            break
+                        }
                         update(&film, index, .filming)
                         let fine = shot.hq == true
                         if fine, let crowded = await BoxServices.shared.roomForHQ() {
@@ -818,12 +889,20 @@ final class FilmStudio: ObservableObject {
                         _ = try await client.generateVideo(
                             prompt: Self.literal(film.shots[index].action),
                             to: film.clip(shot.id), seconds: film.seconds,
-                            width: Int(film.size.width), height: Int(film.size.height), from: film.still(shot.id), hq: fine,
+                            width: Int(film.size.width), height: Int(film.size.height), from: film.opening(shot.id), hq: fine,
                             timeout: fine ? 3600 : 1800)
 
                         // Nobody reviews a director's own words, or a finishing
                         // pass of a take that was already accepted.
-                        guard limit > 0, !fine, shot.posed != true, shot.moved != true else { break }
+                        // Numbers are facts, not taste: counted even then.
+                        guard limit > 0, !fine, shot.posed != true, shot.moved != true else {
+                            if let wrong = await Self.recount(film.shots[index], in: film) {
+                                film.shots[index].review = wrong
+                                film.shots[index].score = 4
+                                save(film)
+                            }
+                            break
+                        }
                         update(&film, index, .reviewing)
                         guard var verdict = await Self.review(film.shots[index], in: film) else { break }
                         film.shots[index].saw = verdict.saw
@@ -833,6 +912,7 @@ final class FilmStudio: ObservableObject {
                             (film.shots[index].laya, film.shots[index].jev) = await Self.opinions(on: saw, plan: film.shots[index].action, idea: film.idea)
                         }
                         verdict = Self.weigh(verdict, jev: film.shots[index].jev)
+                        if let wrong = await Self.recount(film.shots[index], in: film) { verdict = Self.miscount(verdict, wrong) }
                         film.shots[index].score = verdict.score
                         film.shots[index].review = verdict.passed ? "" : verdict.problem
                         save(film)
@@ -870,6 +950,12 @@ final class FilmStudio: ObservableObject {
                         film.shots[index] = best.words
                         film.shots[index].retakes = retakes
                         save(film)
+                    }
+                    // A number the model would not keep, in a shot of things or
+                    // places: the camera glides over the counted picture instead.
+                    if let wrong = film.shots[index].review, wrong.hasPrefix("数不对"), film.shots[index].of != .her,
+                       film.shots[index].method != .move {
+                        await glideInstead(&film, index, because: wrong)
                     }
                     // Where this shot ends, from the take that was kept: the
                     // next shot starts there.
@@ -913,7 +999,6 @@ final class FilmStudio: ObservableObject {
             // still a film, and a better answer than nothing after ten minutes.
             let finished = film.shots.filter { $0.state == .done }
             let clips = finished.map { film.clip($0.id) }
-            let voices = finished.map { film.voice($0.id) }
             guard !clips.isEmpty else {
                 film.state = .failed
                 film.note = "一个镜头都没拍成：" + (film.shots.first?.note ?? "")
@@ -925,8 +1010,7 @@ final class FilmStudio: ObservableObject {
             await makeMusic(&film, seconds: Double(clips.count) * (film.engine == .h3 ? Self.h3Seconds(film.seconds) : film.seconds))
             await readVoiceover(&film)
             do {
-                try await Self.cut(clips, voices: voices, voiceover: film.voiceover == nil ? nil : film.voiceoverFile,
-                                   music: Self.musicOn ? film.music : nil, to: film.file)
+                try await assemble(&film)
                 film.state = .done
                 let failed = film.shots.count - clips.count
                 film.note = failed == 0 ? nil : "\(failed) 个镜头没拍成，剪的是其余的"
@@ -1082,7 +1166,16 @@ final class FilmStudio: ObservableObject {
         film.note = nil
         save(film)
 
-        for index in film.shots.indices where film.shots[index].state != .done {
+        // Numbers the story turns on, counted in each set before it is filmed:
+        // what the set holds is what H3 keeps.
+        let counting = film.shots.indices.filter { film.shots[$0].state != .done && !(film.shots[$0].checks ?? []).isEmpty }
+        for index in counting {
+            if Task.isCancelled { return stopped(halt) }
+            await settle(&film, index)
+        }
+        if !counting.isEmpty { await ComfyStudio.yieldMemory() }
+
+        for index in film.shots.indices where film.shots[index].state != .done && (film.shots[index].method ?? .h3) == .h3 {
             if Task.isCancelled { return stopped(halt) }
             let id = film.shots[index].id
             // One retake at most: an H3 take is about nine minutes.
@@ -1098,6 +1191,7 @@ final class FilmStudio: ObservableObject {
                         update(&film, index, .drawing)
                         try await drawSet(&film, index, attempt: attempt)
                         for kind in [BoxServices.Kind.draw, .edit] { await BoxServices.shared.stop(kind) }
+                        await settle(&film, index)
                     }
                     if film.shots[index].h3 == nil, let written = await Self.writeH3(film, only: [id]) {
                         film.shots[index].h3 = written[id]
@@ -1114,7 +1208,16 @@ final class FilmStudio: ObservableObject {
                                                 full: shot.hq == true, to: film.clip(id), film: film.id, shot: id)
                     }
 
-                    guard limit > 0, shot.posed != true, shot.moved != true else { break }
+                    // A director's own words are not reviewed, but numbers are
+                    // facts, not taste: they are counted even then.
+                    guard limit > 0, shot.posed != true, shot.moved != true else {
+                        if let wrong = await Self.recount(film.shots[index], in: film) {
+                            film.shots[index].review = wrong
+                            film.shots[index].score = 4
+                            save(film)
+                        }
+                        break
+                    }
                     update(&film, index, .reviewing)
                     guard var verdict = await Self.review(film.shots[index], in: film) else { break }
                     film.shots[index].saw = verdict.saw
@@ -1124,6 +1227,7 @@ final class FilmStudio: ObservableObject {
                         (film.shots[index].laya, film.shots[index].jev) = await Self.opinions(on: saw, plan: film.shots[index].action, idea: film.idea)
                     }
                     verdict = Self.weigh(verdict, jev: film.shots[index].jev)
+                    if let wrong = await Self.recount(film.shots[index], in: film) { verdict = Self.miscount(verdict, wrong) }
                     film.shots[index].score = verdict.score
                     film.shots[index].review = verdict.passed ? "" : verdict.problem
                     save(film)
@@ -1159,6 +1263,12 @@ final class FilmStudio: ObservableObject {
                     film.shots[index].retakes = retakes
                     save(film)
                 }
+                // H3 invents what its wandering camera finds — a thirteenth
+                // basket. With nobody in the shot, the camera glides over the
+                // counted set instead.
+                if let wrong = film.shots[index].review, wrong.hasPrefix("数不对"), (film.shots[index].who ?? []).isEmpty {
+                    await glideInstead(&film, index, because: wrong)
+                }
                 _ = try? await Self.lastFrame(of: film.clip(id), to: film.last(id), fresh: true)
                 await speak(film, film.shots[index])
                 update(&film, index, .done)
@@ -1170,6 +1280,39 @@ final class FilmStudio: ObservableObject {
                 if Self.isUnreachable(error) {
                     film.shots[index].state = .waiting
                     return stopped("盒子上的 ComfyUI 或出图服务连不上（\(error.localizedDescription)）。起来后「接着拍」")
+                }
+                film.shots[index].note = error.localizedDescription
+                update(&film, index, .failed)
+            }
+        }
+
+        // Shots filmed another way — from one picture on LTX, or the camera
+        // over it — after every H3 shot, so neither model loads twice.
+        let others = film.shots.indices.filter { film.shots[$0].state != .done && (film.shots[$0].method ?? .h3) != .h3 }
+        for index in others {
+            if Task.isCancelled { return stopped(halt) }
+            let id = film.shots[index].id
+            do {
+                update(&film, index, .filming)
+                try await filmOtherwise(&film, index)
+                if let wrong = await Self.recount(film.shots[index], in: film) {
+                    film.shots[index].review = wrong
+                    film.shots[index].score = 4
+                } else {
+                    film.shots[index].review = nil
+                    film.shots[index].score = nil
+                }
+                _ = try? await Self.lastFrame(of: film.clip(id), to: film.last(id), fresh: true)
+                await speak(film, film.shots[index])
+                update(&film, index, .done)
+            } catch {
+                if Task.isCancelled {
+                    film.shots[index].state = .waiting
+                    return stopped("停下了。「接着拍」从这个镜头继续")
+                }
+                if Self.isUnreachable(error) {
+                    film.shots[index].state = .waiting
+                    return stopped("盒子上的出片服务连不上（\(error.localizedDescription)）。起来后「接着拍」")
                 }
                 film.shots[index].note = error.localizedDescription
                 update(&film, index, .failed)
@@ -1199,13 +1342,15 @@ final class FilmStudio: ObservableObject {
         let shot = film.shots[index]
         let recipe = Self.recipe(for: shot, in: film, anchor: film.lead ? CompanionCharacter.shared.anchorURL : nil,
                                  master: nil, previous: nil, style: CompanionCharacter.shared.sheet.style)
+        // The number said once more, last, where the image model weighs it.
+        let words = [recipe.prompt, Self.counted(shot.checks)].compactMap { $0 }.joined(separator: " ")
         let made: URL = try await Self.patiently {
             if let source = recipe.pictures.first {
                 return try await DiffuserClient.shared.edit(
-                    prompt: recipe.prompt, from: source, also: Array(recipe.pictures.dropFirst()), into: film.folder,
+                    prompt: words, from: source, also: Array(recipe.pictures.dropFirst()), into: film.folder,
                     seed: CompanionCharacter.seed(for: film.id + shot.pose + String(attempt)))
             }
-            return try await DiffuserClient.shared.generate(prompt: recipe.prompt, into: film.folder,
+            return try await DiffuserClient.shared.generate(prompt: words, into: film.folder,
                                                             width: Int(film.size.width), height: Int(film.size.height),
                                                             seed: CompanionCharacter.seed(for: film.id + shot.pose + String(attempt)))
         }
@@ -1965,11 +2110,8 @@ final class FilmStudio: ObservableObject {
             defer { shooting = nil }
             await speak(film, film.shots[index])
             try? fm.moveItem(at: film.file, to: film.folder.appendingPathComponent("film.cut-\(stamp).mp4"))
-            let done = film.shots.filter { $0.state == .done }
             do {
-                try await Self.cut(done.map { film.clip($0.id) }, voices: done.map { film.voice($0.id) },
-                                   voiceover: film.voiceover == nil ? nil : film.voiceoverFile,
-                                   music: Self.musicOn ? film.music : nil, to: film.file)
+                try await assemble(&film)
                 film.state = .done
             } catch {
                 film.state = .failed
@@ -2041,9 +2183,7 @@ final class FilmStudio: ObservableObject {
             defer { shooting = nil; work = nil }
             try? FileManager.default.moveItem(at: film.file, to: film.folder.appendingPathComponent("film.cut-\(stamp).mp4"))
             do {
-                try await Self.cut(done.map { film.clip($0.id) }, voices: done.map { film.voice($0.id) },
-                                   voiceover: film.voiceover == nil ? nil : film.voiceoverFile,
-                                   music: Self.musicOn ? film.music : nil, to: film.file)
+                try await assemble(&film)
                 film.state = .done
                 film.note = nil
             } catch {
@@ -2094,9 +2234,7 @@ final class FilmStudio: ObservableObject {
             if music { await makeMusic(&film, seconds: seconds) }
             try? fm.moveItem(at: film.file, to: film.folder.appendingPathComponent("film.cut-\(stamp).mp4"))
             do {
-                try await Self.cut(done.map { film.clip($0.id) }, voices: done.map { film.voice($0.id) },
-                                   voiceover: film.voiceover == nil ? nil : film.voiceoverFile,
-                                   music: music && Self.musicOn ? film.music : nil, to: film.file)
+                try await assemble(&film, music: music)
                 film.state = .done
                 if film.note?.hasPrefix("旁白") == true || film.note == "定旁白的声音和配乐" { film.note = nil }
             } catch {
@@ -2142,12 +2280,12 @@ final class FilmStudio: ObservableObject {
                 "timed out", "offline"].contains { text.contains($0) }
     }
 
-    private func update(_ film: inout Film, _ index: Int, _ state: Shot.State) {
+    func update(_ film: inout Film, _ index: Int, _ state: Shot.State) {
         film.shots[index].state = state
         save(film)
     }
 
-    private func save(_ film: Film) {
+    func save(_ film: Film) {
         if let at = films.firstIndex(where: { $0.id == film.id }) { films[at] = film } else { films.insert(film, at: 0) }
         if let data = try? Self.encoder.encode(film) {
             try? data.write(to: film.folder.appendingPathComponent("film.json"), options: .atomic)
@@ -2177,11 +2315,16 @@ final class FilmStudio: ObservableObject {
         var cursor = CMTime.zero
         var spans: [(track: Int, range: CMTimeRange)] = []
         var size = CGSize(width: 704, height: 704)
+        // What size each clip is: shots made different ways come out different
+        // sizes (H3 928×544, LTX 1024×576, a camera move whatever it was asked).
+        var sizes: [CGSize] = []
         for (index, url) in clips.enumerated() {
             let asset = AVURLAsset(url: url)
             let duration = try await asset.load(.duration)
             guard let source = try await asset.loadTracks(withMediaType: .video).first else { continue }
-            if index == 0 { size = try await source.load(.naturalSize) }
+            let natural = try await source.load(.naturalSize)
+            if index == 0 { size = natural }
+            sizes.append(natural)
             let lane = index % 2
             let range = CMTimeRange(start: .zero, duration: duration)
             try video[lane].insertTimeRange(range, of: source, at: cursor)
@@ -2246,6 +2389,16 @@ final class FilmStudio: ObservableObject {
             level[index] = 0.32
         }
 
+        // Each clip scaled to fill the frame, centred. Laid in as it is, a clip
+        // bigger than the first one overflows the frame from its top-left
+        // corner and a smaller one sits in it with a black edge.
+        func fill(_ natural: CGSize) -> CGAffineTransform {
+            guard natural.width > 0, natural.height > 0, natural != size else { return .identity }
+            let scale = max(size.width / natural.width, size.height / natural.height)
+            return CGAffineTransform(scaleX: scale, y: scale)
+                .concatenating(CGAffineTransform(translationX: (size.width - natural.width * scale) / 2,
+                                                 y: (size.height - natural.height * scale) / 2))
+        }
         var instructions: [AVMutableVideoCompositionInstruction] = []
         let mix = AVMutableAudioMix()
         var volumes: [AVMutableAudioMixInputParameters] = audio.map { AVMutableAudioMixInputParameters(track: $0) }
@@ -2257,7 +2410,9 @@ final class FilmStudio: ObservableObject {
             if CMTimeCompare(soloEnd, soloStart) > 0 {
                 let alone = AVMutableVideoCompositionInstruction()
                 alone.timeRange = CMTimeRange(start: soloStart, end: soloEnd)
-                alone.layerInstructions = [AVMutableVideoCompositionLayerInstruction(assetTrack: video[span.track])]
+                let only = AVMutableVideoCompositionLayerInstruction(assetTrack: video[span.track])
+                only.setTransform(fill(sizes[index]), at: soloStart)
+                alone.layerInstructions = [only]
                 instructions.append(alone)
             }
             if let next {
@@ -2266,7 +2421,9 @@ final class FilmStudio: ObservableObject {
                 both.timeRange = dissolve
                 let leaving = AVMutableVideoCompositionLayerInstruction(assetTrack: video[span.track])
                 leaving.setOpacityRamp(fromStartOpacity: 1, toEndOpacity: 0, timeRange: dissolve)
+                leaving.setTransform(fill(sizes[index]), at: dissolve.start)
                 let arriving = AVMutableVideoCompositionLayerInstruction(assetTrack: video[next.track])
+                arriving.setTransform(fill(sizes[index + 1]), at: dissolve.start)
                 both.layerInstructions = [leaving, arriving]
                 instructions.append(both)
                 volumes[span.track].setVolumeRamp(fromStartVolume: level[index], toEndVolume: 0, timeRange: dissolve)
@@ -2409,7 +2566,7 @@ final class FilmStudio: ObservableObject {
     static func photograph(_ film: Film) async -> (tone: String?, shots: [Int: (picture: String, motion: String?)])? {
         guard let writer = await writer(), let url = URL(string: writer.host + "/api/chat") else { return nil }
         let list = film.shots.map { shot in
-            "{\"id\": \(shot.id), \"subject\": \"\(shot.of.rawValue)\", \"camera\": \(Self.jsonQuoted(shot.framing ?? "")), \"shows\": \(Self.jsonQuoted(shot.pose)), \"moves\": \(Self.jsonQuoted(shot.action)), \"the_moment\": \(Self.jsonQuoted(shot.narration ?? ""))}"
+            "{\"id\": \(shot.id), \"subject\": \"\(shot.of.rawValue)\", \"camera\": \(Self.jsonQuoted(shot.framing ?? "")), \"shows\": \(Self.jsonQuoted(shot.pose)), \"moves\": \(Self.jsonQuoted(shot.action)), \"the_moment\": \(Self.jsonQuoted(shot.narration ?? ""))\(Self.counted(shot.checks).map { ", \"counts\": \(Self.jsonQuoted($0))" } ?? "")}"
         }.joined(separator: ",\n")
         let ask = """
             \(film.engine == .h3 ? h3SetRule : "")You are the director of photography and unit still photographer on a \
@@ -2439,6 +2596,9 @@ final class FilmStudio: ObservableObject {
             6. If the account belongs to a time and place in history: say so, say that everything visible belongs to it, \
             and end with "Must not appear:" and the list — modern clothing, zips, jewellery and rings, glasses, watches, \
             plastic, paper packaging, printed text, signs, power lines, modern buildings, cars, anything anachronistic.
+            Where a shot has "counts", its picture shows exactly that many of each — whole, separate, easy to count, none cut \
+            off by the frame or hidden behind another — and the paragraph says the number in words and digits ("exactly \
+            five (5) round loaves").
             Rules: describe only what a camera sees — no metaphors, no "as if". Keep the SAME light direction, time of day \
             and grade in every shot. For a "figure" shot the face is never seen: say how — turned away, cropped by the frame, \
             in silhouette, in deep shadow. For "thing" and "place" shots no face appears at all. Never write "she" or "her". \
@@ -2624,6 +2784,11 @@ final class FilmStudio: ObservableObject {
         said once in `look`, it reaches every frame. Say it again in a `still` wherever people or hands are \
         seen. `wears` is empty unless the Lead is her.
 
+        COUNTED THINGS. Where the account turns on a number of things the camera can see — five loaves and \
+        two fish, twelve baskets — every shot that shows them lists them in `counts`, the thing as it should be \
+        drawn and how many: [{"thing": "round flat barley loaves", "count": 5}]. The pictures are drawn and \
+        checked to that number. Leave `counts` empty where the number is not what the shot is about.
+
         \(literalRules)
         """
 
@@ -2718,7 +2883,7 @@ final class FilmStudio: ObservableObject {
             Lead: \(lead ? "her (the same woman in every shot)" : story && faces ? "none — this is not her story. It HAS A CAST: its people are filmed from reference portraits and keep their faces, so show them — faces toward the camera or in profile, what they do, who they look at. Never turn them away or crop their heads to hide them" : story ? "none — this is not her story; use subject \"thing\", \"place\" and \"figure\"" : "none — nobody needs to recur")
             Shots: \(shots)
             Narration: \(voiceOver(tongue))
-            Answer with JSON only: {"title": "...", "look": "...", "place": "...", "wears": "...", "shots": [{"framing": "...", \(story ? "\"subject\": \"thing|place|figure\", " : "")"still": "...", "motion": "...", "narration": "..."}]}
+            Answer with JSON only: {"title": "...", "look": "...", "place": "...", "wears": "...", "shots": [{"framing": "...", \(story ? "\"subject\": \"thing|place|figure\", " : "")"still": "...", "motion": "...", "narration": "..."\(story ? ", \"counts\": []" : "")}]}
             """
         // Thinking off, and no JSON mode. Measured on kimi: with both on, this
         // request had not answered after three minutes — a model that reasons

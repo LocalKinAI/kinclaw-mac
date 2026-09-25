@@ -325,7 +325,7 @@ struct FilmStudioView: View {
         let onScreen = playing(film)?.shot == shot.id
         return VStack(alignment: .leading, spacing: 5) {
             ZStack(alignment: .topLeading) {
-                thumb(film.still(shot.id)).aspectRatio(1, contentMode: .fit)
+                thumb(film.opening(shot.id)).aspectRatio(1, contentMode: .fit)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .overlay(RoundedRectangle(cornerRadius: 8)
                         .stroke(Color.accentColor, lineWidth: onScreen ? 2 : 0))
@@ -356,7 +356,7 @@ struct FilmStudioView: View {
                     .contentShape(Rectangle())
                     .onTapGesture { if filmed { watching[film.id] = shot.id } }
                     .help(filmed ? "在上面的播放器里看这个镜头" : "这个镜头还没拍好")
-                Text("\(shot.id) · \(word(shot.state))\(shot.hq == true ? " · 精修" : "")")
+                Text("\(shot.id) · \(word(shot.state))\(shot.hq == true ? " · 精修" : "")\(shot.method.map { " · \($0.title)" } ?? "")\(shot.grade?.neutral == false ? " · 调色" : "")")
                     .font(.system(size: 9, weight: .medium))
                     .padding(.horizontal, 6).padding(.vertical, 2)
                     .background(Capsule().fill(Color.black.opacity(0.55)))
@@ -738,7 +738,7 @@ struct FilmStudioView: View {
         case .waiting:  return "等着开拍"
         case .shooting: return "在拍 \(film.finished)/\(film.shots.count)"
         case .cutting:  return "在剪"
-        case .done:     return "\(film.shots.count) 个镜头 · \(Int(Double(film.finished) * film.seconds)) 秒"
+        case .done:     return "\(film.shots.count) 个镜头 · \(Int(Double(film.finished) * film.seconds)) 秒" + (film.loudness.map { " · \(Int($0.rounded())) LUFS" } ?? "")
         case .failed:   return "没拍成"
         }
         }()

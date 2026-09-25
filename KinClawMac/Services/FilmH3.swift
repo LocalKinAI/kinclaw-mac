@@ -135,7 +135,7 @@ extension FilmStudio {
             let people = (shot.who ?? []).enumerated().map { "<Picture \($0.offset + 1)> is \($0.element) (a portrait: face and clothes)" }
             let things = (shot.props ?? []).enumerated().map { "<Picture \(people.count + $0.offset + 1)> shows an object as it looks elsewhere in the film (\($0.element)): the same object here must look exactly like it" }
             let labels = people + things + ["<Picture \(people.count + things.count + 1)> is the set of this shot (the place, the props, the light and the framing, with nobody in it yet)"]
-            return "{\"id\": \(shot.id), \"pictures\": \(quoted(labels.joined(separator: "; "))), \"camera\": \(quoted(shot.framing ?? "")), \"shows\": \(quoted(shot.pose)), \"moves\": \(quoted(shot.action)), \"the_moment\": \(quoted(shot.narration ?? ""))\(shot.wish.map { ", \"direction\": \(quoted($0))" } ?? "")}"
+            return "{\"id\": \(shot.id), \"pictures\": \(quoted(labels.joined(separator: "; "))), \"camera\": \(quoted(shot.framing ?? "")), \"shows\": \(quoted(shot.pose)), \"moves\": \(quoted(shot.action)), \"the_moment\": \(quoted(shot.narration ?? ""))\(shot.wish.map { ", \"direction\": \(quoted($0))" } ?? "")\(counted(shot.checks).map { ", \"counts\": \(quoted($0))" } ?? "")}"
         }.joined(separator: ",\n")
         let cast = (film.cast ?? []).map { "\($0.name): \($0.look)" }.joined(separator: "\n")
         let ask = """
@@ -156,6 +156,9 @@ extension FilmStudio {
             clothes from the portraits and do not describe them differently; faces may be seen.
             - "moves" is what happens — make it a clear action that plainly changes the frame, carried by "the \
             moment"; the camera as "camera" says, and still whenever the people move.
+            - Where a shot has "counts", say each exact number ("exactly five round loaves") and never more or \
+            fewer; the set already holds that many — they stay as they are, and the camera holds still, because a \
+            moving camera finds more of them.
             - Everything belongs to the time and place of the story: nothing modern, no text on screen.
             - Nobody speaks (the narration is added later as a voice-over); overall_soundscape is the place's \
             own sound; non_diegetic_music is none.
@@ -244,6 +247,16 @@ extension FilmStudio {
         }
         graph["6"] = node("MiniMaxH3ReferenceToVideo", reference)
 
+        let video = try await comfyResult(graph, node: "15", base: base, what: "H3 镜头", deadline: 3600)
+        try? FileManager.default.removeItem(at: out)
+        try video.write(to: out)
+    }
+
+    /// Queue a graph on the box's ComfyUI and bring back the first file its
+    /// `node` saved. Stopped here, it is stopped there too, or the box keeps
+    /// rendering something nobody will see for another few minutes.
+    static func comfyResult(_ graph: [String: Any], node: String, base: String, what: String,
+                            deadline seconds: TimeInterval) async throws -> Data {
         guard let url = URL(string: base + "/prompt") else { throw Failure.message("ComfyUI 地址不对") }
         var request = URLRequest(url: url, timeoutInterval: 30)
         request.httpMethod = "POST"
@@ -252,10 +265,10 @@ extension FilmStudio {
         let (data, response) = try await URLSession.shared.data(for: request)
         let answer = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
         guard (response as? HTTPURLResponse)?.statusCode == 200, let id = answer["prompt_id"] as? String else {
-            throw Failure.message("ComfyUI 不接这个 H3 镜头：\(String(data: data, encoding: .utf8)?.prefix(300) ?? "")")
+            throw Failure.message("ComfyUI 不接这个\(what)：\(String(data: data, encoding: .utf8)?.prefix(300) ?? "")")
         }
         do {
-            let deadline = Date().addingTimeInterval(3600)
+            let deadline = Date().addingTimeInterval(seconds)
             while Date() < deadline {
                 try await Task.sleep(nanoseconds: 4_000_000_000)
                 guard let hurl = URL(string: base + "/history/\(id)"),
@@ -265,26 +278,22 @@ extension FilmStudio {
                 let status = entry["status"] as? [String: Any]
                 if status?["status_str"] as? String == "error" {
                     let messages = (status?["messages"] as? [[Any]] ?? []).compactMap { $0.count > 1 ? $0[1] as? [String: Any] : nil }
-                    throw Failure.message("H3 出错：" + (messages.compactMap { $0["exception_message"] as? String }.first ?? "看盒子上的 comfy.log").prefix(300))
+                    throw Failure.message("\(what)出错：" + (messages.compactMap { $0["exception_message"] as? String }.first ?? "看盒子上的 comfy.log").prefix(300))
                 }
                 guard status?["completed"] as? Bool == true else { continue }
-                let saved = ((entry["outputs"] as? [String: Any])?["15"] as? [String: Any])?["images"] as? [[String: Any]] ?? []
-                guard let file = saved.first, let name = file["filename"] as? String else { throw Failure.message("H3 跑完了但没存下视频") }
+                let saved = ((entry["outputs"] as? [String: Any])?[node] as? [String: Any])?["images"] as? [[String: Any]] ?? []
+                guard let file = saved.first, let name = file["filename"] as? String else { throw Failure.message("\(what)跑完了但没存下来") }
                 var parts = URLComponents(string: base + "/view")
                 parts?.queryItems = [URLQueryItem(name: "filename", value: name),
                                      URLQueryItem(name: "subfolder", value: file["subfolder"] as? String ?? ""),
                                      URLQueryItem(name: "type", value: "output")]
-                guard let view = parts?.url else { throw Failure.message("取不回 H3 的视频") }
+                guard let view = parts?.url else { throw Failure.message("取不回\(what)") }
                 let (bytes, _) = try await URLSession.shared.data(from: view)
-                guard bytes.count > 1000 else { throw Failure.message("取回来的 H3 视频是空的") }
-                try? FileManager.default.removeItem(at: out)
-                try bytes.write(to: out)
-                return
+                guard bytes.count > 1000 else { throw Failure.message("取回来的\(what)是空的") }
+                return bytes
             }
-            throw Failure.message("H3 一个镜头跑了一个小时还没好")
+            throw Failure.message("\(what)跑了 \(Int(seconds / 60)) 分钟还没好")
         } catch {
-            // Stopped here: stop it there too, or the box keeps rendering a
-            // shot nobody will see for another four minutes.
             if Task.isCancelled, let stop = URL(string: base + "/interrupt") {
                 var request = URLRequest(url: stop, timeoutInterval: 5)
                 request.httpMethod = "POST"
@@ -294,11 +303,11 @@ extension FilmStudio {
         }
     }
 
-    private static func node(_ type: String, _ inputs: [String: Any]) -> [String: Any] {
+    static func node(_ type: String, _ inputs: [String: Any]) -> [String: Any] {
         ["class_type": type, "inputs": inputs]
     }
 
-    private static func upload(_ file: URL, as name: String, to base: String) async throws -> String {
+    static func upload(_ file: URL, as name: String, to base: String) async throws -> String {
         guard let url = URL(string: base + "/upload/image") else { throw Failure.message("ComfyUI 地址不对") }
         let bytes = try Data(contentsOf: file)
         let boundary = "kinclaw-\(UUID().uuidString)"

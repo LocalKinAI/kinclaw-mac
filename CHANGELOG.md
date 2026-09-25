@@ -8,6 +8,68 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Added — Film: the director's work after the first cut, as tools
+
+Everything done by hand on 五饼二鱼 between the first cut and the one its owner
+accepted — six loaves where there should be five, a thirteenth basket, shot 7's
+bread not shot 4's, one shot brighter than the rest, music too quiet — as tools
+and as steps of the pipeline. The reviewer had passed every one of those takes
+with a ten.
+
+- **`film_frames`** — a shot as one picture: a frame a second, the time on each,
+  other shots beside it to compare, or the set it is filmed from. The line
+  `image://…` in the answer is how the kernel attaches a picture to a tool
+  result, so a brain that can see looks at the take itself.
+- **`film_count`** — counted one frame at a time, one box per object: kimi-k3
+  was right on every test frame, twice, in 2–8 s; asked for a number, models
+  counted one loaf twice as often as not (kimi-k2.6 also said four for five).
+  In a take only *more* is a fault — a hand over a loaf is not — and it must
+  show in two frames; in a set every one must be there. "Could not count" is
+  never read as right.
+- **`film_fix_picture`** — Qwen-Image 2.1 edit through ComfyUI: a set, or a
+  frame of the take that becomes the first frame the shot is filmed from, with
+  other shots given as image 2, 3… (`like`). With `counts` it counts the set
+  first and refuses to touch one that is already right (a right set, changed
+  anyway, came back as six pale pitas), and counts the result. `from: new`
+  draws the set afresh three times and keeps the one that counts right: an edit
+  keeps the old picture's crowded layout (twelve baskets asked for four times
+  gave 14, 14, 15, 15).
+- **`film_reshoot`** takes `counts` (the pipeline counts the set, repaints or
+  redraws it, films, counts the take, films again when there are more), `match`
+  (`{thing: bread, like: 4}`: the first frame of the take is changed to look
+  like shot 4's, described by the model that can see from shot 4's own frame,
+  and filmed from on LTX — how shot 7's bread came to be shot 4's; H3 keeps
+  faces, not things, even with the loaves as a reference picture), `method`
+  `animate` / `move` (no video model: the camera glides over the picture, the
+  replaced take's sound kept — nothing can be added to it), `h3` words, and
+  `later` (several shots set up, filmed in one run).
+- **`film_grade`** measures every shot and matches one to another; the cut by
+  itself evens out a shot brighter or darker than both its neighbours when
+  those agree (a trend, like evening falling, is left alone).
+- **Every cut is mastered**: −16 LUFS integrated (BS.1770-4 gating, computed
+  in the app — this Mac's ffmpeg does not run), peaks held under −1.5 dBTP by
+  a look-ahead limiter; ffmpeg's ebur128 on the box measured the result at
+  −16.0 LUFS, −1.9 dBTP. `film.premaster.mp4` keeps the cut as it came out.
+- **Counts in the pipeline**: the storyboard lists `counts`, the photographer
+  and H3's prompts state them, every set is counted before it is filmed, every
+  take after (a second count confirms); a shot with nobody in it whose count H3
+  will not keep is glided over its counted set instead.
+- **The cut scales every clip to fill the frame**: H3 comes out 928×544, LTX
+  1024×576, and a clip of another size used to sit in the frame's corner.
+- **`film_guide`** — the playbook: what to look at, which tool fixes what,
+  what the models can and cannot be trusted with.
+- Tools answer within the kernel's 60 s: long work runs in the background and
+  `film_status wait: true` waits for it, starting with the time (three
+  identical answers in a row trip the kernel's no-progress breaker).
+  `comfy_run` used to wait twenty minutes and the relay answered "timed out".
+
+Tried and set aside: the Pilot (kimi-k2.6) directing a fix round on its own.
+In five runs on a copy of 五饼二鱼 it looked, counted and fixed shot 4 by
+itself, but its judgment was the weak part — it put "five loaves" on the shot
+where the bread is being broken, redrew a set that was already right, and went
+round an edit that could not reach twelve baskets. Films are directed by
+Claude, with these tools.
+
 ### Added — other people's best image prompts, and a named look for every film
 
 - **提示词库 in the Comfy tab.** devanshug2307/Awesome-AI-Image-Prompts (MIT,

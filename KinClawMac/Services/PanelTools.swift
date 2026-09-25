@@ -442,7 +442,10 @@ enum PanelTools {
                 in every shot and stays the same person: write `still` as \
                 "she …", do not describe her face or hair, and say what she \
                 wears once, in `wears`, shoes included — it goes into every \
-                frame so she is dressed the same throughout.
+                frame so she is dressed the same throughout. \
+                When it is done, look at every shot yourself before saying \
+                the film is good: film_guide says how, and how to fix what \
+                is wrong.
                 """,
             "inputSchema": [
                 "type": "object",
@@ -470,6 +473,7 @@ enum PanelTools {
                                 "still": ["type": "string", "description": "What the photograph shows, literally: posture and limbs, nothing outside the frame, no similes."],
                                 "motion": ["type": "string", "description": "One slow body movement from that pose, a camera move at most, then ambient sound."],
                                 "narration": ["type": "string", "description": "Optional voice-over for this shot, in the user's language, spoken by their own TTS: a storyteller's line, not a caption, sayable in three seconds (a dozen Chinese characters / eight English words)."],
+                                "counts": FilmTools.counts,
                             ] as [String: Any],
                             "required": ["still", "motion"],
                         ] as [String: Any],
@@ -486,7 +490,10 @@ enum PanelTools {
                 """,
             "inputSchema": [
                 "type": "object",
-                "properties": ["film": ["type": "string", "description": "A film's id or title. Omit for all of them."]],
+                "properties": [
+                    "film": ["type": "string", "description": "A film's id or title. Omit for all of them."],
+                    "wait": ["type": "boolean", "description": "Wait (up to about 45 seconds) for what the studio is doing — filming, a picture being changed, a cut — to finish before answering. Use it instead of asking again and again while something runs for minutes."],
+                ],
             ],
         ],
         [
@@ -700,9 +707,134 @@ enum PanelTools {
                     "following": ["type": "boolean", "description": "Also redo every shot after this one, so they carry on from its new ending. Default false."],
                     "narration": ["type": "string", "description": "A new voice-over line for the shot (\"\" removes it). Given alone, nothing is filmed: the line is spoken by the user's TTS and the film is cut again in seconds."],
                     "hq": ["type": "boolean", "description": "Film it on the high-quality model: a little cleaner, five times slower (~9 min a shot), and it needs about 45 GB of the box's memory, so kinfer must be off. For a shot the user is already happy with, never for a draft."],
+                    "method": ["type": "string", "description": "How to film it this time. h3 (H3 films: from the cast's portraits and the set — faces stay the same, but things and numbers drift and the camera wanders) | animate (LTX from one picture — the shot's first frame from film_fix_picture if it has one, else its set — about 2 minutes; the shot shows what the picture shows, moving: use it when the picture is right and H3 keeps getting a thing wrong; `motion` is what moves) | move (no video model: the camera glides over the picture — nothing in it changes, so a count stays right; for shots of things and places; the sound of the take it replaces is kept; seconds to make)."],
+                    "glide": ["type": "string", "description": "For method move: push_in (default) | pull_out | pan_left | pan_right | rise | fall | hold."],
+                    "h3": ["type": "string", "description": "H3 films: this shot's H3 prompt written by you, in H3's own six-part form (subject_definitions / summary / retention_analysis / detailed_description / overall_soundscape / non_diegetic_music), used as written."],
+                    "counts": FilmTools.counts,
+                    "match": [
+                        "type": "object",
+                        "description": "A thing in this shot that must look as it does in another shot — {\"thing\": \"bread\", \"like\": 4}. The studio takes the first frame of this shot's take, has the model that can see describe the thing in shot `like`, changes the frame to match, and films from it on LTX. For \"shot 7's bread is not shot 4's\".",
+                        "properties": [
+                            "thing": ["type": "string", "description": "What, in English: \"bread\", \"the basket\"."],
+                            "like": ["type": "integer", "description": "The shot where it looks right."],
+                        ] as [String: Any],
+                        "required": ["thing", "like"],
+                    ] as [String: Any],
+                    "later": ["type": "boolean", "description": "Set the shot up but do not film yet: redoing several shots, give later: true to all but the last (or then call film_reshoot with no shot) and they are filmed in one run — each model loaded once, one wait."],
                 ],
                 "required": ["film"],
             ],
+        ],
+        [
+            "name": "film_frames",
+            "description": """
+                Look at one shot of a film: frames one second apart (or \
+                `every` seconds) from its take, side by side in one picture \
+                with the time on each — you see the picture itself. `like` \
+                adds a frame of other shots beside them, to compare ("is it \
+                the same bread as shot 4?"). `picture: true` shows what the \
+                shot is filmed from instead: its set (H3) or still, and the \
+                first frame if film_fix_picture made one. Look at every shot \
+                this way before telling the user a film is good, and again \
+                after every fix.
+                """,
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "film": ["type": "string", "description": "The film's id or title."],
+                    "shot": ["type": "integer", "description": "Which shot, from 1."],
+                    "every": ["type": "number", "description": "Seconds between frames. Default 1."],
+                    "like": ["type": "array", "items": ["type": "integer"], "description": "Other shots to put beside it."],
+                    "picture": ["type": "boolean", "description": "Show the pictures it is filmed from instead of the take."],
+                ],
+                "required": ["film", "shot"],
+            ],
+        ],
+        [
+            "name": "film_count",
+            "description": """
+                Count a thing in a shot, frame by frame — each frame on its \
+                own at full size, which is how a count comes out right (from a \
+                grid of small frames a model said ten baskets where there were \
+                twelve). With `expected` it says which frames are wrong. \
+                `picture: true` counts in the picture the shot is filmed from — \
+                count the set BEFORE filming a shot whose numbers matter: what \
+                the set holds is what H3 keeps.
+                """,
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "film": ["type": "string", "description": "The film's id or title."],
+                    "shot": ["type": "integer", "description": "Which shot, from 1."],
+                    "thing": ["type": "string", "description": "What to count, in English, as it looks: \"woven baskets\", \"round loaves\"."],
+                    "expected": ["type": "integer", "description": "How many there should be."],
+                    "picture": ["type": "boolean", "description": "Count in the set / first frame instead of the take."],
+                    "every": ["type": "number", "description": "Seconds between the frames counted. Default 1."],
+                ],
+                "required": ["film", "shot", "thing"],
+            ],
+        ],
+        [
+            "name": "film_fix_picture",
+            "description": """
+                Change a shot's picture with words — Qwen-Image edit on the \
+                box, about two minutes, in the background (film_status says \
+                when it is done). `from`: "set" (the picture an H3 shot is \
+                filmed in: the place and the props, nobody in it — change it, \
+                then film_reshoot the shot), "take" (a frame of the current \
+                take, `at` seconds in, people and all — the result becomes \
+                the shot's first frame, to film_reshoot with method animate), \
+                or "start" (that first frame again). `like`: shots whose look \
+                must be matched, given to the editor as image 2, 3… — so the \
+                instruction can say "make the bread exactly like the loaves in \
+                image 2". Say precisely what it must become (colour, shape, \
+                surface — look at the other shot first; a wrong description \
+                gives a wrong picture) and what must stay. The old picture is \
+                kept. Look at the result (film_frames picture: true) before \
+                filming from it.
+                """,
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "film": ["type": "string", "description": "The film's id or title."],
+                    "shot": ["type": "integer", "description": "Which shot, from 1."],
+                    "instruction": ["type": "string", "description": "What to change, precisely, and what must stay. Refer to the other shots' frames as image 2, 3…"],
+                    "from": ["type": "string", "description": "set | take | start | new. new: draw the set afresh from `instruction` (the whole picture described, not a change) — three drawings, and the first that shows `counts` right is kept (give `counts` here, or the shot's own are used). For a set whose numbers a change keeps getting wrong: a change keeps the old picture's crowded layout. Default: start if the shot has a first frame, else set."],
+                    "at": ["type": "number", "description": "With from: take — seconds into the take. Default 0.2."],
+                    "like": ["type": "array", "items": ["type": "integer"], "description": "Shots to match, shown to the editor as image 2, 3…"],
+                    "counts": FilmTools.counts,
+                ],
+                "required": ["film", "shot", "instruction"],
+            ],
+        ],
+        [
+            "name": "film_grade",
+            "description": """
+                Even out a shot's light and colour. Without `shot` it \
+                measures every shot (mean brightness 0–255 and colourfulness) \
+                so the one that stands out shows. `like` matches another \
+                shot; or set `exposure` (stops, ±) and `saturation` (1 = as \
+                it is); `off: true` takes a grade away and stops the cut from \
+                adding one. The cut already evens out a shot brighter or \
+                darker than both its neighbours. The film is cut again.
+                """,
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "film": ["type": "string", "description": "The film's id or title."],
+                    "shot": ["type": "integer", "description": "Which shot. Omit to measure them all."],
+                    "like": ["type": "integer", "description": "The shot to match."],
+                    "exposure": ["type": "number", "description": "Stops of light, -1.5 to 1.5."],
+                    "saturation": ["type": "number", "description": "Colourfulness, 0.5 to 1.5; 1 leaves it."],
+                    "off": ["type": "boolean", "description": "No grade on this shot, not even an automatic one."],
+                ],
+                "required": ["film"],
+            ],
+        ],
+        [
+            "name": "film_guide",
+            "description": "How to take a film from its first cut to one worth showing: what to look at, which tool fixes what, and what the video models can and cannot be trusted with. Read it once before judging or fixing a film.",
+            "inputSchema": ["type": "object", "properties": [String: Any]()],
         ],
         [
             "name": "companion_open",
@@ -818,6 +950,11 @@ enum PanelTools {
         case "avatar_outfits": return (wardrobe(), false)
         case "avatar_wear":  return wear(args)
         case "image_generate": return await draw(args)
+        case "film_frames": return await filmFrames(args)
+        case "film_count": return await filmCount(args)
+        case "film_fix_picture": return await filmFixPicture(args)
+        case "film_grade": return await filmGrade(args)
+        case "film_guide": return (FilmStudio.guide, false)
         case "video_generate": return film(args)
         case "video_status": return (DiffuserClient.shared.videoReport, false)
         case "avatar_desktop": return desktop(args)
@@ -1051,11 +1188,13 @@ enum PanelTools {
             if args["run"] as? Bool == false { return (comfyReport(), false) }
             comfy.run()
             guard args["wait"] as? Bool ?? true else { return ("开始跑「\(comfy.current?.title ?? "")」，用 comfy_status 看结果", false) }
-            for _ in 0..<600 {
+            // At most what the kernel waits for a tool (60 s) — past that its
+            // relay answers "timed out" while the run goes on.
+            for _ in 0..<FilmTools.patience {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
                 if !comfy.running { break }
             }
-            if comfy.running { return ("还在跑（20 分钟了），用 comfy_status 看", false) }
+            if comfy.running { return ("还在跑，跑完用 comfy_status 看结果", false) }
             return (comfyReport(), false)
         case "comfy_import":
             let comfy = ComfyStudio.shared
@@ -1330,6 +1469,19 @@ enum PanelTools {
 
     private static func filmStatus(_ args: [String: Any]) async -> (String, Bool) {
         let studio = FilmStudio.shared
+        if args["wait"] as? Bool == true {
+            for _ in 0..<FilmTools.patience where studio.shooting != nil || studio.revising != nil || studio.writing != nil {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+            }
+            // The time first. Waiting on an eight-minute take answers the same
+            // thing three times running, and the kernel reads three identical
+            // answers as a loop going nowhere and tells the agent to give up.
+            let clock = DateFormatter()
+            clock.dateFormat = "HH:mm:ss"
+            let busy = studio.shooting.map { "在拍「\($0)」" } ?? studio.revising ?? studio.writing.map { "在写分镜：\($0)" }
+            let (said, failed) = await filmStatus(args.filter { $0.key != "wait" })
+            return ("\(clock.string(from: Date()))\(busy.map { " 还在忙：\($0)" } ?? " 手上的事做完了")\n" + said, failed)
+        }
         let words: [FilmStudio.Shot.State: String] = [.waiting: "等着", .drawing: "在画", .filming: "在拍", .reviewing: "在把关",
                                                       .done: "好了", .failed: "没拍成"]
         if let wanted = (args["film"] as? String)?.trimmingCharacters(in: .whitespaces), !wanted.isEmpty {
@@ -1363,8 +1515,19 @@ enum PanelTools {
                     lines.append("     \(who)（\(weight)）：" + said.joined(separator: " · "))
                 }
                 if let said = shot.narration { lines.append("     旁白：\(said)") }
+                var how: [String] = []
+                if let method = shot.method { how.append("拍法 \(method.title)\(shot.glide.map { "（\($0.title)）" } ?? "")") }
+                if let checks = shot.checks, !checks.isEmpty { how.append("要数：" + checks.map { "\($0.thing) \($0.count)" }.joined(separator: "、")) }
+                if let grade = shot.grade, !grade.neutral {
+                    how.append("调色 \(String(format: "%+.2f", grade.exposure)) EV、饱和 ×\(String(format: "%.2f", grade.saturation))\(grade.auto == true ? "（自动）" : "")")
+                }
+                if FileManager.default.fileExists(atPath: film.start(shot.id).path) { how.append("起始画面 \(film.start(shot.id).path)") }
+                if !how.isEmpty { lines.append("     " + how.joined(separator: " · ")) }
             }
-            if film.state == .done { lines.append("成片：\(film.file.path)") }
+            if let busy = studio.revising { lines.append("正在：\(busy)") }
+            if film.state == .done {
+                lines.append("成片：\(film.file.path)" + (film.loudness.map { "（响度 \(String(format: "%.1f", $0)) LUFS）" } ?? ""))
+            }
             if FilmStudio.jevOn, let trouble = studio.jevTrouble { lines.append("Jev 没答上来：\(trouble)") }
             if studio.jevTokens > 0 { lines.append("Jev 这次开机以来读了 \(studio.jevTokens) 个 token（$0.042 / 百万）") }
             return (lines.joined(separator: "\n"), false)
@@ -1385,11 +1548,14 @@ enum PanelTools {
     }
 
     private static func describe(_ film: FilmStudio.Film) -> String {
+        // The note in every state: what a picture change found is written
+        // there, and a film waiting to be filmed used to hide it.
+        let note = film.note.map { "（\($0)）" } ?? ""
         switch film.state {
-        case .waiting:  return "等着开拍"
-        case .shooting: return "在拍，\(film.finished)/\(film.shots.count) 个镜头好了"
-        case .cutting:  return "在剪"
-        case .done:     return "拍好了，\(film.finished) 个镜头" + (film.note.map { "（\($0)）" } ?? "")
+        case .waiting:  return "等着开拍" + note
+        case .shooting: return "在拍，\(film.finished)/\(film.shots.count) 个镜头好了" + note
+        case .cutting:  return "在剪" + note
+        case .done:     return "拍好了，\(film.finished) 个镜头" + note
         case .failed:   return "没拍成：" + (film.note ?? "")
         }
     }
@@ -1422,12 +1588,103 @@ enum PanelTools {
             FilmStudio.shared.redirect(film: film, shot: shot, note: note, following: onward)
             return ("在照「\(note)」改第 \(shot) 个镜头的提示词（十几秒），改好就重拍\(onward ? "，后面的镜头也跟着重拍" : "")。film_status 看进度", false)
         }
+        let method = (args["method"] as? String).flatMap { FilmStudio.Method(rawValue: $0.lowercased()) }
+        let glide = (args["glide"] as? String).flatMap { FilmStudio.Glide(rawValue: $0.lowercased()) }
+        if let asked = args["method"] as? String, method == nil { return ("method 只能是 h3、animate、move：\(asked)", true) }
+        if let asked = args["glide"] as? String, glide == nil { return ("glide 只能是 push_in、pull_out、pan_left、pan_right、rise、fall、hold：\(asked)", true) }
         switch FilmStudio.shared.reshoot(film: film, shot: shot, framing: args["framing"] as? String,
                                          still: args["still"] as? String, motion: args["motion"] as? String,
-                                         narration: args["narration"] as? String, hq: fine, following: onward) {
+                                         narration: args["narration"] as? String, hq: fine, following: onward,
+                                         method: method, glide: glide, h3: args["h3"] as? String,
+                                         checks: FilmTools.checks(args["counts"]), match: FilmTools.match(args["match"]),
+                                         later: args["later"] as? Bool ?? false) {
+        case .success(let made) where args["later"] as? Bool == true:
+            return (made.note ?? "第 \(shot) 镜准备好了，等着一起拍", false)
         case .success(let made):
             let redone = onward ? "第 \(shot) 个镜头和它后面的都在重拍" : "第 \(shot) 个镜头\(fine ? "在精修（q8，约 9 分钟）" : "在重拍")"
-            return ("「\(made.title)」\(redone)，拍完会重新剪一遍", false)
+            let how = made.shots.first { $0.id == shot }.map { taken -> String in
+                switch taken.method {
+                case .move: return "（在画面上运镜，几秒钟）"
+                case .animate:
+                    let bare = made.engine == .h3 && !(taken.who ?? []).isEmpty && !FileManager.default.fileExists(atPath: made.start(shot).path)
+                    return "（LTX 从一张图拍，约 2 分钟）" + (bare ? "。注意：这一镜有演员，但没有起始画面，会从空布景拍，画里没有人；要人就先 film_fix_picture from: take" : "")
+                default: return made.engine == .h3 ? "（H3，约 8 分钟）" : ""
+                }
+            } ?? ""
+            return ("「\(made.title)」\(redone)\(how)，拍完会重新剪一遍。film_status 看进度，拍完用 film_frames 看", false)
+        case .failure(let failure): return (failure.localizedDescription, true)
+        }
+    }
+
+    // MARK: Directing a film
+
+    private static func filmFrames(_ args: [String: Any]) async -> (String, Bool) {
+        guard let film = args["film"] as? String, let shot = FilmTools.int(args["shot"]) else { return ("film_frames 需要 film 和 shot", true) }
+        switch await FilmStudio.shared.inspect(film: film, shot: shot, every: FilmTools.number(args["every"]) ?? 1,
+                                               like: FilmTools.ints(args["like"]), picture: args["picture"] as? Bool ?? false) {
+        case .success(let seen):
+            // The kernel takes this line out of the text and attaches the
+            // picture itself, for a brain that can see.
+            return (seen.said + "\nimage://\(seen.sheet.path)", false)
+        case .failure(let failure): return (failure.localizedDescription, true)
+        }
+    }
+
+    private static func filmCount(_ args: [String: Any]) async -> (String, Bool) {
+        guard let film = args["film"] as? String, let shot = FilmTools.int(args["shot"]),
+              let thing = (args["thing"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !thing.isEmpty else {
+            return ("film_count 需要 film、shot 和 thing", true)
+        }
+        switch await FilmStudio.shared.countThings(film: film, shot: shot, thing: thing, expected: FilmTools.int(args["expected"]),
+                                                   picture: args["picture"] as? Bool ?? false, every: FilmTools.number(args["every"])) {
+        case .success(let said): return (said, false)
+        case .failure(let failure): return (failure.localizedDescription, true)
+        }
+    }
+
+    private static func filmFixPicture(_ args: [String: Any]) async -> (String, Bool) {
+        guard let film = args["film"] as? String, let shot = FilmTools.int(args["shot"]),
+              let instruction = args["instruction"] as? String else { return ("film_fix_picture 需要 film、shot 和 instruction", true) }
+        let from = (args["from"] as? String).flatMap { FilmStudio.Source(rawValue: $0.lowercased()) }
+        if let asked = args["from"] as? String, from == nil { return ("from 只能是 set、take、start：\(asked)", true) }
+        let studio = FilmStudio.shared
+        // Which picture it changes, decided the way the studio decides it.
+        let changes = from ?? (studio.film(named: film).map { FileManager.default.fileExists(atPath: $0.start(shot).path) } == true ? .start : .set)
+        // Changing a set for its numbers when its numbers are already right
+        // only risks the rest of it.
+        let counts = FilmTools.checks(args["counts"]) ?? []
+        if !counts.isEmpty, changes == .set || changes == .new,
+           await studio.setIsRight(film: film, shot: shot, checks: counts) {
+            return ("第 \(shot) 镜的布景数目已经对了（" + counts.map { "\($0.thing) \($0.count)" }.joined(separator: "，")
+                    + "），不用改。拍出来的镜头数目不对，就 film_reshoot(shot: \(shot), counts: …) 重拍：片场会数、多了会再拍", false)
+        }
+        switch studio.fixPicture(film: film, shot: shot, instruction: instruction, from: from,
+                                 at: FilmTools.number(args["at"]), like: FilmTools.ints(args["like"]),
+                                 counts: FilmTools.checks(args["counts"])) {
+        case .failure(let failure): return (failure.localizedDescription, true)
+        case .success(let made):
+            // A change takes about two minutes: waited for as long as a tool
+            // may take, then left to film_status.
+            for _ in 0..<FilmTools.patience {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                if studio.revising == nil { break }
+            }
+            guard studio.revising == nil, let done = studio.film(named: made.id) else {
+                return ("在改第 \(shot) 镜的画面（两分钟左右），改好了 film_status 会写，再用 film_frames picture: true 看", false)
+            }
+            let said = done.note ?? ""
+            let changed = said.contains("改好了")
+            let picture = changes == .set ? done.still(shot) : done.start(shot)
+            return (said + (changed ? "\nimage://\(picture.path)" : ""), !changed)
+        }
+    }
+
+    private static func filmGrade(_ args: [String: Any]) async -> (String, Bool) {
+        guard let film = args["film"] as? String else { return ("film_grade 需要 film", true) }
+        switch await FilmStudio.shared.regrade(film: film, shot: FilmTools.int(args["shot"]), like: FilmTools.int(args["like"]),
+                                               exposure: FilmTools.number(args["exposure"]), saturation: FilmTools.number(args["saturation"]),
+                                               off: args["off"] as? Bool ?? false) {
+        case .success(let said): return (said, false)
         case .failure(let failure): return (failure.localizedDescription, true)
         }
     }
@@ -1777,5 +2034,76 @@ enum PanelTools {
     private static func pick(_ number: Int?, from ids: [UUID], current: UUID?) -> UUID? {
         if let number, number >= 1, number <= ids.count { return ids[number - 1] }
         return current ?? ids.first
+    }
+}
+
+/// What the film tools share: the shape of a count, and reading numbers that
+/// arrive as whatever JSON made them.
+enum FilmTools {
+    /// Two-second polls a tool may wait through: the kernel gives a tool 60
+    /// seconds and its relay 55, and past that the answer is "timed out".
+    static let patience = 22
+
+    static let counts: [String: Any] = [
+        "type": "array",
+        "description": "Things whose NUMBER matters in this shot — five loaves, twelve baskets: counted in the picture before filming (and the picture fixed if it is wrong) and in the take after (a wrong take is filmed again).",
+        "items": [
+            "type": "object",
+            "properties": [
+                "thing": ["type": "string", "description": "What, in English, as it looks: \"round flat barley loaves\"."],
+                "count": ["type": "integer", "description": "How many."],
+            ] as [String: Any],
+            "required": ["thing", "count"],
+        ] as [String: Any],
+    ]
+
+    static func checks(_ value: Any?) -> [FilmStudio.Check]? {
+        guard let rows = value as? [Any] else { return nil }
+        return rows.compactMap { row in
+            if let row = row as? [String: Any] {
+                guard let thing = (row["thing"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !thing.isEmpty,
+                      let count = int(row["count"]), count > 0 else { return nil }
+                return FilmStudio.Check(thing: thing, count: count)
+            }
+            // Written as words, the way a model writes it anyway:
+            // "five small round barley loaves", "12 woven baskets".
+            guard let words = (row as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  let first = words.split(separator: " ", maxSplits: 1).first else { return nil }
+            let rest = words.dropFirst(first.count).trimmingCharacters(in: .whitespaces)
+            let number = Int(first) ?? spelled.firstIndex(of: first.lowercased()).map { $0 + 1 }
+            guard let number, number > 0, !rest.isEmpty else { return nil }
+            return FilmStudio.Check(thing: rest, count: number)
+        }
+    }
+
+    private static let spelled = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+                                  "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen",
+                                  "eighteen", "nineteen", "twenty"]
+
+    static func match(_ value: Any?) -> FilmStudio.Match? {
+        guard let row = value as? [String: Any],
+              let thing = (row["thing"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !thing.isEmpty,
+              let like = int(row["like"]) else { return nil }
+        return FilmStudio.Match(thing: thing, like: like)
+    }
+
+    static func int(_ value: Any?) -> Int? {
+        if let n = value as? Int { return n }
+        if let n = value as? Double { return Int(n) }
+        if let s = value as? String { return Int(s.trimmingCharacters(in: .whitespaces)) }
+        return nil
+    }
+
+    static func number(_ value: Any?) -> Double? {
+        if let n = value as? Double { return n }
+        if let n = value as? Int { return Double(n) }
+        if let s = value as? String { return Double(s.trimmingCharacters(in: .whitespaces)) }
+        return nil
+    }
+
+    static func ints(_ value: Any?) -> [Int] {
+        if let list = value as? [Any] { return list.compactMap { int($0) } }
+        if let one = int(value) { return [one] }
+        return []
     }
 }
