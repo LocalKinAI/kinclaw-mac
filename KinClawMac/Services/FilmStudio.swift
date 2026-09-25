@@ -577,7 +577,11 @@ final class FilmStudio: ObservableObject {
             film.shots[index].narration = said.isEmpty ? nil : said
             aside(film.voice(number), String(format: "shot-%02d.take-\(stamp).wav", number))
         }
-        if newFrame { aside(film.still(number), String(format: "shot-%02d.take-\(stamp).png", number)) }
+        if newFrame {
+            aside(film.still(number), String(format: "shot-%02d.take-\(stamp).png", number))
+            // The first frame showed the old picture; it is made again.
+            aside(film.start(number), String(format: "shot-%02d.take-start-\(stamp).png", number))
+        }
         aside(film.clip(number), String(format: "shot-%02d.take-\(stamp).mp4", number))
         aside(film.file, "film.cut-\(stamp).mp4")
         film.shots[index].state = .waiting
@@ -1175,6 +1179,28 @@ final class FilmStudio: ObservableObject {
         }
         if !counting.isEmpty { await ComfyStudio.yieldMemory() }
 
+        // The first frame of every shot with people in it, made before it is
+        // filmed and pinned where the shot starts (see FilmDirector): the set
+        // with the portraits' people standing in it, counted where it counts.
+        // Shots with nobody in them start from the set itself.
+        let composing = Self.pinOn ? film.shots.indices.filter {
+            film.shots[$0].state != .done && (film.shots[$0].method ?? .h3) == .h3 && !(film.shots[$0].who ?? []).isEmpty
+                && !fm.fileExists(atPath: film.start(film.shots[$0].id).path)
+        } : []
+        for index in composing {
+            if Task.isCancelled { return stopped(halt) }
+            do {
+                try await composeFirst(&film, index)
+                await settleFirst(&film, index)
+            } catch {
+                if Task.isCancelled { return stopped(halt) }
+                film.shots[index].note = "第一帧没做成（\(error.localizedDescription)），这一镜从布景拍"
+                film.note = nil
+                save(film)
+            }
+        }
+        if !composing.isEmpty { await ComfyStudio.yieldMemory() }
+
         for index in film.shots.indices where film.shots[index].state != .done && (film.shots[index].method ?? .h3) == .h3 {
             if Task.isCancelled { return stopped(halt) }
             let id = film.shots[index].id
@@ -1193,6 +1219,12 @@ final class FilmStudio: ObservableObject {
                         for kind in [BoxServices.Kind.draw, .edit] { await BoxServices.shared.stop(kind) }
                         await settle(&film, index)
                     }
+                    // A first frame made from a set that is not there any more
+                    // (a retake redrew it) is made again from the new one.
+                    if Self.pinOn, !(film.shots[index].who ?? []).isEmpty, !fm.fileExists(atPath: film.start(id).path) {
+                        try await composeFirst(&film, index, attempt: attempt)
+                        await settleFirst(&film, index)
+                    }
                     if film.shots[index].h3 == nil, let written = await Self.writeH3(film, only: [id]) {
                         film.shots[index].h3 = written[id]
                     }
@@ -1205,7 +1237,8 @@ final class FilmStudio: ObservableObject {
                         try await Self.renderH3(prompt: shot.h3 ?? Self.literal(shot.pose + ". " + shot.action),
                                                 references: portraits + [film.still(id)], seconds: film.seconds,
                                                 size: film.size, seed: CompanionCharacter.seed(for: film.id + String(id) + String(attempt)),
-                                                full: shot.hq == true, to: film.clip(id), film: film.id, shot: id)
+                                                full: shot.hq == true, pins: pins(for: shot, in: film),
+                                                to: film.clip(id), film: film.id, shot: id)
                     }
 
                     // A director's own words are not reviewed, but numbers are
@@ -1241,6 +1274,7 @@ final class FilmStudio: ObservableObject {
                     try? fm.moveItem(at: film.clip(id), to: film.take(id, mark, "mp4"))
                     if redraw {
                         try? fm.moveItem(at: film.still(id), to: film.take(id, mark, "png"))
+                        try? fm.moveItem(at: film.start(id), to: film.take(id, mark + "-start", "png"))
                         if let pose = verdict.pose { film.shots[index].seen = pose }
                         if let camera = verdict.framing { film.shots[index].framing = camera }
                     }
@@ -1577,6 +1611,10 @@ final class FilmStudio: ObservableObject {
     /// was asked for, does it move at all, and is anything plainly wrong with
     /// it? Nobody asks whether she stayed on the spot, because there is no she.
     static func reviewStory(_ shot: Shot, in film: Film, frames pictures: [Data]) async -> Verdict? {
+        // A shot pinned to hold its picture (see FilmDirector.pins) is quiet on
+        // purpose: only the light and the air move. Asked as any other, the
+        // reviewer called one "a frozen still image" and it was filmed again.
+        let held = film.engine == .h3 && Self.pinOn && (shot.who ?? []).isEmpty && !(shot.checks ?? []).isEmpty
         let ask = """
             You are checking one 4-second shot of a short film about: "\(film.idea)". Images 1–4 are frames \
             from the shot in order: its start, one third, two thirds, its end. \(film.engine == .h3
@@ -1586,13 +1624,17 @@ final class FilmStudio: ObservableObject {
             "\(shot.pose)"; what moves: "\(shot.action)"\(wished(shot))
             Report what you SEE, as facts. Answer with ONE JSON object and nothing else:
             {"shows_it": "no" or "partly" or "yes", "deformed": true/false, "camera_wild": true/false, \
-            "frozen": true/false, "face_shown": true/false, "text_on_screen": true/false, "wish_ignored": true/false, \
-            "saw": "...", "problem": "...", "fix": "clip" or "still", "framing": "...", "pose": "...", "motion": "..."}
+            "scene_jump": true/false, "frozen": true/false, "face_shown": true/false, "text_on_screen": true/false, \
+            "wish_ignored": true/false, "saw": "...", "problem": "...", "fix": "clip" or "still", "framing": "...", \
+            "pose": "...", "motion": "..."}
             - shows_it: whether the frames show the thing or place the plan describes. "partly" if it is there \
             but something the plan named is missing.
             - deformed: a plainly deformed hand, body or object — extra or missing fingers, melted shapes.
             - camera_wild: a fast zoom, the camera swinging away, or ending out of focus.
-            - frozen: nothing moves at all across the four frames. A quiet shot is fine; a still photograph is not.
+            - scene_jump: between the frames the shot turns into another place or another arrangement of the same \
+            things — other stones, other baskets in other rows — as if it were a different shot, even if it comes \
+            back by the end.
+            - frozen: \(held ? "answer false: this shot is pinned to hold its picture — the things in it stay exactly where they are and only the light, the air and the mist move, on purpose." : "nothing moves at all across the four frames. A quiet shot is fine; a still photograph is not.")
             - face_shown: a human face is clearly visible and in focus. \(film.engine == .h3
                 ? "In this film that is FINE — its people are cast and meant to be seen; report it, but it is not a problem, and never ask for a face to be hidden."
                 : "In this film that is a fault: these shots are meant to be hands, things, places and figures turned away.")
@@ -1613,7 +1655,10 @@ final class FilmStudio: ObservableObject {
         if flag("face_shown"), film.engine != .h3 { cost += 4 }
         if flag("text_on_screen") { cost += 3 }
         if flag("camera_wild") { cost += 3 }
-        if flag("frozen") { cost += 3 }
+        // Seen twice on a pinned shot: it wanders to another part of the field
+        // between its pinned ends — passed once with a ten.
+        if flag("scene_jump") { cost += 4 }
+        if flag("frozen"), !held { cost += 3 }
         if flag("wish_ignored") { cost += 4 }
         return Verdict(score: max(1, 10 - cost), ok: cost == 0, problem: text(answer["problem"]) ?? "",
                        fix: (answer["fix"] as? String) == "still" ? .still : .clip,

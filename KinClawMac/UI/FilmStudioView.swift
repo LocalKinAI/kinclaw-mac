@@ -37,6 +37,7 @@ struct FilmStudioView: View {
     /// What films a story: LTX from each still, or H3 from a cast.
     @AppStorage("kinclaw.film.engine") private var engine = FilmStudio.Engine.ltx.rawValue
     @AppStorage(FilmStudio.musicKey) private var musicOn = true
+    @AppStorage(FilmStudio.pinKey) private var pinOn = true
     @State private var tick = 0
     /// One shot's words, open for rewriting, and what they were when opened.
     @State private var editing: Words?
@@ -602,6 +603,8 @@ struct FilmStudioView: View {
                 .help("画面的形状。竖屏 9:16 是手机拿着看的那种，576×1024；方形 704×704 是这个标签原来的样子")
                 Toggle("配乐", isOn: $musicOn).font(.system(size: 10)).toggleStyle(.checkbox).fixedSize()
                     .help("在盒子上按片子的内容作一段配乐（MiniMax Music 3，经 ComfyUI），垫在整部片子下面，旁白说话时自动压低")
+                Toggle("钉帧", isOn: $pinOn).font(.system(size: 10)).toggleStyle(.checkbox).fixedSize()
+                    .help("H3 拍的片子：有人的镜头先用定妆照和布景合成第一帧（要数的东西先数对），再钉在开头让 H3 从这一帧拍；没人的镜头从布景拍，要数的空镜头开头、中间、结尾都钉。人和东西都更稳，动作也更自然")
                 Toggle("她当主角", isOn: $lead).font(.system(size: 10)).toggleStyle(.checkbox).fixedSize()
                 Picker("", selection: $kind) {
                     ForEach(FilmStudio.Kind.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }

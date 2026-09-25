@@ -203,7 +203,8 @@ extension FilmStudio {
     /// template turns into (reference-to-video with its 4-step LoRA), written
     /// here directly so a film does not wait on ComfyUI's web page.
     static func renderH3(prompt: String, references: [URL], seconds: Double, size: CGSize, seed: Int,
-                         full: Bool, to out: URL, film: String, shot: Int) async throws {
+                         full: Bool, pins: [(picture: URL, frame: Int)] = [], to out: URL, film: String,
+                         shot: Int) async throws {
         guard await BoxServices.shared.ensure(.comfy) else { throw Failure.message("盒子上的 ComfyUI 起不来") }
         let base = await BoxServices.base(.comfy)
         // Upload each reference under a name that says whose it is.
@@ -227,7 +228,6 @@ extension FilmStudio {
             "8": node("KSamplerSelect", ["sampler_name": "res_multistep"]),
             "9": node("BasicScheduler", ["scheduler": "simple", "steps": full ? 20 : 4, "denoise": 1,
                                          "model": full ? ["1", 0] : ["5", 0]]),
-            "10": node("BasicGuider", ["model": full ? ["1", 0] : ["5", 0], "conditioning": ["6", 0]]),
             "11": node("SamplerCustomAdvanced", ["noise": ["7", 0], "guider": ["10", 0], "sampler": ["8", 0],
                                                  "sigmas": ["9", 0], "latent_image": ["6", 1]]),
             "12": node("VAEDecode", ["samples": ["11", 0], "vae": ["3", 0]]),
@@ -246,6 +246,24 @@ extension FilmStudio {
             reference["ref_images.ref_image_\(i)"] = ["\(100 + i)", 0]
         }
         graph["6"] = node("MiniMaxH3ReferenceToVideo", reference)
+        // Pinned frames: pictures the shot must pass through exactly — its
+        // first frame, made and checked beforehand — chained onto the
+        // conditioning, each at the size the shot is filmed at.
+        var conditioning: [Any] = ["6", 0]
+        for (i, pin) in pins.enumerated() {
+            guard let sized = FilmStudio.filling(pin.picture, width: width, height: height) else {
+                throw Failure.message("读不了要钉的画面：\(pin.picture.lastPathComponent)")
+            }
+            let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("kinclaw-pin-\(UUID().uuidString).png")
+            try sized.write(to: temporary)
+            defer { try? FileManager.default.removeItem(at: temporary) }
+            let name = try await upload(temporary, as: "kinclaw-\(film.prefix(40))-shot\(shot)-pin\(i + 1).png", to: base)
+            graph["\(200 + i)"] = node("LoadImage", ["image": name])
+            graph["\(300 + i)"] = node("MiniMaxH3AddGuide", ["positive": conditioning, "latent": ["6", 1], "frame_idx": pin.frame,
+                                                            "vae": ["3", 0], "audio_vae": ["4", 0], "image": ["\(200 + i)", 0]])
+            conditioning = ["\(300 + i)", 0]
+        }
+        graph["10"] = node("BasicGuider", ["model": full ? ["1", 0] : ["5", 0], "conditioning": conditioning])
 
         let video = try await comfyResult(graph, node: "15", base: base, what: "H3 镜头", deadline: 3600)
         try? FileManager.default.removeItem(at: out)

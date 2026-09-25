@@ -295,10 +295,13 @@ extension FilmStudio {
         }
     }
 
-    /// A take's counts: nil when the shot counts nothing or every count is right.
+    /// A take's counts, a frame every second: nil when the shot counts nothing
+    /// or every count is right. Every second, not five fixed moments: a pinned
+    /// shot of twelve baskets wandered off to a slope with fourteen at two
+    /// seconds and at four, and was counted right at 1.3, 2.6 and 3.9.
     static func recount(_ shot: Shot, in film: Film) async -> String? {
         guard let checks = shot.checks, !checks.isEmpty else { return nil }
-        let pictures = await countingFrames(of: film.clip(shot.id))
+        let pictures = await countingFrames(of: film.clip(shot.id), every: 1)
         guard !pictures.isEmpty else { return nil }
         let said = await miscounted(checks, in: pictures, exact: false)
         return said?.hasPrefix(uncounted) == true ? nil : said
@@ -482,6 +485,127 @@ extension FilmStudio {
         try? FileManager.default.removeItem(at: out)
         try best.data.write(to: out)
         return best.said
+    }
+
+    // MARK: - Pinning the first frame
+
+    static let pinKey = "kinclaw.film.h3.pin"
+    /// H3 films are filmed from a first frame made beforehand, unless this is
+    /// turned off in the tab.
+    static var pinOn: Bool { UserDefaults.standard.object(forKey: pinKey) as? Bool ?? true }
+
+    /// A picture cut and scaled to fill exactly `width` × `height`, as PNG:
+    /// a pinned frame has to be the size the shot is filmed at.
+    nonisolated static func filling(_ file: URL, width: Int, height: Int) -> Data? {
+        guard let image = picture(file), let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: space, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return nil }
+        let scale = max(Double(width) / Double(image.width), Double(height) / Double(image.height))
+        let drawn = CGSize(width: Double(image.width) * scale, height: Double(image.height) * scale)
+        context.interpolationQuality = .high
+        context.draw(image, in: CGRect(x: (Double(width) - drawn.width) / 2, y: (Double(height) - drawn.height) / 2,
+                                       width: drawn.width, height: drawn.height))
+        guard let filled = context.makeImage() else { return nil }
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(data, "public.png" as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(destination, filled, nil)
+        return CGImageDestinationFinalize(destination) ? data as Data : nil
+    }
+
+    /// Where an H3 shot is pinned: its first frame — the one made for it with
+    /// its people in it, else its set — at frame 0. A shot that counts things
+    /// with nobody in it is pinned at its middle and its end as well: pinned
+    /// only at both ends, the twelve baskets wandered off to another slope in
+    /// between (fourteen of them there) and came back, twice; pinned three
+    /// times the shot held — twelve at every half second, the mist moving over
+    /// the lake and the light changing, which the camera moved over a still
+    /// never does. The boy's shot, pinned at its start, kept its five loaves.
+    func pins(for shot: Shot, in film: Film) -> [(picture: URL, frame: Int)] {
+        guard Self.pinOn, film.engine == .h3 else { return [] }
+        let first = film.opening(shot.id)
+        guard FileManager.default.fileExists(atPath: first.path) else { return [] }
+        let held = (shot.who ?? []).isEmpty && !(shot.checks ?? []).isEmpty
+        return [(first, 0)] + (held ? [(first, Self.h3Frames(film.seconds) / 2), (first, -1)] : [])
+    }
+
+    /// The first frame of an H3 shot with people in it, made before it is
+    /// filmed: the set as image 1, the portraits of who is in it after it, and
+    /// the storyboard's picture of the moment — so the people stand where the
+    /// shot starts, holding what they hold, before H3 moves anything. Made in
+    /// 141 s for 五饼二鱼's shot 4 and right the first time: the boy's face, five
+    /// loaves, two fish, the hands coming in from the right.
+    func composeFirst(_ film: inout Film, _ index: Int, attempt: Int = 0) async throws {
+        let shot = film.shots[index]
+        let fm = FileManager.default
+        let names = (shot.who ?? []).filter { name in film.cast?.contains { $0.name == name } == true }
+        let portraits = names.compactMap { name in film.cast?.firstIndex { $0.name == name } }
+            .map { film.castPicture($0) }.filter { fm.fileExists(atPath: $0.path) }
+        guard !portraits.isEmpty, fm.fileExists(atPath: film.still(shot.id).path) else { return }
+        film.note = "第 \(shot.id) 镜：先做第一帧"
+        save(film)
+        let told = ["Image 1 is the place and what is in it."]
+            + names.prefix(portraits.count).enumerated().map { "Image \($0.offset + 2) is \($0.element)." }
+        let instruction = (told + [
+            "Make one photograph of them together — the first frame of a film shot: \(shot.framing ?? "a medium shot").",
+            Self.literal(shot.pose),
+            "\(names.joined(separator: " and ")) keep exactly the faces, hair and clothes of their pictures. Nobody else is added close to the camera.",
+            Self.counted(shot.checks) ?? "",
+            film.tone ?? "",
+            "Everything belongs to the time and place of the story: nothing modern, no text.",
+            "Photorealistic film still, natural proportions, high micro detail.",
+        ]).filter { !$0.isEmpty }.joined(separator: " ")
+        let made = film.folder.appendingPathComponent(String(format: "shot-%02d.first.png", shot.id))
+        try await Self.repaint(film.still(shot.id), like: portraits, instruction: instruction,
+                               seed: CompanionCharacter.seed(for: film.id + String(shot.id) + "first" + String(attempt)),
+                               to: made, tag: "\(film.id)-\(shot.id)")
+        FilmReference.reshape(made, to: film.size)
+        if fm.fileExists(atPath: film.start(shot.id).path) {
+            try? fm.moveItem(at: film.start(shot.id), to: film.take(shot.id, "start-\(Int(Date().timeIntervalSince1970))", "png"))
+        }
+        try fm.moveItem(at: made, to: film.start(shot.id))
+        film.note = nil
+        save(film)
+    }
+
+    /// A first frame with too many of something is made again — changed once
+    /// for the count, then composed afresh once — and said if it still has.
+    /// Only too many: in a frame with people in it a hand covers a loaf and
+    /// two fish lie one on the other — the boy's first frame, right, was
+    /// counted as one fish three times running and made again for nothing.
+    func settleFirst(_ film: inout Film, _ index: Int) async {
+        guard let checks = film.shots[index].checks, !checks.isEmpty else { return }
+        let id = film.shots[index].id
+        let fm = FileManager.default
+        for attempt in 0..<3 {
+            guard let image = Self.picture(film.start(id)), let data = Self.jpeg(image, largest: 1024) else { return }
+            guard let wrong = await Self.miscounted(checks, in: [(nil, data)], exact: false) else { return }
+            if wrong.hasPrefix(Self.uncounted) { return }
+            guard attempt < 2 else {
+                film.shots[index].note = "第一帧\(wrong)（做了三次还不对）"
+                save(film)
+                return
+            }
+            do {
+                if attempt == 0 {
+                    let numbers = checks.map { "exactly \($0.count) \($0.thing)" }.joined(separator: " and ")
+                    let out = film.folder.appendingPathComponent(String(format: "shot-%02d.first.png", id))
+                    try await Self.repaint(film.start(id), like: [], instruction: """
+                        Change only how many there are: the picture must show \(numbers) — each one whole, separate and \
+                        easy to count. Keep everything else exactly as it is: the people, their faces and hands, the \
+                        place, the light, the framing.
+                        """, seed: CompanionCharacter.seed(for: film.id + String(id) + "firstcount"), to: out,
+                        tag: "\(film.id)-\(id)")
+                    try? fm.moveItem(at: film.start(id), to: film.take(id, "miscount-\(Int(Date().timeIntervalSince1970))", "png"))
+                    try fm.moveItem(at: out, to: film.start(id))
+                } else {
+                    try await composeFirst(&film, index, attempt: attempt)
+                }
+            } catch {
+                film.shots[index].note = "第一帧\(wrong)，重做没成：\(error.localizedDescription)"
+                save(film)
+                return
+            }
+        }
     }
 
     // MARK: - Making a thing match another shot
@@ -1359,7 +1483,7 @@ extension FilmStudio {
         导演手册 —— 从第一版到能给人看的那一版
 
         一、拍之前
-        - 故事片用 film_make，engine: h3（人物前后一致）。故事里要"数"的东西（五个饼、两条鱼、十二个篮子），写进那个镜头的 counts：[{"thing": "round flat barley loaves", "count": 5}]。布景画好后会先数一遍，不对就改图，再拍。
+        - 故事片用 film_make，engine: h3（人物前后一致）。H3 片默认钉帧：有人的镜头先用定妆照和布景合成第一帧、数过，再钉在开头拍；没人的镜头从布景拍；没人又要数的镜头开头、中间、结尾都钉同一张，场景定住、只有光和雾在动。第一帧在 film_frames(picture: true) 里能看到。故事里要"数"的东西（五个饼、两条鱼、十二个篮子），写进那个镜头的 counts：[{"thing": "round flat barley loaves", "count": 5}]。布景画好后会先数一遍，不对就改图，再拍。
         - 也可以在拍之前先看布景：film_frames(picture: true)，数：film_count(picture: true)。布景对了，H3 才会对；H3 只守得住布景里有的东西。
 
         二、拍完，自己看，一个镜头一个镜头地看
@@ -1371,11 +1495,12 @@ extension FilmStudio {
         三、哪里不对，怎么修
         1. 数目不对（饼、篮子）→ 直接 film_reshoot(shot, counts: [{"thing": "small round barley loaves", "count": 5}])。counts 只给故事定死了数目、整个镜头里都不变的东西（孩子篮子里的五个饼、最后那十二个篮子）；掰饼、分饼的镜头里饼的数目一直在变，别给 counts，不然片场会把布景改成"正好五个"。片场自己会：先数布景，不对就改图，改不对就重画三张挑对的；再拍；拍完一帧一帧数，多了自动重拍一次；镜头里没人、还是不对，就改成在数过的布景上运镜。你不用自己一遍遍改布景 —— 等它拍完（film_status wait），用 film_frames 看、film_count 数，核对结果。
            只有它说布景改不对时，才自己改：film_fix_picture(from: "set", counts: …) 改完会自己数一遍告诉你。差一两个就说具体删哪个、加在哪（"去掉后排最左边那个篮子，别的都不动"）；差得多就 from: "new" 带上整张布景的完整描述重画（画三张、留数目对的）。布景数对了就别再动它：重画会换掉东西的样子（金黄的饼变成白的薄饼），前后镜头就对不上了；重画时把别的镜头里它的样子写进描述。
-        2. 人对、东西的样子和别的镜头不一样（第 7 镜的饼和第 4 镜的不一样）→ H3 给了参考图也守不住东西。直接 film_reshoot(shot: 7, match: {"thing": "bread", "like": 4}, motion: "他掰开饼放进篮子……")：片场会从这一镜开头取一帧，先让看图的模型描述第 4 镜里饼的样子，照着把这一帧里的饼改成一样的，再用 LTX 从这一帧拍（约 5 分钟）。画里是什么，拍出来就是什么。拍完 film_frames(shot: 7, like: [4]) 并排对比。
+        2. 第一帧就不对（人站错、东西不对）→ film_fix_picture(from: "start", instruction: "…") 改第一帧 → film_frames(picture: true) 看 → film_reshoot(shot) 从改好的第一帧重拍。改布景或画面描述时第一帧会自动重做。
+        3. 人对、东西的样子和别的镜头不一样（第 7 镜的饼和第 4 镜的不一样）→ H3 给了参考图也守不住东西。直接 film_reshoot(shot: 7, match: {"thing": "bread", "like": 4}, motion: "他掰开饼放进篮子……")：片场会从这一镜开头取一帧，先让看图的模型描述第 4 镜里饼的样子，照着把这一帧里的饼改成一样的，再用 LTX 从这一帧拍（约 5 分钟）。画里是什么，拍出来就是什么。拍完 film_frames(shot: 7, like: [4]) 并排对比。
            要自己动手也行：film_fix_picture(from: "take", at: 0.2, like: [4], instruction: "…") → film_frames(picture: true) 看 → film_reshoot(shot: 7, method: "animate")。描述要照参照镜头里它真实的样子写：写错了（"深色、有裂纹"）会改成错的样子。
-        3. 数目必须一直对、镜头里没人（一排篮子、桌上的饼）→ film_reshoot(shot, method: "move", glide: "pull_out") 在数过的布景上运镜：不用视频模型，几秒钟，东西不会多也不会少。H3 和 LTX 都会自己挪镜头，边挪边"长"出东西。声音沿用被换掉的那一条。
-        4. 某一镜太亮、太暗、颜色不一样 → film_grade() 先量每一镜，再 film_grade(shot, like: 旁边的镜头)。比前后两镜都亮（或暗）一截的镜头，剪辑时会自动拉回来。
-        5. 旁白、配乐 → film_rescore；只重剪 → film_recut。每次剪完都会自动做母带，响度 -16 LUFS。
+        4. 数目必须一直对、镜头里没人，钉帧还守不住 → film_reshoot(shot, method: "move", glide: "pull_out") 在数过的布景上运镜：不用视频模型，东西不会多也不会少，但画面是死的，只当最后一招。
+        5. 某一镜太亮、太暗、颜色不一样 → film_grade() 先量每一镜，再 film_grade(shot, like: 旁边的镜头)。比前后两镜都亮（或暗）一截的镜头，剪辑时会自动拉回来。
+        6. 旁白、配乐 → film_rescore；只重剪 → film_recut。每次剪完都会自动做母带，响度 -16 LUFS。
         要重拍好几个镜头：前面的都加 later: true，最后一个不加（或者最后调一次 film_reshoot 不带 shot），一次拍完——H3 的先拍，其余的后拍，只要等一轮。
 
         四、每修一处都要再看

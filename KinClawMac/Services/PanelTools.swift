@@ -455,7 +455,7 @@ enum PanelTools {
                     "count": ["type": "integer", "description": "With idea alone: how many shots, 2–8. Default 4."],
                     "shape": ["type": "string", "description": "square (1:1, 704×704 — the default) | portrait (9:16, 576×1024, what a phone holds upright) | landscape (16:9)."],
                     "kind": ["type": "string", "description": "auto (default: the studio reads the idea and decides) | story (a sequence of events — each shot drawn on its own, the place may change, shots of things and places rather than of one person) | activity (one continuous performance in one place, every shot carrying on from the last). Pass story or activity only to overrule a reading that came out wrong."],
-                    "engine": ["type": "string", "description": "What films a story: ltx (default; ~100 s a shot, each shot from its own picture, so people are shown as hands and backs) | h3 (MiniMax H3 through ComfyUI on the box: the story's people are cast and drawn once, and every shot is filmed from their portraits and the shot's set — the same faces throughout, native sound; ~5–7 minutes a shot). Continuous-activity films always use ltx."],
+                    "engine": ["type": "string", "description": "What films a story: ltx (default; ~100 s a shot, each shot from its own picture, so people are shown as hands and backs) | h3 (MiniMax H3 through ComfyUI on the box: the story's people are cast and drawn once; each shot's first frame is made from their portraits and the shot's set, checked, and pinned where the shot starts — the same faces throughout, the props as counted, native sound; ~10–12 minutes a shot). Continuous-activity films always use ltx."],
                     "look": ["type": "string", "description": "Shared by every frame: \"35mm film still, golden hour, warm palette, shallow depth of field\"."],
                     "place": ["type": "string", "description": "The one location, said once: \"a stone-paved clearing beside a lake in a city park, a red wooden pavilion behind it, a large willow on the right, morning mist\"."],
                     "lead": ["type": "boolean", "description": "true: she (the companion) is in every shot. Default false."],
@@ -1497,7 +1497,8 @@ enum PanelTools {
             }
             if film.engine == .h3 {
                 let cast = (film.cast ?? []).enumerated().map { "\($0.element.name)（\(film.castPicture($0.offset).path)）" }
-                lines.append("  用 H3 拍" + (cast.isEmpty ? (film.cast == nil ? "，还没选角" : "，没有要选的角色") : "，演员：" + cast.joined(separator: "、")))
+                lines.append("  用 H3 拍" + (FilmStudio.pinOn ? "，钉帧（每镜先做好第一帧再拍）" : "")
+                             + (cast.isEmpty ? (film.cast == nil ? "，还没选角" : "，没有要选的角色") : "，演员：" + cast.joined(separator: "、")))
             }
             for shot in film.shots {
                 let camera = shot.framing.map { "〔\($0)〕" } ?? ""

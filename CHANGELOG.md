@@ -8,6 +8,40 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Changed — Film: H3 shots are filmed from a pinned first frame
+
+Every H3 shot now starts from a picture made and checked before it is filmed,
+pinned to its first frame (ComfyUI's `MiniMaxH3AddGuide`, on the ref2va model
+the box already has). A shot with people in it gets its first frame composed
+by Qwen-Image 2.1 edit — the set as image 1, the portraits of who is in it
+after — from the storyboard's picture of the moment, counted where the shot
+counts things (too many is changed once for the count, then composed afresh
+once — a hand over a loaf or two fish lying together is not a fault). A shot
+with nobody in it starts from its set; one that counts things is pinned at its
+middle and its end as well: pinned only at both ends, the twelve baskets
+wandered to another slope in between and came back; pinned three times, the
+shot held — twelve at every half second, the mist moving on the lake.
+The cast portraits and the set stay H3's references, as before.
+
+Tested on 五饼二鱼 before it was built: the boy's first frame came out right
+the first time (his face, five loaves, two fish, the hands coming in), and the
+pinned take never showed more than five loaves — and H3 brought Jesus's face in,
+smiling at the boy, a better beat than hands alone. Side by side, both
+pinned takes looked more natural than the old ones (the baskets had been a
+camera moving over a still, steady and lifeless); they are in the film now.
+
+Takes are counted every second rather than at five fixed moments (the wandering
+baskets were counted right at 1.3, 2.6 and 3.9 s and were fourteen at 2 and 4),
+and the reviewer is asked whether a shot jumps to another place or arrangement
+half way (it had passed one that did with a ten). A shot pinned to hold its
+picture is quiet on purpose, and the reviewer is told so: it had called the
+three-times-pinned baskets "a frozen still image" and had them filmed again.
+
+A first frame is made again when its set or its picture changes (a reshoot
+with new words, a retake that redraws the set); `film_fix_picture from: start`
+changes it by hand, and a reshoot films from the changed one. 「钉帧」 in the
+tab turns it off. A shot with people takes about two minutes longer.
+
 ### Added — Film: the director's work after the first cut, as tools
 
 Everything done by hand on 五饼二鱼 between the first cut and the one its owner
