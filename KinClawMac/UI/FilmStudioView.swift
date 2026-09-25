@@ -601,7 +601,7 @@ struct FilmStudioView: View {
                 .labelsHidden().pickerStyle(.menu).controlSize(.small).fixedSize()
                 .help("画面的形状。竖屏 9:16 是手机拿着看的那种，576×1024；方形 704×704 是这个标签原来的样子")
                 Toggle("配乐", isOn: $musicOn).font(.system(size: 10)).toggleStyle(.checkbox).fixedSize()
-                    .help("在盒子上用 kin audio 的 MusicGen 按片子的内容作一段配乐，垫在整部片子下面，旁白说话时自动压低。第一次用要在盒子上下载 MusicGen（约 4 GB）")
+                    .help("在盒子上按片子的内容作一段配乐（MiniMax Music 3，经 ComfyUI），垫在整部片子下面，旁白说话时自动压低")
                 Toggle("她当主角", isOn: $lead).font(.system(size: 10)).toggleStyle(.checkbox).fixedSize()
                 Picker("", selection: $kind) {
                     ForEach(FilmStudio.Kind.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
