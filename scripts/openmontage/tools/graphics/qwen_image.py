@@ -34,6 +34,11 @@ _MODELS = [
     "qwen_image_2.1_vae_bf16.safetensors",
 ]
 
+# PrunaAI's distilled 8-step LoRA for Qwen-Image 2.1 (huggingface.co/PrunaAI/Pruna-Qwen-Image-2.1),
+# in the box's ComfyUI/models/loras; tested 2026-09-26: 3x faster, pictures as good in the two compared.
+_FAST_LORA = "p_qwen_image_2.1_8step_v0.1.safetensors"
+_FAST_SIGMAS = "1, 0.9333333333, 0.8571428571, 0.7692307692, 0.6666666667, 0.5454545455, 0.4, 0.2222222222, 0"
+
 
 class QwenImage(BaseTool):
     name = "qwen_image"
@@ -76,7 +81,11 @@ class QwenImage(BaseTool):
             "aspect_ratio": {"type": "string", "default": "16:9", "description": "Text-to-image shape: 16:9, 9:16, 1:1, 4:3 ..."},
             "width": {"type": "integer", "description": "Text-to-image width (with height), else from aspect_ratio at ~1 MP"},
             "height": {"type": "integer"},
-            "steps": {"type": "integer", "default": 25},
+            "steps": {"type": "integer", "default": 25, "description": "Only without fast"},
+            "fast": {"type": "boolean", "default": True, "description": (
+                "8 steps with PrunaAI's distilled LoRA instead of 25: about three times faster (a set ~42 s, "
+                "a first frame from two pictures ~37 s on the box), as good in the tests so far. False for the "
+                "slow full-quality pass, e.g. a hero frame that came out soft.")},
             "seed": {"type": "integer", "description": "Random if omitted"},
             "output_path": {"type": "string", "description": "Where to save the PNG"},
         },
@@ -100,6 +109,8 @@ class QwenImage(BaseTool):
         return 0.0
 
     def estimate_runtime(self, inputs: dict[str, Any]) -> float:
+        if inputs.get("fast", True):
+            return 40.0 if inputs.get("reference_images") else 45.0
         return 140.0 if inputs.get("reference_images") else 90.0
 
     def execute(self, inputs: dict[str, Any]) -> ToolResult:
@@ -107,6 +118,12 @@ class QwenImage(BaseTool):
             return ToolResult(success=False, error=self._client.unavailable_reason())
         start = time.time()
         seed = pick_seed(inputs.get("seed"))
+        # Fast unless told otherwise — and slow, not refused, where the LoRA or
+        # the sigma node is not on this ComfyUI.
+        fast = bool(inputs.get("fast", True))
+        if fast:
+            _, lacking = self._client.check_models([_FAST_LORA])
+            fast = not lacking and self._client.has_node("ManualSigmas")
         references = [str(p) for p in inputs.get("reference_images") or []]
         output_path = Path(inputs.get("output_path") or f"qwen_image_{seed}.png")
         graph = {
@@ -134,10 +151,26 @@ class QwenImage(BaseTool):
                                                             "resolution": 1024, "clip": ["2", 0]})
                 graph["9"] = node("EmptyLatentImage", {"width": width, "height": height, "batch_size": 1})
                 latent, model = ["9", 0], ["1", 0]
-            graph["6"] = node("KSampler", {"seed": seed, "steps": int(inputs.get("steps", 25)), "cfg": 1,
-                                           "sampler_name": "euler", "scheduler": "simple", "denoise": 1,
-                                           "model": model, "positive": ["5", 0], "negative": ["5", 1],
-                                           "latent_image": latent})
+            if fast:
+                # PrunaAI's 8-step LoRA: strength 2.0 (alpha 128 over rank 64,
+                # which the file does not carry), its own sigmas, no CFG.
+                graph["90"] = node("LoraLoaderModelOnly", {"model": ["1", 0], "lora_name": _FAST_LORA,
+                                                           "strength_model": 2.0})
+                if model == ["1", 0]:
+                    model = ["90", 0]
+                else:
+                    graph["4"]["inputs"]["model"] = ["90", 0]
+                graph["91"] = node("RandomNoise", {"noise_seed": seed})
+                graph["92"] = node("CFGGuider", {"model": model, "positive": ["5", 0], "negative": ["5", 1], "cfg": 1.0})
+                graph["93"] = node("KSamplerSelect", {"sampler_name": "euler"})
+                graph["94"] = node("ManualSigmas", {"sigmas": _FAST_SIGMAS})
+                graph["6"] = node("SamplerCustomAdvanced", {"noise": ["91", 0], "guider": ["92", 0], "sampler": ["93", 0],
+                                                            "sigmas": ["94", 0], "latent_image": latent})
+            else:
+                graph["6"] = node("KSampler", {"seed": seed, "steps": int(inputs.get("steps", 25)), "cfg": 1,
+                                               "sampler_name": "euler", "scheduler": "simple", "denoise": 1,
+                                               "model": model, "positive": ["5", 0], "negative": ["5", 1],
+                                               "latent_image": latent})
             paths = self._client.generate(graph, output_node="8", dest=output_path, timeout=900)
         except ComfyUIError as exc:
             return ToolResult(success=False, error=str(exc))
@@ -145,7 +178,8 @@ class QwenImage(BaseTool):
             return ToolResult(success=False, error=f"Qwen-Image on the box failed: {exc}")
         return ToolResult(
             success=True,
-            data={"provider": self.provider, "model": "qwen-image-2.1-int8", "mode": "edit" if references else "text_to_image",
+            data={"provider": self.provider, "model": "qwen-image-2.1-int8" + (" + pruna 8-step" if fast else ""),
+                  "mode": "edit" if references else "text_to_image", "fast": fast,
                   "prompt": inputs["prompt"], "reference_images": references, "width": width, "height": height,
                   "output": str(paths[0])},
             artifacts=[str(p) for p in paths], cost_usd=0.0, duration_seconds=round(time.time() - start, 2),

@@ -472,6 +472,7 @@ enum PanelTools {
                     "pin": ["type": "boolean", "description": "H3: make each shot's first frame from the portraits and the set and pin it where the shot starts. Omit for the user's setting (usually on)."],
                     "music": ["type": ["boolean", "string"], "description": "false: no music under the film. A text: what the music should be. Omit for the user's setting and the studio's choice."],
                     "as_written": ["type": "boolean", "description": "Use every shot's still and motion exactly as written: no pass rereads the pose off the shot before or rewrites the movement, and no reviewer sends a shot back. Default false."],
+                    "fast_draw": ["type": "boolean", "description": "Pictures made through ComfyUI (first frames, fixed and recounted pictures) in 8 steps with the Pruna LoRA instead of 25: about three times faster, as good in the tests so far. Omit for the user's switch (usually on)."],
                     "title_card": ["type": "boolean", "description": "The title over the last shot, faded in and out. Default true."],
                     "grade": ["type": "boolean", "description": "One warm grade over every shot. Default true."],
                     "upscale": ["type": "boolean", "description": "The picture doubled (the longer side at most 1920). Default true."],
@@ -504,6 +505,28 @@ enum PanelTools {
                         ] as [String: Any],
                     ] as [String: Any],
                 ],
+            ],
+        ],
+        [
+            "name": "studio_note",
+            "description": """
+                Write in your notebook — CLAUDE.md in your folder, which you \
+                read every time you start. `kind`: "lesson" for what the next \
+                session should know (how long something takes, what went \
+                wrong and what worked), "preference" for what the person likes \
+                or does not, "problem" for anything wrong, missing, slow or \
+                confusing in the studio's own tools or pipeline — say what \
+                happened, where (film, shot, take, file) and what would fix \
+                it: the developer reads these to fix the studio. One or two \
+                sentences, when it happens.
+                """,
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "kind": ["type": "string", "description": "lesson | preference | problem"],
+                    "text": ["type": "string", "description": "The note, in the person's language."],
+                ],
+                "required": ["kind", "text"],
             ],
         ],
         [
@@ -1169,6 +1192,8 @@ enum PanelTools {
     /// what the caller's relay allows, less a margin. The kernel gives up at
     /// sixty; a studio agent's relay waits fifteen minutes.
     @TaskLocal static var patience: Double = 44
+    /// The Studio tab whose agent is calling, when it is one (its relay says).
+    @TaskLocal static var place: String?
     /// Two-second polls a waiting tool may make. A status call waits five
     /// minutes at most, so whoever is waiting still hears how it goes.
     static var polls: Int { max(1, Int(min(patience, 300) / 2)) }
@@ -1239,6 +1264,15 @@ enum PanelTools {
             return ((opened ? "设置窗口打开了" : "设置窗口没出来")
                     + "\n激活策略=\(NSApp.activationPolicy().rawValue) active=\(NSApp.isActive)\n" + windows.joined(separator: "\n"), !(sent && opened))
         case "box_services": return await boxServices(args)
+        case "studio_note":
+            guard let place = Self.place.flatMap(StudioAgent.Place.init(rawValue:)) else {
+                return ("studio_note 只给 Film、Motion、Comfy、Montage 标签的 agent 用", true)
+            }
+            guard let text = (args["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
+                return ("studio_note 要 text", true)
+            }
+            let kind = StudioNotebook.Kind(rawValue: (args["kind"] as? String) ?? "") ?? .lesson
+            return StudioNotebook.add(place, kind, text)
         case "film_make":    return filmMake(args)
         case "film_shot":
             guard let film = args["film"] as? String, let shot = FilmTools.int(args["shot"]) else { return ("film_shot 需要 film 和 shot", true) }
@@ -1922,7 +1956,8 @@ enum PanelTools {
                                       shape: FilmStudio.Shape(rawValue: (args["shape"] as? String) ?? "") ?? .square,
                                       engine: engine, cast: cast, hold: hold, pinFrames: pin, withMusic: withMusic,
                                       literal: args["as_written"] as? Bool ?? false,
-                                      finishing: (args["title_card"] as? Bool, args["grade"] as? Bool, args["upscale"] as? Bool)) {
+                                      finishing: (args["title_card"] as? Bool, args["grade"] as? Bool, args["upscale"] as? Bool),
+                                      fastDraw: args["fast_draw"] as? Bool) {
         case .success(let film):
             FilmStudio.shared.presetSound(film: film.id, voice: args["narrator_voice"] as? String,
                                           voiceover: args["voiceover"] as? String, music: brief)
@@ -1980,6 +2015,7 @@ enum PanelTools {
             if film.engine == .h3 { how.append("钉帧" + ((film.pinFrames ?? FilmStudio.pinOn) ? "开" : "关") + (film.pinFrames == nil ? "（跟着片场的开关）" : "")) }
             how.append("配乐" + ((film.withMusic ?? FilmStudio.musicOn) ? "开" : "关") + (film.withMusic == nil ? "（跟着片场的开关）" : ""))
             if let hold = film.hold { how.append("会停在" + (hold == "sets" ? "布景" : "首帧")) }
+            how.append("快速出图" + ((film.fastDraw ?? FilmStudio.fastDrawOn) ? "开" : "关") + (film.fastDraw == nil ? "（跟着片场的开关）" : ""))
             how.append("片名" + (film.titleCard ?? true ? "开" : "关") + "、调色" + (film.finishGrade ?? true ? "开" : "关")
                        + "、放大" + (film.upscale ?? true ? "开" : "关"))
             lines.append("  " + how.joined(separator: " · "))

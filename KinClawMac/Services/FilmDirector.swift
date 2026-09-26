@@ -358,7 +358,7 @@ extension FilmStudio {
                 let out = film.folder.appendingPathComponent(String(format: "shot-%02d.counted.png", id))
                 do {
                     let left = try await Self.drawCounted(words, checks: checks, size: film.size, tries: 3, to: out,
-                                                          tag: "\(film.id)-\(id)")
+                                                          tag: "\(film.id)-\(id)", fast: film.fastDraw)
                     try? fm.moveItem(at: still, to: film.take(id, "miscount-\(Int(Date().timeIntervalSince1970))", "png"))
                     try fm.moveItem(at: out, to: still)
                     FilmReference.reshape(still, to: film.size)
@@ -384,7 +384,7 @@ extension FilmStudio {
             do {
                 try await Self.repaint(still, like: [], instruction: instruction,
                                        seed: CompanionCharacter.seed(for: film.id + String(id) + "count" + String(attempt)),
-                                       to: out, tag: "\(film.id)-\(id)")
+                                       to: out, tag: "\(film.id)-\(id)", fast: film.fastDraw)
                 try? fm.moveItem(at: still, to: film.take(id, "miscount-\(Int(Date().timeIntervalSince1970))", "png"))
                 try fm.moveItem(at: out, to: still)
             } catch {
@@ -407,7 +407,7 @@ extension FilmStudio {
     /// smooth tan loaves (the second time — "dark, cracked" had described
     /// them wrong), with the three men untouched. It keeps the size of image 1.
     static func repaint(_ source: URL, like references: [URL], instruction: String, seed: Int,
-                        to out: URL, tag: String) async throws {
+                        to out: URL, tag: String, fast: Bool? = nil) async throws {
         guard await BoxServices.shared.ensure(.comfy) else { throw Failure.message("盒子上的 ComfyUI 起不来") }
         let base = BoxServices.base(.comfy)
         var names: [String] = []
@@ -432,6 +432,7 @@ extension FilmStudio {
             encode["images.image_\(i + 1)"] = ["\(100 + i)", 0]
         }
         graph["5"] = node("TextEncodeQwenImage21", encode)
+        if fast ?? Self.fastDrawOn, await Self.canDrawFast(base) { graph = Self.quick(graph) }
         let picture = try await comfyResult(graph, node: "8", base: base, what: "改图", deadline: 900)
         try? FileManager.default.removeItem(at: out)
         try picture.write(to: out)
@@ -445,7 +446,7 @@ extension FilmStudio {
     /// of three was right. Returns the counted sentence of the one kept, nil
     /// when it is right; the closest is kept when none is.
     static func drawCounted(_ words: String, checks: [Check], size: CGSize, tries: Int, to out: URL,
-                            tag: String) async throws -> String? {
+                            tag: String, fast: Bool? = nil) async throws -> String? {
         guard await BoxServices.shared.ensure(.comfy) else { throw Failure.message("盒子上的 ComfyUI 起不来") }
         let base = BoxServices.base(.comfy)
         let room = checks.isEmpty ? "" : " Everything that is counted stands apart, with a clear gap around each one, well inside "
@@ -456,8 +457,10 @@ extension FilmStudio {
         let width = Int((Double(size.width) * scale / 16).rounded()) * 16
         let height = Int((Double(size.height) * scale / 16).rounded()) * 16
         var best: (off: Int, said: String?, data: Data)?
+        var quickly = fast ?? Self.fastDrawOn
+        if quickly { quickly = await Self.canDrawFast(base) }
         for attempt in 0..<max(1, tries) {
-            let graph: [String: Any] = [
+            let drawn: [String: Any] = [
                 "1": node("UNETLoader", ["unet_name": "qwen_image_2.1_int8_convrot.safetensors", "weight_dtype": "default"]),
                 "2": node("CLIPLoader", ["clip_name": "qwen3vl_8b_int8_convrot.safetensors", "type": "qwen_image", "device": "default"]),
                 "3": node("VAELoader", ["vae_name": "qwen_image_2.1_vae_bf16.safetensors"]),
@@ -469,6 +472,7 @@ extension FilmStudio {
                 "7": node("VAEDecode", ["samples": ["6", 0], "vae": ["3", 0]]),
                 "8": node("SaveImage", ["filename_prefix": "kinclaw-film/draw-\(tag.prefix(40))-\(attempt)", "images": ["7", 0]]),
             ]
+            let graph = quickly ? Self.quick(drawn) : drawn
             let data = try await comfyResult(graph, node: "8", base: base, what: "画图", deadline: 900)
             guard !checks.isEmpty else { best = (0, nil, data); break }
             guard let image = NSBitmapImageRep(data: data)?.cgImage, let shown = jpeg(image, largest: 1024) else { continue }
@@ -557,7 +561,7 @@ extension FilmStudio {
         let made = film.folder.appendingPathComponent(String(format: "shot-%02d.first.png", shot.id))
         try await Self.repaint(film.still(shot.id), like: portraits, instruction: instruction,
                                seed: CompanionCharacter.seed(for: film.id + String(shot.id) + "first" + String(attempt)),
-                               to: made, tag: "\(film.id)-\(shot.id)")
+                               to: made, tag: "\(film.id)-\(shot.id)", fast: film.fastDraw)
         FilmReference.reshape(made, to: film.size)
         if fm.fileExists(atPath: film.start(shot.id).path) {
             try? fm.moveItem(at: film.start(shot.id), to: film.take(shot.id, "start-\(Int(Date().timeIntervalSince1970))", "png"))
@@ -594,7 +598,7 @@ extension FilmStudio {
                         easy to count. Keep everything else exactly as it is: the people, their faces and hands, the \
                         place, the light, the framing.
                         """, seed: CompanionCharacter.seed(for: film.id + String(id) + "firstcount"), to: out,
-                        tag: "\(film.id)-\(id)")
+                        tag: "\(film.id)-\(id)", fast: film.fastDraw)
                     try? fm.moveItem(at: film.start(id), to: film.take(id, "miscount-\(Int(Date().timeIntervalSince1970))", "png"))
                     try fm.moveItem(at: out, to: film.start(id))
                 } else {
@@ -663,7 +667,7 @@ extension FilmStudio {
         ].joined(separator: " ")
         try await Self.repaint(first, like: [model], instruction: instruction,
                                seed: CompanionCharacter.seed(for: film.id + String(shot.id) + "match"), to: start,
-                               tag: "\(film.id)-\(shot.id)")
+                               tag: "\(film.id)-\(shot.id)", fast: film.fastDraw)
         film.note = nil
         save(film)
     }
@@ -1474,7 +1478,7 @@ extension FilmStudio {
                 ]).joined(separator: " ")
                 let out = film.folder.appendingPathComponent(String(format: "shot-%02d.fixed.png", number))
                 try await Self.repaint(source, like: references, instruction: prompt,
-                                       seed: Int.random(in: 1...1_000_000_000), to: out, tag: "\(film.id)-\(number)")
+                                       seed: Int.random(in: 1...1_000_000_000), to: out, tag: "\(film.id)-\(number)", fast: film.fastDraw)
                 let target = from == .set ? film.still(number) : film.start(number)
                 if fm.fileExists(atPath: target.path) {
                     try? fm.moveItem(at: target, to: film.take(number, (from == .set ? "fix-" : "startfix-") + "\(stamp)", "png"))
@@ -1510,7 +1514,7 @@ extension FilmStudio {
             let out = film.folder.appendingPathComponent(String(format: "shot-%02d.drawn-new.png", number))
             do {
                 let left = try await Self.drawCounted(words, checks: checks, size: film.size, tries: checks.isEmpty ? 1 : 3,
-                                                      to: out, tag: "\(film.id)-\(number)")
+                                                      to: out, tag: "\(film.id)-\(number)", fast: film.fastDraw)
                 if fm.fileExists(atPath: film.still(number).path) {
                     try? fm.moveItem(at: film.still(number), to: film.take(number, "redraw-\(Int(Date().timeIntervalSince1970))", "png"))
                 }

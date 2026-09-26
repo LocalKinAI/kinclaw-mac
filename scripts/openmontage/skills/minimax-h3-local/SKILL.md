@@ -9,9 +9,11 @@ Three tools run on the box's own ComfyUI (an M3 Ultra; free, no API key):
 
 | tool | what | time |
 |---|---|---|
-| `qwen_image` | stills from words; **edit mode** with `reference_images` composes or changes a picture | 1.5–2.5 min |
+| `qwen_image` | stills from words; **edit mode** with `reference_images` composes or changes a picture | ~40–45 s (fast, the default); 1.5–2.5 min with `fast: false` |
 | `h3_video` | MiniMax H3 video **with sound** from reference pictures, with frames pinned | ~10 min per 5 s shot |
 | `minimax_music` | MiniMax Music 3 score, instrumental or with lyrics, up to 5 min | ~70 s of compute per second of music |
+
+`qwen_image` is fast by default: PrunaAI's 8-step LoRA for Qwen-Image 2.1 (strength 2.0, its own sigmas, no CFG) — about three times quicker than the old 25 steps, and as good in the tests so far (2026-09-26). Use `fast: false` for a hero frame that came out soft or wrong; it falls back to the slow way by itself where the LoRA is not installed.
 
 `h3_video` is not the hosted `minimax_h3_api` Partner Node in `comfyui_video` (that bills a Comfy account).
 H3 on the box cannot make video from words alone — every shot needs a picture.

@@ -41,6 +41,14 @@ enum PanelMCPStdio {
     /// Code). The kernel attaches them itself, from the lines.
     private static let images = CommandLine.arguments.contains("--images")
 
+    /// `--place film`: which Studio tab's agent is asking — so that its
+    /// notebook (studio_note) is its own.
+    private static let place: String? = {
+        let args = CommandLine.arguments
+        guard let at = args.firstIndex(of: "--place"), at + 1 < args.count else { return nil }
+        return args[at + 1]
+    }()
+
     static func run() -> Never {
         // Unbuffered: the kernel reads a line and waits, and a reply sitting
         // in a buffer looks exactly like a server that has hung.
@@ -87,6 +95,7 @@ enum PanelMCPStdio {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(handshake.token, forHTTPHeaderField: "X-KinClaw-Panel-Token")
         if images { request.setValue("1", forHTTPHeaderField: "X-KinClaw-Images") }
+        if let place { request.setValue(place, forHTTPHeaderField: "X-KinClaw-Place") }
         // How long a tool may wait for its work before it answers.
         if timeout > 60 { request.setValue(String(Int(timeout - 30)), forHTTPHeaderField: "X-KinClaw-Patience") }
         request.httpBody = Data(line.utf8)

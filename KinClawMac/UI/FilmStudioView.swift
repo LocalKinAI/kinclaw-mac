@@ -48,6 +48,7 @@ struct FilmStudioView: View {
     @AppStorage("kinclaw.film.engine") private var engine = FilmStudio.Engine.ltx.rawValue
     @AppStorage(FilmStudio.musicKey) private var musicOn = true
     @AppStorage(FilmStudio.pinKey) private var pinOn = true
+    @AppStorage(FilmStudio.fastDrawKey) private var fastDraw = true
     @State private var tick = 0
     /// One shot's words, open for rewriting, and what they were when opened.
     @State private var editing: Words?
@@ -964,6 +965,8 @@ struct FilmStudioView: View {
                     toggleChip("钉帧", symbol: "pin", on: $pinOn,
                                help: "H3 拍的片子：有人的镜头先用定妆照和布景合成第一帧（要数的东西先数对），再钉在开头让 H3 从这一帧拍；没人的镜头从布景拍，要数的空镜头开头、中间、结尾都钉。人和东西都更稳，动作也更自然")
                 }
+                toggleChip("快速出图", symbol: "hare", on: $fastDraw,
+                           help: "经 ComfyUI 出的图（有人镜头的第一帧、改图、重画要数的布景）用 Pruna 的 8 步 LoRA，不用 25 步：快三倍左右，实测画质接近。关掉就用原来的慢方法")
                 toggleChip("她当主角", symbol: "person.crop.circle", on: $lead,
                            help: character.anchorURL == nil ? "她还没有锚图" : "每个镜头里都是同一个她")
                     .disabled(character.anchorURL == nil)

@@ -238,6 +238,22 @@ can read, and the long steps wait to be looked at.
   sharpened a little. About three seconds for a twenty-second film. Each
   can be turned off in film_make or film_recut (`title_card`, `grade`,
   `upscale`), and film_status says which are on.
+- **快速出图.** Pictures Film makes through ComfyUI — a shot's first frame
+  from the cast and its set, a picture fixed, a counted set drawn again —
+  and OpenMontage's qwen_image now take eight steps instead of twenty-five,
+  with PrunaAI's distilled LoRA for Qwen-Image 2.1 at strength 2.0 (its
+  alpha 128 over rank 64, which the file does not carry) on its own sigmas,
+  without CFG. Measured on the box: a set in 42 s instead of 129, a first
+  frame from two pictures in 37 s instead of 111, the pictures as good in
+  the two compared. On by default: a switch in the Film tab, `fast_draw` in
+  film_make, `fast` in qwen_image; without the LoRA it draws the slow way.
+- **Each Studio agent keeps a notebook.** CLAUDE.md in its own folder
+  (AGENTS.md beside it for Codex), read when it starts, written with the new
+  studio_note tool: what it learned, what the person likes, and the problems
+  it runs into in the studio's tools — what happened, where, what would fix
+  it — for the developer to read and fix. The agents still cannot edit files:
+  the app writes each note, dated, into its section, and the relay's
+  `--place` makes sure each agent writes only its own.
 
 ### Added — Montage: OpenMontage on the box, where it can be seen
 

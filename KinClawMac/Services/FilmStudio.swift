@@ -267,6 +267,9 @@ final class FilmStudio: ObservableObject {
         var titleCard: Bool?
         var finishGrade: Bool?
         var upscale: Bool?
+        /// 快速出图: its pictures through ComfyUI in eight steps (the Pruna
+        /// LoRA) rather than twenty-five; nil follows the tab's switch.
+        var fastDraw: Bool?
         /// Integrated loudness of the cut after mastering, in LUFS.
         var loudness: Double?
         var seconds: Double
@@ -432,7 +435,8 @@ final class FilmStudio: ObservableObject {
               seconds: Double, shots: [Draft], tongue: String = "", retakes: Int? = nil,
               read: Understanding? = nil, shape: Shape = .square, engine: Engine = .ltx,
               cast: [Cast]? = nil, hold: String? = nil, pinFrames: Bool? = nil, withMusic: Bool? = nil,
-              literal: Bool = false, finishing: (title: Bool?, grade: Bool?, upscale: Bool?) = (nil, nil, nil)) -> Result<Film, Failure> {
+              literal: Bool = false, finishing: (title: Bool?, grade: Bool?, upscale: Bool?) = (nil, nil, nil),
+              fastDraw: Bool? = nil) -> Result<Film, Failure> {
         guard shooting == nil else { return .failure(.message("片场正在拍「\(shooting!)」，等它拍完")) }
         let wanted = shots.filter { !$0.still.trimmingCharacters(in: .whitespaces).isEmpty }
         guard !wanted.isEmpty else { return .failure(.message("分镜是空的：每个镜头要有 still（画面）和 motion（动作）")) }
@@ -474,6 +478,7 @@ final class FilmStudio: ObservableObject {
         film.pinFrames = pinFrames
         film.withMusic = withMusic
         (film.titleCard, film.finishGrade, film.upscale) = finishing
+        film.fastDraw = fastDraw
         for (index, draft) in wanted.enumerated() {
             let said = draft.narration.trimmingCharacters(in: .whitespacesAndNewlines)
             // Asked for silence, and a writer that narrates anyway is not obeyed.

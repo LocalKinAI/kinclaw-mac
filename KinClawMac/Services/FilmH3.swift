@@ -348,6 +348,59 @@ extension FilmStudio {
         }
     }
 
+    /// 快速出图: Qwen-Image 2.1 in eight steps instead of twenty-five, with
+    /// PrunaAI's distilled LoRA — strength 2.0, because its alpha is 128 at
+    /// rank 64 and the file carries no alpha for ComfyUI to read — on its own
+    /// sigmas and without CFG. Measured on the box (2026-09-26): a set in 42 s
+    /// instead of 129, a first frame from two pictures in 37 instead of 111,
+    /// the pictures as good in the two compared.
+    nonisolated static let fastLoRA = "p_qwen_image_2.1_8step_v0.1.safetensors"
+    static let fastDrawKey = "kinclaw.film.fastDraw"
+    static var fastDrawOn: Bool { UserDefaults.standard.object(forKey: fastDrawKey) as? Bool ?? true }
+
+    /// A Qwen graph made fast: the LoRA on the model, and its sampler turned
+    /// into the LoRA's eight steps. Any other graph comes back as it was.
+    nonisolated static func quick(_ graph: [String: Any]) -> [String: Any] {
+        func kind(_ value: Any) -> String? { (value as? [String: Any])?["class_type"] as? String }
+        guard let unet = graph.first(where: { kind($0.value) == "UNETLoader"
+                  && (((($0.value as? [String: Any])?["inputs"] as? [String: Any])?["unet_name"] as? String) ?? "").contains("qwen_image") })?.key,
+              let sampler = graph.first(where: { kind($0.value) == "KSampler" })?.key else { return graph }
+        var g = graph
+        func node(_ type: String, _ inputs: [String: Any]) -> [String: Any] { ["class_type": type, "inputs": inputs] }
+        g["90"] = node("LoraLoaderModelOnly", ["model": [unet, 0], "lora_name": fastLoRA, "strength_model": 2.0])
+        // Whatever took the model takes it with the LoRA on.
+        for (id, value) in g where id != "90" {
+            guard var n = value as? [String: Any], var inputs = n["inputs"] as? [String: Any],
+                  let link = inputs["model"] as? [Any], link.first as? String == unet else { continue }
+            inputs["model"] = ["90", 0]
+            n["inputs"] = inputs
+            g[id] = n
+        }
+        let s = ((g[sampler] as? [String: Any])?["inputs"] as? [String: Any]) ?? [:]
+        g["91"] = node("RandomNoise", ["noise_seed": s["seed"] ?? 0])
+        g["92"] = node("CFGGuider", ["model": s["model"] ?? ["90", 0], "positive": s["positive"] ?? [], "negative": s["negative"] ?? [], "cfg": 1.0])
+        g["93"] = node("KSamplerSelect", ["sampler_name": "euler"])
+        g["94"] = node("ManualSigmas", ["sigmas": "1, 0.9333333333, 0.8571428571, 0.7692307692, 0.6666666667, 0.5454545455, 0.4, 0.2222222222, 0"])
+        g[sampler] = node("SamplerCustomAdvanced", ["noise": ["91", 0], "guider": ["92", 0], "sampler": ["93", 0],
+                                                    "sigmas": ["94", 0], "latent_image": s["latent_image"] ?? []])
+        return g
+    }
+
+    /// Whether the box's ComfyUI has the LoRA and what it needs, asked once:
+    /// without them a picture is drawn the slow way, not refused.
+    private static var fastChecked: Bool?
+    static func canDrawFast(_ base: String) async -> Bool {
+        if let fastChecked { return fastChecked }
+        guard let url = URL(string: base + "/object_info/LoraLoaderModelOnly"),
+              let (data, _) = try? await URLSession.shared.data(from: url),
+              let info = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return false }
+        let listed = "\(info)".contains(fastLoRA)
+        let sigmas = (try? await URLSession.shared.data(from: URL(string: base + "/object_info/ManualSigmas")!))
+            .map { String(decoding: $0.0, as: UTF8.self).contains("ManualSigmas") } ?? false
+        fastChecked = listed && sigmas
+        return fastChecked!
+    }
+
     static func node(_ type: String, _ inputs: [String: Any]) -> [String: Any] {
         ["class_type": type, "inputs": inputs]
     }

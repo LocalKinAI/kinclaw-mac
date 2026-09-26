@@ -160,7 +160,10 @@ final class PanelBridge {
         }
         let patience = request.header("x-kinclaw-patience").flatMap(Double.init) ?? 44
         let images = request.header("x-kinclaw-images") == "1"
-        guard let reply = await PanelTools.$patience.withValue(patience, operation: { await handle(message, images: images) }) else {
+        let place = request.header("x-kinclaw-place")
+        guard let reply = await PanelTools.$patience.withValue(patience, operation: {
+            await PanelTools.$place.withValue(place) { await handle(message, images: images) }
+        }) else {
             // A notification: nothing to answer with.
             return Self.http(status: "204 No Content", body: Data(), type: "text/plain")
         }

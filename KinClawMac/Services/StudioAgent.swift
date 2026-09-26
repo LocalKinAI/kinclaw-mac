@@ -228,6 +228,7 @@ final class StudioAgent: ObservableObject {
             return
         }
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        StudioNotebook.ensure(place)
         let view = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 600, height: 700))
         view.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
         view.nativeBackgroundColor = NSColor(calibratedWhite: 0.06, alpha: 1)
@@ -283,7 +284,7 @@ final class StudioAgent: ObservableObject {
         var list: [(String, String, [String])] = []
         if !panelTools.isEmpty {
             list.append(("panel", Bundle.main.executablePath ?? "",
-                         ["--mcp-stdio", "--tools", panelTools.joined(separator: ","), "--timeout", "900"]
+                         ["--mcp-stdio", "--tools", panelTools.joined(separator: ","), "--timeout", "900", "--place", place.rawValue]
                             + (harness == .claude ? ["--images"] : [])))
         }
         if place == .montage, let bridge = OpenMontageBridge.server {
@@ -511,10 +512,10 @@ final class StudioAgent: ObservableObject {
                     "film_frames", "film_count", "film_fix_picture", "film_grade", "film_reshoot", "film_recut",
                     "film_rescore", "film_review", "film_stop"]
         switch place {
-        case .film: return film + comfy + studio
-        case .motion: return ["motion_find", "motion_make", "motion_status", "motion_stop", "motion_continue", "video_frames"] + studio
-        case .comfy: return comfy + ["video_frames"] + studio
-        case .montage: return []
+        case .film: return film + comfy + studio + ["studio_note"]
+        case .motion: return ["motion_find", "motion_make", "motion_status", "motion_stop", "motion_continue", "video_frames"] + studio + ["studio_note"]
+        case .comfy: return comfy + ["video_frames"] + studio + ["studio_note"]
+        case .montage: return ["studio_note"]
         }
     }
 
@@ -524,7 +525,24 @@ final class StudioAgent: ObservableObject {
         shown — and count what the story counts. A reviewer's score is not proof.
         """
 
-    var briefing: String {
+    /// Said to every one of them: the notebook they keep, and who reads it.
+    private static let notebook = """
+        Your notebook is CLAUDE.md in your folder; you have read it already, and you keep it with studio_note. \
+        When you learn something the next session should know, note a lesson; what the person likes, a \
+        preference; and whenever the studio's own tools or pipeline get in your way — something wrong, missing, \
+        slow or confusing — note a problem, saying what happened, where and what would fix it: the developer \
+        reads those and fixes the studio. Briefly, when it happens.
+        """
+
+    /// Montage's agent may change OpenMontage itself, on the box.
+    private static let openMontageCode = """
+        You may change OpenMontage's own code and skills on the box (through the bridge's write and run) when \
+        they are wrong or missing something; note each change as a lesson, with the file.
+        """
+
+    var briefing: String { brief + " " + Self.notebook + (place == .montage ? " " + Self.openMontageCode : "") }
+
+    private var brief: String {
         switch place {
         case .film:
             return """
