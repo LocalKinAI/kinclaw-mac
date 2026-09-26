@@ -104,7 +104,12 @@ struct FilmStudioView: View {
             }
         }
         .tint(Theme.accent)
-        .onAppear { studio.reload() }
+        .onAppear {
+            studio.reload()
+            // The agent is how this tab is worked now: its column is out
+            // when the tab is, as on Montage.
+            if !agent.running { agent.shown = true }
+        }
         .confirmationDialog(doomed.map { "把「\($0.title)」整部删掉？" } ?? "", isPresented: Binding(
             get: { doomed != nil }, set: { if !$0 { doomed = nil } }), titleVisibility: .visible) {
             Button("移到废纸篓", role: .destructive) { if let film = doomed { remove(film) } }
@@ -336,11 +341,27 @@ struct FilmStudioView: View {
     /// not find the film again.
     @ViewBuilder
     private func screen(_ film: FilmStudio.Film) -> some View {
-        let url = playing(film)?.url
+        let still = picture(film)
+        let url = still == nil ? playing(film)?.url : nil
         let ratio = url.flatMap { shapes[$0] } ?? aspect(film)
         VStack(spacing: 12) {
             Group {
-                if let playing = playing(film) {
+                if let still {
+                    // A first frame, whole, while its shot is being filmed.
+                    ZStack(alignment: .bottomLeading) {
+                        Color.black
+                        thumb(still.url)
+                        Text(caption(film, still.shot))
+                            .font(.kinCaption).foregroundStyle(.white)
+                            .padding(.horizontal, 8).padding(.vertical, 4)
+                            .background(Capsule().fill(.black.opacity(0.55)))
+                            .padding(10)
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture { NSWorkspace.shared.open(still.url) }
+                    .help("点一下用「预览」打开原图")
+                    .id(tick)
+                } else if let playing = playing(film) {
                     FilmPlayer(url: playing.url, autoplay: playing.shot != nil)
                 } else {
                     // Nothing filmed yet: the first picture if there is one.
@@ -369,17 +390,19 @@ struct FilmStudioView: View {
                 shapes[url] = size.width / size.height
             }
 
-            if let playing = playing(film) {
+            if still != nil || playing(film) != nil {
+                let shown = still?.shot ?? playing(film)?.shot
                 HStack(spacing: 4) {
                     let cut = FileManager.default.fileExists(atPath: film.file.path)
-                    choice("整片", on: playing.shot == nil, ready: cut, help: cut ? "看整部片子" : "还没剪好") {
+                    choice("整片", on: shown == nil, ready: cut, help: cut ? "看整部片子" : "还没剪好") {
                         watching[film.id] = nil
                     }
                     Rectangle().fill(Theme.hairline).frame(width: 0.5, height: 16).padding(.horizontal, 4)
                     ForEach(film.shots) { shot in
-                        let ready = FileManager.default.fileExists(atPath: film.clip(shot.id).path)
-                        choice("\(shot.id)", on: playing.shot == shot.id, ready: ready,
-                               help: ready ? "只看镜头 \(shot.id)" : "镜头 \(shot.id) 还没拍好") {
+                        let filmed = FileManager.default.fileExists(atPath: film.clip(shot.id).path)
+                        let drawn = FileManager.default.fileExists(atPath: film.opening(shot.id).path)
+                        choice("\(shot.id)", on: shown == shot.id, ready: filmed || drawn,
+                               help: filmed ? "只看镜头 \(shot.id)" : drawn ? "看镜头 \(shot.id) 的首帧（视频还在拍）" : "镜头 \(shot.id) 还没画好") {
                             watching[film.id] = shot.id
                         }
                     }
@@ -398,6 +421,32 @@ struct FilmStudioView: View {
         .disabled(!ready)
         .opacity(ready ? 1 : 0.4)
         .help(help)
+    }
+
+    /// A first frame to show in the player's place: the one picked, while its
+    /// shot has no clip yet; or, with nothing filmed at all, the latest drawn.
+    /// An H3 shot is filmed for ten minutes after its first frame is drawn,
+    /// and the frame could not be looked at until then — dimmed on a small
+    /// card, under a spinner ("film 每一帧完成不能看啊").
+    private func picture(_ film: FilmStudio.Film) -> (url: URL, shot: Int)? {
+        let fm = FileManager.default
+        if let picked = watching[film.id], !fm.fileExists(atPath: film.clip(picked).path),
+           fm.fileExists(atPath: film.opening(picked).path) {
+            return (film.opening(picked), picked)
+        }
+        guard playing(film) == nil,
+              let drawn = film.shots.last(where: { fm.fileExists(atPath: film.opening($0.id).path) }) else { return nil }
+        return (film.opening(drawn.id), drawn.id)
+    }
+
+    /// What the picture in the player's place is.
+    private func caption(_ film: FilmStudio.Film, _ id: Int) -> String {
+        switch film.shots.first(where: { $0.id == id })?.state {
+        case .filming?: return "镜头 \(id) 的首帧 · 视频在拍"
+        case .reviewing?: return "镜头 \(id) 的首帧 · 在把关"
+        case .drawing?: return "镜头 \(id) 的首帧 · 在重画"
+        default: return "镜头 \(id) 的首帧"
+        }
     }
 
     /// What the player shows: the shot that was picked, if its clip is
@@ -437,7 +486,8 @@ struct FilmStudioView: View {
 
     private func card(_ film: FilmStudio.Film, _ shot: FilmStudio.Shot) -> some View {
         let filmed = FileManager.default.fileExists(atPath: film.clip(shot.id).path)
-        let onScreen = playing(film)?.shot == shot.id
+        let drawn = FileManager.default.fileExists(atPath: film.opening(shot.id).path)
+        let onScreen = (picture(film)?.shot ?? playing(film)?.shot) == shot.id
         let working = shot.state == .drawing || shot.state == .filming || shot.state == .reviewing
         let tags = [shot.hq == true ? "精修" : nil, shot.method?.title,
                     shot.grade?.neutral == false ? "调色" : nil].compactMap { $0 }
@@ -447,7 +497,10 @@ struct FilmStudioView: View {
             Color.clear
                 .aspectRatio(aspect(film), contentMode: .fit)
                 .overlay { thumb(film.opening(shot.id)) }
-                .overlay { if working { Color.black.opacity(0.35) } }
+                // Dimmed only while there is nothing to see: a first frame
+                // being filmed stays in full, with what is happening in a
+                // corner.
+                .overlay { if working && !drawn { Color.black.opacity(0.35) } }
                 .clipped()
                 // The verdict where it cannot be missed: on the picture.
                 // Under three lines of prompt text, below the fold, it
@@ -474,23 +527,38 @@ struct FilmStudioView: View {
                         .padding(7)
                 }
                 .overlay {
-                    if working {
+                    if working && !drawn {
                         VStack(spacing: 6) {
                             ProgressView().controlSize(.small).tint(.white)
                             Text(word(shot.state)).font(.kinCaption).foregroundStyle(.white)
                         }
                     }
                 }
-                .overlay(alignment: .bottomTrailing) {
-                    if filmed, !working {
-                        Image(systemName: onScreen ? "play.circle.fill" : "play.circle")
-                            .font(.system(size: 20)).foregroundStyle(.white)
-                            .shadow(color: .black.opacity(0.4), radius: 3).padding(7)
+                .overlay(alignment: .bottomLeading) {
+                    if working && drawn {
+                        HStack(spacing: 4) {
+                            ProgressView().controlSize(.mini).tint(.white)
+                            Text(word(shot.state)).font(.kinMicro).foregroundStyle(.white)
+                        }
+                        .padding(.horizontal, 6).padding(.vertical, 3)
+                        .background(Capsule().fill(.black.opacity(0.55)))
+                        .padding(7)
                     }
                 }
+                .overlay(alignment: .bottomTrailing) {
+                    Group {
+                        if filmed, !working {
+                            Image(systemName: onScreen ? "play.circle.fill" : "play.circle")
+                        } else if drawn, !filmed {
+                            Image(systemName: onScreen ? "eye.circle.fill" : "eye.circle")
+                        }
+                    }
+                    .font(.system(size: 20)).foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.4), radius: 3).padding(7)
+                }
                 .contentShape(Rectangle())
-                .onTapGesture { if filmed { watching[film.id] = shot.id } }
-                .help(filmed ? "在上面的播放器里看这个镜头" : "这个镜头还没拍好")
+                .onTapGesture { if filmed || drawn { watching[film.id] = shot.id } }
+                .help(filmed ? "在上面的播放器里看这个镜头" : drawn ? "在上面看这个镜头的首帧（视频还在拍）" : "这个镜头还没画好")
 
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 6) {
@@ -976,6 +1044,14 @@ struct FilmStudioView: View {
             Button { writerModel = ""; writerHost = ""; Task { await describeWriter() } } label: {
                 Label("自动（挑最强的那个）", systemImage: writerModel.isEmpty ? "checkmark" : "")
             }
+            // The subscription, through Claude Code: it writes, and it sees.
+            Section("这台 Mac 的 Claude") {
+                Button { writerModel = ClaudeWriter.model; writerHost = ClaudeWriter.pick; Task { await describeWriter() } } label: {
+                    Label(ClaudeWriter.title + (ClaudeWriter.binary == nil ? "（没装 Claude Code）" : ""),
+                          systemImage: writerHost == ClaudeWriter.pick ? "checkmark" : "")
+                }
+                .disabled(ClaudeWriter.binary == nil)
+            }
             ForEach(writers, id: \.host) { entry in
                 Section(BoxServices.place(of: entry.host)) {
                     ForEach(entry.models, id: \.self) { model in
@@ -1020,7 +1096,12 @@ struct FilmStudioView: View {
     }
 
     private func describeWriter() async {
-        guard let pick = await FilmStudio.writer() else { writer = "没有可用的模型"; return }
+        guard let pick = await FilmStudio.writer(claude: true) else { writer = "没有可用的模型"; return }
+        if writerHost == ClaudeWriter.pick, pick.model == ClaudeWriter.model {
+            writer = "Claude 订阅"
+            writerPlace = "这台 Mac 的 Claude Code，你指定的；看图把关、首帧和配乐的描述也是它"
+            return
+        }
         let place = pick.host == OllamaCatalog.defaultBaseURL ? "本机" : "盒子"
         writer = pick.model
         writerPlace = "\(place)\(writerModel.isEmpty ? "，自动挑的" : "，你指定的")"

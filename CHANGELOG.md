@@ -129,6 +129,72 @@ shadows to the lower right, all vector and sharp at any zoom.
   the ranks — carrying logs, stone, baskets and tools; spearmen with spear and
   shield, archers with bows, knights on horses.
 
+### Changed — The Studio, worked by its agents
+
+"之前我们都是写死给人用的，现在要可以灵活由agent操作": Film, Motion and
+Comfy were made for a person clicking, with the deciding done in passes
+nobody saw. Asked to film a woman walking by the sea on H3, Film's agent
+got an empty dress on the sand, twice — another model had cast nobody in
+the shots, then written each set as floating hair and linen — and could
+only press stop. Now what an agent gives is used, what it cannot see it
+can read, and the long steps wait to be looked at.
+
+- **Film, what you give is used as written.** film_make takes the `cast`
+  (name, look) and each shot's `who`, `picture` (the set exactly) and `h3`
+  (the words H3 films from); the studio writes only what is missing, and no
+  pass rewrites what was given. Casting fills only the shots without a
+  `who`, matching names loosely ("The Woman" is "the woman"). A shot of a
+  person with nobody cast in it stops the film, saying which, instead of
+  being filmed as an empty set. H3 asked for without a kind is a story — it
+  used to be filmed on LTX without a word. Pinning and music are the film's
+  own (`pin`, `music`), not whatever the tab was left on; `as_written`
+  keeps every still and motion as written.
+- **Film stops where it is told to.** `stop_after: "frames"` stops once
+  every first frame is made (`"sets"`: once the portraits and sets are
+  drawn), before ten minutes a shot of filming; the film waits, saying so.
+- **Four new film tools.** film_shot: all of a shot — words as planned and
+  as used, the set's description, who, the H3 words, the verdict, every
+  file with the exact words each model was given — and its set, first
+  frame and portraits, as pictures. film_edit: change any of that; what was
+  made from the old words is set aside (kept) and made again. film_cast:
+  the cast with their portraits; add a person, change a look, or give a
+  picture as a portrait. film_continue: carry on, optionally to stop again.
+  film_status says how each film is made (engine, shape, seconds, retakes,
+  pinning, music, where it stops) and, per shot, who and what is written.
+- **Film's writer can be Claude on this Mac's subscription.** The 分镜 menu
+  has 「这台 Mac 的 Claude（订阅）」: storyboards, casting, sets, H3 words,
+  the reviewer's look at every take and the music brief are then Claude's
+  (Comfy's ask and Motion's search follow; Jev's games do not). A
+  subscription has no API: `ClaudeWriter` is an Ollama-shaped server on
+  loopback, a secret in its path, and each call is one `claude -p` — no
+  tools, no settings, no session kept, pictures passed as pictures (a
+  picture and a question in 2.7 s).
+- **First frames can be seen as they land.** A shot's card opens its first
+  frame in the player the moment it is drawn — it used to be a dimmed
+  thumbnail under a spinner for the ten minutes H3 films it; click it to
+  open the full picture.
+- **Comfy tells the truth.** A run refused or failed is an error with
+  ComfyUI's reason, and a run answers with its own files — it used to say
+  it was done and show the run before it. A `changes` entry that matches
+  no setting stops the run and is named; `true` reaches a toggle as true
+  (it arrived as 1 and switched it off); a seed given is kept; an `ask`
+  that could not be done runs nothing.
+- **Motion in steps.** motion_make's `until: "still"` stops once her first
+  picture is drawn; motion_status(take) shows every step, file and prompt,
+  and the picture; motion_stop and motion_continue. The scene is put into
+  English once and kept (it was twice, and the two could differ), or used
+  as written; `words` replaces the studio's filming sentence. A misspelled
+  camera or place is an error, not the default.
+- **Everything the agents look at, they see.** Tools that name pictures
+  hand Claude Code the pictures themselves. video_frames shows any video as
+  a sheet of frames. Waiting tools (film_status, comfy_status,
+  motion_status) wait until something changes.
+- **No more 55-second wall.** Every panel call from a studio agent was cut
+  at 55 s by the relay and reported as "连不上面板" while the app carried
+  on — a download, a render. Their relay waits fifteen minutes and answers
+  calls side by side; the kernel's keeps its minute.
+- Film, Motion and Comfy open with their agent's column out, as Montage.
+
 ### Added — Montage: OpenMontage on the box, where it can be seen
 
 "openmontage看不见怎么用啊": installed on the box and tested, OpenMontage was

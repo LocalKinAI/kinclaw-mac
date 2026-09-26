@@ -186,7 +186,9 @@ final class StudioAgent: ObservableObject {
 
     private init(_ place: Place) {
         self.place = place
-        shown = place == .montage
+        // Out on every tab, as on Montage's ("film, motion, comfy 可以打开就有
+        // 一样和 montage 的 agent 打开着吗").
+        shown = true
         let key = "kinclaw.agent.\(place.rawValue)"
         harness = AgentHarness(rawValue: UserDefaults.standard.string(forKey: key + ".harness") ?? "") ?? .claude
         if let data = UserDefaults.standard.data(forKey: key + ".brain"), let saved = try? JSONDecoder().decode(AgentBrain.self, from: data) {
@@ -274,11 +276,15 @@ final class StudioAgent: ObservableObject {
     }
 
     /// The MCP servers it is given: the panel's tools for this tab, served by
-    /// this very binary and cut down to them; for Montage, the bridge.
-    private var servers: [(name: String, command: String, args: [String])] {
+    /// this very binary and cut down to them; for Montage, the bridge. A panel
+    /// call may take as long as its work does (a download, a render: fifteen
+    /// minutes), and Claude Code is handed the pictures a tool names.
+    private func servers(for harness: AgentHarness) -> [(name: String, command: String, args: [String])] {
         var list: [(String, String, [String])] = []
         if !panelTools.isEmpty {
-            list.append(("panel", Bundle.main.executablePath ?? "", ["--mcp-stdio", "--tools", panelTools.joined(separator: ",")]))
+            list.append(("panel", Bundle.main.executablePath ?? "",
+                         ["--mcp-stdio", "--tools", panelTools.joined(separator: ","), "--timeout", "900"]
+                            + (harness == .claude ? ["--images"] : [])))
         }
         if place == .montage, let bridge = OpenMontageBridge.server {
             list.append(("openmontage", bridge.command, bridge.args))
@@ -288,7 +294,7 @@ final class StudioAgent: ObservableObject {
 
     private func claudeArgs(_ binary: String, _ brain: AgentBrain, _ words: String?, _ session: String?) -> [String] {
         var config: [String: Any] = [:]
-        for server in servers { config[server.name] = ["type": "stdio", "command": server.command, "args": server.args] }
+        for server in servers(for: .claude) { config[server.name] = ["type": "stdio", "command": server.command, "args": server.args] }
         let json = (try? JSONSerialization.data(withJSONObject: ["mcpServers": config], options: .withoutEscapingSlashes))
             .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
         var allowed = panelTools.map { "mcp__panel__" + $0 }
@@ -315,11 +321,11 @@ final class StudioAgent: ObservableObject {
         var args = [binary]
         if let session { args += ["resume", session] }
         args += ["-C", folder.path, "-c", "developer_instructions=" + toml(briefing)]
-        for server in servers {
+        for server in servers(for: .codex) {
             args += ["-c", "mcp_servers.\(server.name).command=" + toml(server.command),
                      "-c", "mcp_servers.\(server.name).args=" + toml(server.args),
                      "-c", "mcp_servers.\(server.name).startup_timeout_sec=30",
-                     "-c", "mcp_servers.\(server.name).tool_timeout_sec=\(server.name == "openmontage" ? 960 : 90)"]
+                     "-c", "mcp_servers.\(server.name).tool_timeout_sec=960"]
         }
         if let endpoint = brain.endpoint {
             // As the Term tab points Codex at a host: a provider of our own,
@@ -501,20 +507,21 @@ final class StudioAgent: ObservableObject {
     var panelTools: [String] {
         let studio = ["panel_show", "box_services", "image_generate", "video_generate", "video_status"]
         let comfy = ["comfy_templates", "comfy_run", "comfy_import", "comfy_status", "comfy_stop"]
-        let film = ["film_guide", "film_make", "film_status", "film_frames", "film_count", "film_fix_picture",
-                    "film_grade", "film_reshoot", "film_recut", "film_rescore", "film_review", "film_stop"]
+        let film = ["film_guide", "film_make", "film_status", "film_shot", "film_edit", "film_cast", "film_continue",
+                    "film_frames", "film_count", "film_fix_picture", "film_grade", "film_reshoot", "film_recut",
+                    "film_rescore", "film_review", "film_stop"]
         switch place {
         case .film: return film + comfy + studio
-        case .motion: return ["motion_find", "motion_make", "motion_status"] + studio
-        case .comfy: return comfy + studio
+        case .motion: return ["motion_find", "motion_make", "motion_status", "motion_stop", "motion_continue", "video_frames"] + studio
+        case .comfy: return comfy + ["video_frames"] + studio
         case .montage: return []
         }
     }
 
     private static let seeing = """
-        Tools that show you something answer with the picture, or with lines `image://<path>`: open those files \
-        and look before you say anything about them — every frame you are shown, and count what the story counts. \
-        A reviewer's score is not proof.
+        Tools that show you something hand you the picture itself (a line `image://<path>` names it; if a picture \
+        did not come with it, open that file). Look before you say anything about it — every frame you are \
+        shown — and count what the story counts. A reviewer's score is not proof.
         """
 
     var briefing: String {
@@ -525,33 +532,47 @@ final class StudioAgent: ObservableObject {
                 this terminal: the storyboard, every still and clip as it lands, and the cut appear there by \
                 themselves. You work through the panel's film tools (mcp__panel__film_*). Call film_guide once before \
                 anything else and follow it: it is the method this studio's films are made by, learned the hard way. \
-                \(Self.seeing) The work runs on the box and is slow — a still about 2 minutes, an H3 shot 5–10, music \
+                \(Self.seeing) The work runs on the box and is slow — a still about 2 minutes, an H3 shot 10–12, music \
                 several — so before you shoot a film, give them the plan in a few lines (the shots, engine, shape, \
                 length, roughly how long it takes) and wait for a yes; say what a fix will cost before starting it. \
-                One job at a time; follow it with film_status (wait: true) instead of asking again and again. A film \
-                they have open is the one they mean by "this film"; film_status lists them all. Speak the language \
-                they write in, and keep it short.
+                You decide as much as you want to: what you give film_make (the cast, each shot's `who`, its \
+                `picture`, its `h3` words) is used as written, and the studio writes only the rest. On H3, make it with \
+                stop_after "frames", look at every shot with film_shot — its set, its first frame, the words each \
+                model was given — fix what is wrong (film_edit, film_cast, film_fix_picture), then film_continue: a \
+                wrong first frame costs ten minutes of filming. One job at a time; follow it with film_status (wait: \
+                true) instead of asking again and again. A film they have open is the one they mean by "this film"; \
+                film_status lists them all. Speak the language they write in, and keep it short.
                 """
         case .motion:
             return """
                 You make motion takes in the KinClaw app's Motion tab, on the person's Mac: a movement taken from a \
-                real video (a reference) is performed by her, in a place and clothes they describe. They watch the tab \
-                beside this terminal, where every take appears. motion_find searches for Creative Commons reference \
-                videos by topic; motion_make makes a take from a reference (a file or a found one), a start second and \
-                a length, and the scene; motion_status follows it. A reference should be one person, whole body, a \
-                steady camera. \(Self.seeing) Ten seconds take about five minutes on the box: say so, and wait for a \
-                yes before a long one. Speak the language they write in, and keep it short.
+                real video (a reference) is performed by her — the companion, from her portrait — in a place and \
+                clothes they describe. They watch the tab beside this terminal, where every take appears. motion_find \
+                searches for Creative Commons reference videos by topic; motion_make makes a take from a reference (a \
+                file, or a `url` whose licence it checks — anything not Creative Commons needs the person to say it is \
+                theirs, `rights`; always pass `credit`), a start second, a length and the scene. A reference should be \
+                one person, whole body, a steady camera. `camera`: skeleton (default, filmed from where the reference \
+                was) or the 3D route — static, orbit, push, on a `place` set (park or open). Give `until: "still"` to \
+                stop once her first picture is drawn: look at it with motion_status(take) — you see it, with the pose \
+                it copies and the words the model got — then motion_continue. Your own English for the scene \
+                (`scene_as_written`) or for the filming (`words`) is used as written. motion_status(wait: true) follows \
+                a take; motion_stop stops one; video_frames shows any finished video. \(Self.seeing) Ten seconds take \
+                about five minutes on the box: say so, and wait for a yes before a long one. Speak the language they \
+                write in, and keep it short.
                 """
         case .comfy:
             return """
                 You work ComfyUI on the box for the person, through the KinClaw app's Comfy tab, which they watch \
                 beside this terminal: the workflow you open shows there as a form, and its results appear there. \
                 comfy_templates finds a ready-made workflow by what it does (about 300 run locally); comfy_run opens \
-                one — by name, or from their words with `ask` — sets its values with `changes` (node, name, value, \
-                as comfy_status lists them), gives it input files with `files`, and runs it; comfy_status says what \
-                is open, what it lacks, and the latest results with their file paths; comfy_import brings in a \
-                workflow from a file or a link. \(Self.seeing) Results are files: open them before you say they are \
-                right. A missing model is a download of many gigabytes: ask before pulling one. Speak the language \
+                one — by name, or from their words with `ask` (if that fails nothing runs, and you are told why) — sets \
+                its values with `changes` (node, name, value, as comfy_status lists them; one that matches nothing \
+                stops the run and is named), gives it input files with `files`, and runs it, bringing back that run's \
+                files — you see the pictures; video_frames shows a video. A seed you set is kept; keep_seed keeps the \
+                form's. A run that fails is an error with ComfyUI's reason. comfy_status says what is open, what it \
+                lacks and the latest results (wait: true waits for a run); comfy_stop stops one; comfy_import brings \
+                in a workflow from a file or a link. \(Self.seeing) A missing model is a download of many gigabytes \
+                that only the person can start, in the Comfy tab: tell them which and how big. Speak the language \
                 they write in, and keep it short.
                 """
         case .montage:

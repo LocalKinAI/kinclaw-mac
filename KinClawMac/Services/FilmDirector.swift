@@ -521,7 +521,7 @@ extension FilmStudio {
     /// the lake and the light changing, which the camera moved over a still
     /// never does. The boy's shot, pinned at its start, kept its five loaves.
     func pins(for shot: Shot, in film: Film) -> [(picture: URL, frame: Int)] {
-        guard Self.pinOn, film.engine == .h3 else { return [] }
+        guard film.pinFrames ?? Self.pinOn, film.engine == .h3 else { return [] }
         let first = film.opening(shot.id)
         guard FileManager.default.fileExists(atPath: first.path) else { return [] }
         let held = (shot.who ?? []).isEmpty && !(shot.checks ?? []).isEmpty
@@ -958,7 +958,7 @@ extension FilmStudio {
         }
         try await Self.cut(clips, voices: done.map { film.voice($0.id) },
                            voiceover: film.voiceover == nil ? nil : film.voiceoverFile,
-                           music: music && Self.musicOn ? film.music : nil, to: film.file)
+                           music: music && (film.withMusic ?? Self.musicOn) ? film.music : nil, to: film.file)
         do {
             film.loudness = try await Self.master(film.file, keeping: film.premaster)
         } catch {
@@ -1483,7 +1483,9 @@ extension FilmStudio {
         导演手册 —— 从第一版到能给人看的那一版
 
         一、拍之前
-        - 故事片用 film_make，engine: h3（人物前后一致）。H3 片默认钉帧：有人的镜头先用定妆照和布景合成第一帧、数过，再钉在开头拍；没人的镜头从布景拍；没人又要数的镜头开头、中间、结尾都钉同一张，场景定住、只有光和雾在动。第一帧在 film_frames(picture: true) 里能看到。故事里要"数"的东西（五个饼、两条鱼、十二个篮子），写进那个镜头的 counts：[{"thing": "round flat barley loaves", "count": 5}]。布景画好后会先数一遍，不对就改图，再拍。
+        - 你想定的都自己定，照原样用；没给的片场才写。故事片用 film_make，engine: h3（人物前后一致）：cast 里写每个人（name、look：相貌、发型、身材、穿着，英文 40–70 词），每一镜给 who（这一镜里有谁，用 cast 里的名字）；想要的话再给 picture（布景的原话，H3 的布景里没有人）和 h3（H3 拍这一镜用的原话）。拍人的镜头没分到演员，片场会停下来说是哪几镜，不会拍出空景；没有人的镜头写 subject: "place" 或 "thing"。
+        - H3 一镜要十分钟，先看再拍：film_make(stop_after: "frames") 做完每一镜的首帧就停。film_shot(shot) 一镜一镜看：布景、首帧、这一镜演员的定妆照，还有每个模型实际拿到的原话。不对就 film_edit（改画面描述、有谁、提示词）、film_cast（改演员的样子，或者给一张图当定妆照）、film_fix_picture（改首帧），改完 film_continue。拍到一半想停下来改也一样：film_stop → film_edit → film_continue。
+        - H3 片默认钉帧：有人的镜头先用定妆照和布景合成第一帧、数过，再钉在开头拍；没人的镜头从布景拍；没人又要数的镜头开头、中间、结尾都钉同一张，场景定住、只有光和雾在动。第一帧在 film_frames(picture: true) 里能看到。故事里要"数"的东西（五个饼、两条鱼、十二个篮子），写进那个镜头的 counts：[{"thing": "round flat barley loaves", "count": 5}]。布景画好后会先数一遍，不对就改图，再拍。
         - 也可以在拍之前先看布景：film_frames(picture: true)，数：film_count(picture: true)。布景对了，H3 才会对；H3 只守得住布景里有的东西。
 
         二、拍完，自己看，一个镜头一个镜头地看

@@ -37,11 +37,12 @@ extension FilmStudio {
     /// Who is in it, and in which shots. People who appear in one shot and are
     /// nobody (a crowd, a passer-by) are not cast; the story's people are.
     static func castFilm(_ film: Film) async -> (cast: [Cast], who: [Int: [String]])? {
-        guard let writer = await writer(), let url = URL(string: writer.host + "/api/chat") else { return nil }
+        guard let writer = await writer(claude: true), let url = URL(string: writer.host + "/api/chat") else { return nil }
         let list = film.shots.map { shot in
             "{\"id\": \(shot.id), \"camera\": \(quoted(shot.framing ?? "")), \"shows\": \(quoted(shot.pose)), \"moves\": \(quoted(shot.action)), \"the_moment\": \(quoted(shot.narration ?? ""))}"
         }.joined(separator: ",\n")
-        let ask = """
+        let fixed = film.cast ?? []
+        let ask = fixed.isEmpty ? """
             A short film about: "\(film.idea)".
             \(film.source.map { "It follows: \($0).\n" } ?? "")Shared look: \(film.look)
             The shots: [\(list)]
@@ -55,19 +56,45 @@ extension FilmStudio {
             no expression, no setting.
             Then for each shot, `who` — the cast members who appear in it (none for a shot of a thing or a place).
             Answer with JSON only: {"cast": [{"name": "...", "look": "..."}], "shots": [{"id": 1, "who": ["..."]}]}
+            """ : """
+            A short film about: "\(film.idea)".
+            The shots: [\(list)]
+
+            Its cast is already chosen: \(fixed.map { "\"\($0.name)\" (\($0.look))" }.joined(separator: "; ")).
+            For each shot, `who` — which of them appear in it, by those names exactly; none for a shot of a thing \
+            or a place. A shot that shows a person shows one of them.
+            Answer with JSON only: {"shots": [{"id": 1, "who": ["..."]}]}
             """
         guard let object = await askJSON(ask, host: url, model: writer.model) else { return nil }
-        let cast = (object["cast"] as? [[String: Any]] ?? []).compactMap { row -> Cast? in
+        let cast = fixed.isEmpty ? (object["cast"] as? [[String: Any]] ?? []).compactMap { row -> Cast? in
             guard let name = (row["name"] as? String)?.trimmingCharacters(in: .whitespaces), !name.isEmpty,
                   let look = (row["look"] as? String)?.trimmingCharacters(in: .whitespaces), look.count > 20 else { return nil }
             return Cast(name: name, look: look)
-        }
+        } : fixed
         var who: [Int: [String]] = [:]
         for row in object["shots"] as? [[String: Any]] ?? [] {
-            guard let id = row["id"] as? Int else { continue }
-            who[id] = (row["who"] as? [String] ?? []).filter { name in cast.contains { $0.name == name } }
+            // An id written "1" is the same shot as 1, and "The Woman" the same
+            // person as "the woman": either miss left a shot with nobody in it.
+            guard let id = (row["id"] as? Int) ?? Int("\(row["id"] ?? "")") else { continue }
+            who[id] = (row["who"] as? [String] ?? []).compactMap { member(named: $0, in: cast) }
         }
         return (Array(cast.prefix(4)), who)
+    }
+
+    /// The cast member a name means, by the cast's own spelling: case, spaces
+    /// and a leading "the" aside, or one name inside the other ("woman", "the
+    /// young woman").
+    static func member(named name: String, in cast: [Cast]) -> String? {
+        func plain(_ text: String) -> String {
+            var t = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            for article in ["the ", "a ", "an "] where t.hasPrefix(article) { t = String(t.dropFirst(article.count)) }
+            return t
+        }
+        let wanted = plain(name)
+        guard !wanted.isEmpty else { return nil }
+        if let exact = cast.first(where: { plain($0.name) == wanted }) { return exact.name }
+        let near = cast.filter { plain($0.name).contains(wanted) || wanted.contains(plain($0.name)) }
+        return near.count == 1 ? near[0].name : nil
     }
 
     /// The portrait a cast member is drawn as: plain, front on, the face sharp
@@ -91,8 +118,8 @@ extension FilmStudio {
     /// Each shot's picture with every person taken out of it — the set. Only
     /// the pictures that had someone in them come back.
     static func emptySets(_ film: Film) async -> [Int: String]? {
-        guard let writer = await writer(), let url = URL(string: writer.host + "/api/chat") else { return nil }
-        let list = film.shots.filter { $0.state != .done && ($0.picture ?? "").count > 40 }
+        guard let writer = await writer(claude: true), let url = URL(string: writer.host + "/api/chat") else { return nil }
+        let list = film.shots.filter { $0.state != .done && ($0.picture ?? "").count > 40 && !$0.gave("picture") }
             .map { "{\"id\": \($0.id), \"subject\": \"\($0.of.rawValue)\", \"picture\": \(quoted($0.picture ?? ""))}" }
             .joined(separator: ",\n")
         guard !list.isEmpty else { return [:] }
@@ -127,7 +154,7 @@ extension FilmStudio {
     /// reference mode. The pictures are labelled per shot: the portraits of
     /// who is in it, in cast order, then the set.
     static func writeH3(_ film: Film, only: [Int]? = nil) async -> [Int: String]? {
-        guard let writer = await writer(), let url = URL(string: writer.host + "/api/chat") else { return nil }
+        guard let writer = await writer(claude: true), let url = URL(string: writer.host + "/api/chat") else { return nil }
         let guide = await h3Guide()
         let seconds = String(format: "%.1f", h3Seconds(film.seconds))
         let shots = film.shots.filter { only?.contains($0.id) ?? true }

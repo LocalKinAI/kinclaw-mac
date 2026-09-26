@@ -63,6 +63,18 @@ final class MotionStudio: ObservableObject {
         /// reference was.
         var camera: MotionStage.Camera?
         var place: MotionStage.Place?
+        /// Where to stop and wait: "still" once her first picture is drawn,
+        /// before minutes of filming — for whoever wants to look at it first.
+        /// Cleared when it is reached.
+        var hold: String?
+        /// The scene as the models read it, in English: made once from the
+        /// person's words and kept, so the picture and the film are told the
+        /// same thing (it was translated twice, and the two could differ) —
+        /// or given as written.
+        var sceneEnglish: String?
+        /// The words the video model films from, as written; nil for the
+        /// studio's own ("… slowly and continuously … Static camera …").
+        var words: String?
         var created = Date()
 
         enum State: String, Codable { case waiting, tracking, drawing, filming, joining, done, failed }
@@ -115,7 +127,8 @@ final class MotionStudio: ObservableObject {
 
     /// Start a take. Returns at once; the work runs for minutes.
     func make(video: URL, title: String, start: Double, seconds: Double, scene: String, credit: String? = nil,
-              camera: MotionStage.Camera? = nil, place: MotionStage.Place = .park) -> Result<Take, FilmStudio.Failure> {
+              camera: MotionStage.Camera? = nil, place: MotionStage.Place = .park,
+              hold: String? = nil, sceneEnglish: String? = nil, words: String? = nil) -> Result<Take, FilmStudio.Failure> {
         guard working == nil else { return .failure(.message("正在拍「\(working!)」，等它拍完")) }
         guard FilmStudio.shared.shooting == nil else { return .failure(.message("片场正在拍片，两边用的是同一个出片服务，等它拍完")) }
         guard FileManager.default.fileExists(atPath: video.path) else { return .failure(.message("找不到这段视频：\(video.path)")) }
@@ -132,6 +145,9 @@ final class MotionStudio: ObservableObject {
                         segments: (1...count).map { Segment(id: $0) })
         take.camera = camera
         take.place = camera == nil ? nil : place
+        take.hold = hold
+        take.sceneEnglish = sceneEnglish
+        take.words = words
         do {
             try FileManager.default.createDirectory(at: take.folder, withIntermediateDirectories: true)
             try FileManager.default.copyItem(at: video, to: take.reference)
@@ -143,7 +159,7 @@ final class MotionStudio: ObservableObject {
     }
 
     /// Carry on with a take that stopped.
-    func resume(_ id: String) -> Result<Take, FilmStudio.Failure> {
+    func resume(_ id: String, hold: String? = nil) -> Result<Take, FilmStudio.Failure> {
         guard working == nil else { return .failure(.message("正在拍「\(working!)」，等它拍完")) }
         guard var take = takes.first(where: { $0.id == id || $0.title == id }) else { return .failure(.message("没有这一条：\(id)")) }
         for index in take.segments.indices where take.segments[index].state != .done {
@@ -152,9 +168,62 @@ final class MotionStudio: ObservableObject {
         }
         take.state = .tracking
         take.note = nil
+        take.hold = hold
         save(take)
         produce(take.id)
         return .success(take)
+    }
+
+    /// The scene in English, once: as given, or made from the person's words
+    /// and kept on the take.
+    private func englishScene(_ take: inout Take) async -> String {
+        if let kept = take.sceneEnglish, !kept.isEmpty { return kept }
+        let made = await FilmStudio.english(take.scene, as: "place she is in and what she is wearing")
+        take.sceneEnglish = made
+        save(take)
+        return made
+    }
+
+    /// All of a take, for an agent: where each step is, the files, the words
+    /// each model was given, and — as pictures — her first frame and the pose
+    /// it was drawn from.
+    func describe(_ take: Take) -> String {
+        let fm = FileManager.default
+        var lines = ["「\(take.title)」\(take.id)：\(take.state.rawValue)" + (take.note.map { " —— \($0)" } ?? "")]
+        lines.append("参考：\(take.reference.path)，从第 \(String(format: "%g", take.start)) 秒起 \(Int(take.seconds)) 秒，"
+                     + "分 \(take.segments.count) 段（每段 \(String(format: "%g", take.stretch)) 秒）" + (take.credit.map { "；出处：\($0)" } ?? ""))
+        lines.append("路线：" + (take.camera.map { "3D，\($0.title)，布景 \((take.place ?? .park).title)" } ?? "骨架（按参考视频的机位拍）"))
+        lines.append("场景：\(take.scene)")
+        if let english = take.sceneEnglish { lines.append("场景（给模型的英文）：\(english)") }
+        if let words = take.words { lines.append("拍视频的原话（你给的，照原样）：\(words)") }
+        for segment in take.segments {
+            lines.append("  第 \(segment.id) 段：\(segment.state.rawValue)" + (segment.note.map { " —— \($0)" } ?? "")
+                         + (fm.fileExists(atPath: take.clip(segment.id).path) ? " → \(take.clip(segment.id).path)" : ""))
+        }
+        var pictures: [URL] = []
+        for (label, url) in [("她的起始画面", take.still), ("参考第一帧的姿势", take.sourceFirst), ("3D 布景的第一帧", take.blockout)]
+        where fm.fileExists(atPath: url.path) {
+            lines.append("\(label)：\(url.path)")
+            if let words = try? String(contentsOf: url.appendingPathExtension("txt"), encoding: .utf8), !words.isEmpty {
+                lines.append("  给模型的原话：\(words.prefix(1200))")
+            }
+            pictures.append(url)
+        }
+        if let words = try? String(contentsOf: take.clip(1).appendingPathExtension("txt"), encoding: .utf8), !words.isEmpty {
+            lines.append("拍视频给模型的原话：\(words.prefix(800))")
+        }
+        if fm.fileExists(atPath: take.file.path) { lines.append("成片：\(take.file.path)（video_frames 看）") }
+        return (lines + pictures.map { "image://\($0.path)" }).joined(separator: "\n")
+    }
+
+    /// Stop at `hold` "still", once her first picture is there.
+    private func heldAtStill(_ take: inout Take) -> Bool {
+        guard take.hold == "still" else { return false }
+        take.hold = nil
+        take.state = .waiting
+        take.note = "停在起始画面：motion_status 看过，没问题就 motion_continue 开拍"
+        save(take)
+        return true
     }
 
     /// The work in hand, so that it can be called off: a ten-second stretch is
@@ -185,6 +254,7 @@ final class MotionStudio: ObservableObject {
                     save(take)
                     return
                 }
+
                 // 1. The movement. Kept on disk: a carried-on take should not track again.
                 let total = take.segments.count * (take.frames - 1) + 1
                 var frames: [[CGPoint?]]
@@ -212,7 +282,7 @@ final class MotionStudio: ObservableObject {
                     take.state = .drawing; save(take)
                     progress = "在画她的起始画面"
                     guard let anchor = CompanionCharacter.shared.anchorURL else { throw FilmStudio.Failure.message("她还没有锚图") }
-                    let scene = await FilmStudio.english(take.scene, as: "place she is in and what she is wearing")
+                    let scene = await englishScene(&take)
                     let prompt = """
                         Full-length shot, her whole body visible, at the same camera distance and the same position in the \
                         frame as image 2. Image 1 is the woman: keep her exact face and hair. Image 2 shows only the body \
@@ -226,6 +296,7 @@ final class MotionStudio: ObservableObject {
                     try fm.moveItem(at: made, to: take.still)
                     await restoreFace(in: take)
                 }
+                if heldAtStill(&take) { return }
 
                 // 3. The skeleton, laid over her.
                 if take.fit == nil, let body = MotionPose.body(in: take.still), let opening = frames.first {
@@ -238,9 +309,9 @@ final class MotionStudio: ObservableObject {
                 // 4. Filmed, a stretch at a time, each from where the last one stopped.
                 take.state = .filming; save(take)
                 await BoxServices.shared.refreshMemory()       // so that boxHasRoom is about now
-                let scene = await FilmStudio.english(take.scene, as: "place she is in and what she is wearing")
-                let words = "\(scene). She follows the reference movement exactly, slowly and continuously, her whole body taking "
-                    + "part. She stays in the frame. Static camera. Ambient sound only: wind, birds, her breath."
+                let scene = await englishScene(&take)
+                let words = take.words ?? ("\(scene). She follows the reference movement exactly, slowly and continuously, her whole body taking "
+                    + "part. She stays in the frame. Static camera. Ambient sound only: wind, birds, her breath.")
                 for index in take.segments.indices where take.segments[index].state != .done {
                     let number = take.segments[index].id
                     progress = "在拍第 \(number)/\(take.segments.count) 段"
@@ -328,7 +399,7 @@ final class MotionStudio: ObservableObject {
             take.state = .drawing; save(take)
             progress = "在画她的起始画面"
             guard let anchor = CompanionCharacter.shared.anchorURL else { throw FilmStudio.Failure.message("她还没有锚图") }
-            let scene = await FilmStudio.english(take.scene, as: "place she is in and what she is wearing")
+            let scene = await englishScene(&take)
             // Said loosely ("turn this blockout into a photograph") the editor
             // composed its own picture: the pavilion moved to the middle and she
             // put her hands in her pockets. Told that nothing moves, it kept the
@@ -345,13 +416,14 @@ final class MotionStudio: ObservableObject {
             try fm.moveItem(at: made, to: take.still)
             await restoreFace(in: take)
         }
+        if heldAtStill(&take) { return }
 
         // 4. Filmed, a stretch at a time, each from where the last one stopped.
         take.state = .filming; save(take)
         await BoxServices.shared.refreshMemory()
-        let scene = await FilmStudio.english(take.scene, as: "place she is in and what she is wearing")
-        let words = "\(scene). She follows the reference movement exactly, slowly and continuously, her whole body taking part. "
-            + "She stays in the frame. \(camera.words) Ambient sound only: wind, birds, her breath."
+        let scene = await englishScene(&take)
+        let words = take.words ?? ("\(scene). She follows the reference movement exactly, slowly and continuously, her whole body taking part. "
+            + "She stays in the frame. \(camera.words) Ambient sound only: wind, birds, her breath.")
         for index in take.segments.indices where take.segments[index].state != .done {
             let number = take.segments[index].id
             progress = "在拍第 \(number)/\(take.segments.count) 段"

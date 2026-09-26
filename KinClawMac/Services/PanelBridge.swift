@@ -1,5 +1,7 @@
 import Foundation
+import ImageIO
 import Network
+import UniformTypeIdentifiers
 
 /// The panel's own MCP server: the browser tab and the terminals, as tools the
 /// kernel's agent can call.
@@ -156,11 +158,39 @@ final class PanelBridge {
             return Self.jsonrpc(["jsonrpc": "2.0", "id": NSNull(),
                                  "error": ["code": -32700, "message": "parse error"]])
         }
-        guard let reply = await handle(message) else {
+        let patience = request.header("x-kinclaw-patience").flatMap(Double.init) ?? 44
+        let images = request.header("x-kinclaw-images") == "1"
+        guard let reply = await PanelTools.$patience.withValue(patience, operation: { await handle(message, images: images) }) else {
             // A notification: nothing to answer with.
             return Self.http(status: "204 No Content", body: Data(), type: "text/plain")
         }
         return Self.jsonrpc(reply)
+    }
+
+    /// The pictures a tool's answer names in `image://` lines, as MCP image
+    /// content: the agent sees them in the answer instead of being told to
+    /// open files — which, outside its own folder, asks the person first.
+    /// At most six, each no more than 1568 pixels on its longer side, JPEG.
+    private static func pictures(in text: String) async -> [[String: Any]] {
+        let paths = text.split(separator: "\n").compactMap { line -> String? in
+            guard let at = line.range(of: "image://") else { return nil }
+            let path = line[at.upperBound...].trimmingCharacters(in: .whitespaces)
+            return path.isEmpty ? nil : path
+        }
+        return await Task.detached(priority: .userInitiated) {
+            paths.prefix(6).compactMap { path -> [String: Any]? in
+                let options = [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                               kCGImageSourceCreateThumbnailWithTransform: true,
+                               kCGImageSourceThumbnailMaxPixelSize: 1568] as CFDictionary
+                guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
+                      let picture = CGImageSourceCreateThumbnailAtIndex(source, 0, options) else { return nil }
+                let data = NSMutableData()
+                guard let out = CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil) else { return nil }
+                CGImageDestinationAddImage(out, picture, [kCGImageDestinationLossyCompressionQuality: 0.85] as CFDictionary)
+                guard CGImageDestinationFinalize(out) else { return nil }
+                return ["type": "image", "data": (data as Data).base64EncodedString(), "mimeType": "image/jpeg"]
+            }
+        }.value
     }
 
     private static func jsonrpc(_ reply: [String: Any]) -> Data {
@@ -184,7 +214,7 @@ final class PanelBridge {
 
     /// The three methods an MCP client needs, and the call. nil means the
     /// message was a notification and wants no reply.
-    func handle(_ message: [String: Any]) async -> [String: Any]? {
+    func handle(_ message: [String: Any], images: Bool = false) async -> [String: Any]? {
         let method = message["method"] as? String ?? ""
         let id = message["id"]
         let params = message["params"] as? [String: Any] ?? [:]
@@ -219,7 +249,9 @@ final class PanelBridge {
             let name = params["name"] as? String ?? ""
             let args = params["arguments"] as? [String: Any] ?? [:]
             let (text, isError) = await PanelTools.call(name, args)
-            return result(["content": [["type": "text", "text": text]], "isError": isError])
+            var content: [[String: Any]] = [["type": "text", "text": text]]
+            if images { content += await Self.pictures(in: text) }
+            return result(["content": content, "isError": isError])
         default:
             return failure(-32601, "unknown method \(method)")
         }

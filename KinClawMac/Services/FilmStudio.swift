@@ -164,6 +164,13 @@ final class FilmStudio: ObservableObject {
         /// the bread only in words, shot 7 tore pale white chunks while shot 4's
         /// basket held round golden-brown barley loaves.
         var props: [String]? = nil
+        /// What the director — a person, or the agent working the tab — wrote
+        /// themselves and wants used as written: "picture", "who", "h3". No pass
+        /// rewrites these; the writer only fills what nobody gave. Until there
+        /// was this, an agent's shots of a woman walking went through three
+        /// passes of another model and came out as an empty dress on the sand.
+        var given: [String]? = nil
+        func gave(_ field: String) -> Bool { given?.contains(field) == true }
         /// How this shot is filmed when it is not the film's own way: from one
         /// picture on LTX (`animate`), or by a camera moving over the picture with
         /// no model at all (`move`, where `glide` says which way). Nil is the
@@ -245,6 +252,16 @@ final class FilmStudio: ObservableObject {
         /// narrator over the whole film — nil for films narrated shot by shot.
         var voiceover: String?
         var sounded: Bool?
+        /// Where to stop and wait before going on — "sets" once the portraits
+        /// and the sets are drawn, "frames" once every first frame is made — so
+        /// that what is about to be filmed, at ten minutes a shot, is looked at
+        /// first. Cleared when it is reached; nil runs straight through. H3.
+        var hold: String?
+        /// This film's own switches for pinning first frames and for music
+        /// under the cut; nil follows the tab's. A film made by an agent says
+        /// what it wants instead of taking whatever the tab was left on.
+        var pinFrames: Bool?
+        var withMusic: Bool?
         /// Integrated loudness of the cut after mastering, in LUFS.
         var loudness: Double?
         var seconds: Double
@@ -374,6 +391,12 @@ final class FilmStudio: ObservableObject {
         var subject = Subject.her
         /// Things whose number the story turns on in this shot.
         var counts: [Check] = []
+        /// Given by whoever wrote the shot list, and used as written: who of the
+        /// cast is in it, the picture to draw (on H3 the set, nobody in it), and
+        /// the words H3 films it from.
+        var who: [String]? = nil
+        var picture: String? = nil
+        var h3: String? = nil
 
         /// From a storyboard's JSON, whoever wrote it: the brain behind the
         /// tab or the one calling `film_make`.
@@ -389,13 +412,22 @@ final class FilmStudio: ObservableObject {
                       let count = (row["count"] as? Int) ?? Int("\(row["count"] ?? "")"), count > 0 else { return nil }
                 return Check(thing: thing, count: count)
             }
+            who = (item["who"] as? [String]).map { $0.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty } }
+            func words(_ key: String) -> String? {
+                let text = (item[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                return text.isEmpty ? nil : text
+            }
+            picture = words("picture")
+            h3 = words("h3")
         }
     }
 
     /// Start a film. Returns at once; the work runs for minutes.
     func make(title: String, idea: String, look: String, place: String = "", wears: String = "", lead: Bool,
               seconds: Double, shots: [Draft], tongue: String = "", retakes: Int? = nil,
-              read: Understanding? = nil, shape: Shape = .square, engine: Engine = .ltx) -> Result<Film, Failure> {
+              read: Understanding? = nil, shape: Shape = .square, engine: Engine = .ltx,
+              cast: [Cast]? = nil, hold: String? = nil, pinFrames: Bool? = nil, withMusic: Bool? = nil,
+              literal: Bool = false) -> Result<Film, Failure> {
         guard shooting == nil else { return .failure(.message("片场正在拍「\(shooting!)」，等它拍完")) }
         let wanted = shots.filter { !$0.still.trimmingCharacters(in: .whitespaces).isEmpty }
         guard !wanted.isEmpty else { return .failure(.message("分镜是空的：每个镜头要有 still（画面）和 motion（动作）")) }
@@ -403,6 +435,15 @@ final class FilmStudio: ObservableObject {
         if let trouble = CompanionArt.unreachableVolume(Self.root) { return .failure(.message(trouble)) }
         if lead, CompanionCharacter.shared.anchorURL == nil {
             return .failure(.message("她还没有锚图，没法当主角；先 character_new 定一张脸，或者 lead 填 false"))
+        }
+        // Who is in a shot is said by the cast's own names: a name the cast
+        // does not have would be a person nobody drew.
+        let cast = (cast ?? []).filter { !$0.name.isEmpty }
+        for (index, draft) in wanted.enumerated() {
+            for name in draft.who ?? [] where Self.member(named: name, in: cast) == nil {
+                return .failure(.message(cast.isEmpty ? "第 \(index + 1) 镜给了 who，但没给 cast：先在 cast 里写出这个人（name、look）"
+                                                      : "第 \(index + 1) 镜的 who 里「\(name)」不在 cast 里（有：\(cast.map(\.name).joined(separator: "、"))）"))
+            }
         }
         let stamp = Int(Date().timeIntervalSince1970)
         let slug = Self.slug(title.isEmpty ? idea : title)
@@ -423,6 +464,10 @@ final class FilmStudio: ObservableObject {
         film.place = place.trimmingCharacters(in: .whitespaces).isEmpty ? nil : place
         film.tongue = tongue.isEmpty ? nil : tongue
         film.retakeLimit = retakes.map { min(max($0, 0), 3) } ?? Self.retakes
+        film.cast = cast.isEmpty ? nil : Array(cast.prefix(4))
+        film.hold = hold
+        film.pinFrames = pinFrames
+        film.withMusic = withMusic
         for (index, draft) in wanted.enumerated() {
             let said = draft.narration.trimmingCharacters(in: .whitespacesAndNewlines)
             // Asked for silence, and a writer that narrates anyway is not obeyed.
@@ -430,6 +475,17 @@ final class FilmStudio: ObservableObject {
             let camera = draft.framing.trimmingCharacters(in: .whitespacesAndNewlines)
             if !camera.isEmpty { film.shots[index].framing = camera }
             if !draft.counts.isEmpty { film.shots[index].checks = draft.counts }
+            var given: [String] = []
+            if let who = draft.who {
+                film.shots[index].who = who.compactMap { Self.member(named: $0, in: cast) }
+                given.append("who")
+            }
+            if let picture = draft.picture { film.shots[index].picture = picture; given.append("picture") }
+            if let h3 = draft.h3 { film.shots[index].h3 = h3; given.append("h3") }
+            if !given.isEmpty { film.shots[index].given = given }
+            // As written, all of it: no pass reads the pose again or rewrites
+            // the movement, and no reviewer sends it back.
+            if literal { film.shots[index].posed = true; film.shots[index].moved = true }
         }
         film.state = .shooting
         do {
@@ -450,6 +506,7 @@ final class FilmStudio: ObservableObject {
     /// given an idea and no shots.
     func make(from idea: String, shots: Int, lead: Bool, tongue: String? = nil, retakes: Int? = nil,
               source: String = "", shape: Shape = .square, kind: Kind = .auto, engine: Engine = .ltx,
+              cast: [Cast]? = nil, hold: String? = nil, pinFrames: Bool? = nil, withMusic: Bool? = nil,
               then done: ((Result<Film, Failure>) -> Void)? = nil) {
         let tongue = tongue ?? UserDefaults.standard.string(forKey: Self.tongueKey) ?? ""
         guard writing == nil else { done?(.failure(.message("还在给「\(writing!)」写分镜"))); return }
@@ -471,8 +528,9 @@ final class FilmStudio: ObservableObject {
                                                       tongue: tongue, read: read, model: Self.writerModel,
                                                       faces: engine == .h3)
                 result = make(title: board.title, idea: idea, look: board.look, place: board.place,
-                              wears: board.wears, lead: hers, seconds: 4, shots: board.shots, tongue: tongue,
-                              retakes: retakes, read: read, shape: shape, engine: engine)
+                              wears: board.wears, lead: hers, seconds: engine == .h3 ? 5 : 4, shots: board.shots, tongue: tongue,
+                              retakes: retakes, read: read, shape: shape, engine: engine,
+                              cast: cast, hold: hold, pinFrames: pinFrames, withMusic: withMusic)
             } catch {
                 result = .failure(.message("分镜没写出来：\(error.localizedDescription)"))
             }
@@ -765,7 +823,7 @@ final class FilmStudio: ObservableObject {
                     if let tone = written.tone { film.tone = tone }
                     for index in film.shots.indices {
                         guard let row = written.shots[film.shots[index].id] else { continue }
-                        film.shots[index].picture = row.picture
+                        if !film.shots[index].gave("picture") { film.shots[index].picture = row.picture }
                         if let moving = row.motion, film.shots[index].moved != true { film.shots[index].motion = moving }
                     }
                 }
@@ -1060,7 +1118,7 @@ final class FilmStudio: ObservableObject {
     /// The score, once per film, when there is one to make and music is on.
     /// A failure is said and the film is cut without it.
     private func makeMusic(_ film: inout Film, seconds: Double) async {
-        guard Self.musicOn, let score = film.score, !FileManager.default.fileExists(atPath: film.music.path) else { return }
+        guard film.withMusic ?? Self.musicOn, let score = film.score, !FileManager.default.fileExists(atPath: film.music.path) else { return }
         film.note = "在盒子上作配乐"
         save(film)
         await ComfyStudio.yieldMemory()
@@ -1095,16 +1153,41 @@ final class FilmStudio: ObservableObject {
         }
         let halt = "停下了。「接着拍」从这里继续"
 
-        if film.cast == nil {
+        func paused(_ note: String) -> Bool {
+            film.hold = nil
+            film.state = .waiting
+            film.note = note
+            save(film)
+            return false
+        }
+
+        // Casting: who is in the story, and who is in each shot — only what
+        // nobody gave. A cast given with the film stands, and so does every
+        // shot's own `who`. It used to run only while there was no cast, and
+        // then set every shot's `who`: a cast given with the film left all of
+        // them empty, and each shot was filmed as its empty set.
+        let uncast = film.shots.indices.filter { film.shots[$0].state != .done && film.shots[$0].who == nil }
+        if film.cast == nil || !uncast.isEmpty {
             film.note = "选角：这个故事里有谁"
             save(film)
             if let casting = await Self.castFilm(film) {
-                film.cast = casting.cast
-                for i in film.shots.indices { film.shots[i].who = casting.who[film.shots[i].id] ?? [] }
-            } else {
+                if film.cast == nil { film.cast = casting.cast }
+                for i in uncast { film.shots[i].who = casting.who[film.shots[i].id] ?? [] }
+            } else if film.cast == nil {
                 film.cast = []
             }
             save(film)
+        }
+        // A person's shot with nobody cast in it is drawn as its empty set and
+        // filmed that way — twice on 2026-09-25, an empty dress on the sand. It
+        // stops here instead, saying which shots.
+        let nobody = film.shots.filter {
+            $0.state != .done && ($0.method ?? .h3) == .h3 && $0.of == .figure && ($0.who ?? []).isEmpty && !$0.gave("who")
+        }.map(\.id)
+        if !nobody.isEmpty {
+            return stopped("第 \(nobody.map(String.init).joined(separator: "、")) 镜拍的是人，但没分到演员（who 是空的）：照这样 H3 会拍出空景。"
+                           + ((film.cast ?? []).isEmpty ? "这部片子还没有演员：用 film_cast 加。" : "")
+                           + "用 film_edit 给这些镜头 who，或者把 subject 改成 place / thing，再 film_continue")
         }
 
         // The photographer was told the pictures are empty sets and put
@@ -1115,7 +1198,7 @@ final class FilmStudio: ObservableObject {
             film.note = "把布景里的人拿掉"
             save(film)
             if let clean = await Self.emptySets(film) {
-                for i in film.shots.indices where film.shots[i].state != .done {
+                for i in film.shots.indices where film.shots[i].state != .done && !film.shots[i].gave("picture") {
                     if let picture = clean[film.shots[i].id] { film.shots[i].picture = picture }
                 }
             }
@@ -1154,6 +1237,9 @@ final class FilmStudio: ObservableObject {
                 return stopped(Task.isCancelled ? halt : "布景画不出来（第 \(film.shots[index].id) 镜）：\(error.localizedDescription)")
             }
         }
+        if film.hold == "sets" {
+            return paused("停在布景：演员和每一镜的布景都画好了，还没开拍。film_shot 看每一镜，film_edit / film_cast / film_fix_picture 改，再 film_continue")
+        }
 
         // The words, in H3's own form, for every shot still to film.
         let unwritten = film.shots.filter { $0.state != .done && $0.h3 == nil }.map(\.id)
@@ -1183,7 +1269,8 @@ final class FilmStudio: ObservableObject {
         // filmed and pinned where the shot starts (see FilmDirector): the set
         // with the portraits' people standing in it, counted where it counts.
         // Shots with nobody in them start from the set itself.
-        let composing = Self.pinOn ? film.shots.indices.filter {
+        let pinning = film.pinFrames ?? Self.pinOn
+        let composing = pinning ? film.shots.indices.filter {
             film.shots[$0].state != .done && (film.shots[$0].method ?? .h3) == .h3 && !(film.shots[$0].who ?? []).isEmpty
                 && !fm.fileExists(atPath: film.start(film.shots[$0].id).path)
         } : []
@@ -1200,6 +1287,9 @@ final class FilmStudio: ObservableObject {
             }
         }
         if !composing.isEmpty { await ComfyStudio.yieldMemory() }
+        if film.hold == "frames" || film.hold == "sets" {
+            return paused("停在首帧：每一镜开拍的第一帧都做好了，还没开拍（H3 一镜约十分钟）。film_shot 看，film_edit / film_fix_picture 改，再 film_continue")
+        }
 
         for index in film.shots.indices where film.shots[index].state != .done && (film.shots[index].method ?? .h3) == .h3 {
             if Task.isCancelled { return stopped(halt) }
@@ -1221,7 +1311,7 @@ final class FilmStudio: ObservableObject {
                     }
                     // A first frame made from a set that is not there any more
                     // (a retake redrew it) is made again from the new one.
-                    if Self.pinOn, !(film.shots[index].who ?? []).isEmpty, !fm.fileExists(atPath: film.start(id).path) {
+                    if pinning, !(film.shots[index].who ?? []).isEmpty, !fm.fileExists(atPath: film.start(id).path) {
                         try await composeFirst(&film, index, attempt: attempt)
                         await settleFirst(&film, index)
                     }
@@ -1243,7 +1333,7 @@ final class FilmStudio: ObservableObject {
 
                     // A director's own words are not reviewed, but numbers are
                     // facts, not taste: they are counted even then.
-                    guard limit > 0, shot.posed != true, shot.moved != true else {
+                    guard limit > 0, shot.posed != true, shot.moved != true, !shot.gave("h3") else {
                         if let wrong = await Self.recount(film.shots[index], in: film) {
                             film.shots[index].review = wrong
                             film.shots[index].score = 4
@@ -1614,7 +1704,7 @@ final class FilmStudio: ObservableObject {
         // A shot pinned to hold its picture (see FilmDirector.pins) is quiet on
         // purpose: only the light and the air move. Asked as any other, the
         // reviewer called one "a frozen still image" and it was filmed again.
-        let held = film.engine == .h3 && Self.pinOn && (shot.who ?? []).isEmpty && !(shot.checks ?? []).isEmpty
+        let held = film.engine == .h3 && (film.pinFrames ?? Self.pinOn) && (shot.who ?? []).isEmpty && !(shot.checks ?? []).isEmpty
         let ask = """
             You are checking one 4-second shot of a short film about: "\(film.idea)". Images 1–4 are frames \
             from the shot in order: its start, one third, two thirds, its end. \(film.engine == .h3
@@ -1937,7 +2027,7 @@ final class FilmStudio: ObservableObject {
                   let can = shown["capabilities"] as? [String] else { return false }
             return can.contains("vision")
         }
-        if let pick = await writer(), await sees(pick.model, on: pick.host) { return pick }
+        if let pick = await writer(claude: true), await sees(pick.model, on: pick.host) { return pick }
         for entry in await candidates() {
             for model in entry.models.sorted(by: { rank($0) < rank($1) }) where await sees(model, on: entry.host) {
                 return (entry.host, model)
@@ -1957,7 +2047,7 @@ final class FilmStudio: ObservableObject {
     static func english(_ text: String, as role: String) async -> String {
         let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard words.unicodeScalars.contains(where: { (0x3040...0x30FF).contains($0.value) || (0x4E00...0x9FFF).contains($0.value) }),
-              let writer = await writer(), let url = URL(string: writer.host + "/api/chat") else { return words }
+              let writer = await writer(claude: true), let url = URL(string: writer.host + "/api/chat") else { return words }
         let ask = """
             Rewrite this as plain literal English for an image/video generation model. It is the \(role) of one \
             shot of a short film. Describe the body and the camera literally, as a stranger would see them; no \
@@ -2293,7 +2383,7 @@ final class FilmStudio: ObservableObject {
 
     /// Carry on with a film that stopped: everything not finished is tried
     /// again, finished shots are left alone, and it is cut at the end.
-    func resume(film id: String) -> Result<Film, Failure> {
+    func resume(film id: String, hold: String? = nil) -> Result<Film, Failure> {
         guard shooting == nil else { return .failure(.message("片场正在拍「\(shooting!)」，等它拍完")) }
         guard var film = films.first(where: { $0.id == id || $0.title == id }) else {
             return .failure(.message("没有这部片子：\(id)"))
@@ -2309,6 +2399,7 @@ final class FilmStudio: ObservableObject {
         try? FileManager.default.moveItem(at: film.file, to: film.folder.appendingPathComponent("film.cut-\(stamp).mp4"))
         film.state = .shooting
         film.note = nil
+        film.hold = hold
         save(film)
         produce(film.id)
         return .success(film)
@@ -2609,7 +2700,7 @@ final class FilmStudio: ObservableObject {
     /// stated as a rule, with the things that must not appear named. Written
     /// for all the shots in one go, so that they share one light and one grade.
     static func photograph(_ film: Film) async -> (tone: String?, shots: [Int: (picture: String, motion: String?)])? {
-        guard let writer = await writer(), let url = URL(string: writer.host + "/api/chat") else { return nil }
+        guard let writer = await writer(claude: true), let url = URL(string: writer.host + "/api/chat") else { return nil }
         let list = film.shots.map { shot in
             "{\"id\": \(shot.id), \"subject\": \"\(shot.of.rawValue)\", \"camera\": \(Self.jsonQuoted(shot.framing ?? "")), \"shows\": \(Self.jsonQuoted(shot.pose)), \"moves\": \(Self.jsonQuoted(shot.action)), \"the_moment\": \(Self.jsonQuoted(shot.narration ?? ""))\(Self.counted(shot.checks).map { ", \"counts\": \(Self.jsonQuoted($0))" } ?? "")}"
         }.joined(separator: ",\n")
@@ -2728,7 +2819,7 @@ final class FilmStudio: ObservableObject {
     /// this is, where it comes from, and whether she is in it.
     static func understand(_ idea: String, given source: String = "", forced: Kind = .auto) async -> Understanding {
         var read = Understanding(about: idea, continuous: true, source: "", lead: true, text: source)
-        guard let writer = await writer(), let url = URL(string: writer.host + "/api/chat") else { return read }
+        guard let writer = await writer(claude: true), let url = URL(string: writer.host + "/api/chat") else { return read }
         let ask = """
             Somebody typed this as the idea for a very short film: "\(idea)"
             \(source.isEmpty ? "" : "They also gave the text it comes from, which is authoritative:\n\(source.prefix(4000))\n")
@@ -2914,7 +3005,7 @@ final class FilmStudio: ObservableObject {
     static func storyboard(for idea: String, shots: Int, lead: Bool, tongue: String = "",
                            read: Understanding? = nil, model _: String = "", faces: Bool = false) async throws
         -> (title: String, look: String, place: String, wears: String, shots: [Draft]) {
-        guard let writer = await writer() else {
+        guard let writer = await writer(claude: true) else {
             throw Failure.message("找不到能写分镜的模型：\(OllamaCatalog.baseURL) 和本机 Ollama 上都没有可用的对话模型")
         }
         let model = writer.model
@@ -3030,12 +3121,16 @@ final class FilmStudio: ObservableObject {
         families.firstIndex { model.lowercased().contains($0) } ?? families.count
     }
 
-    static func writer() async -> (host: String, model: String)? {
+    /// With `claude`, Claude on this Mac's subscription when that is the one
+    /// picked (ClaudeWriter) — for the Studio's own words. A game's player,
+    /// which asks at every move, stays a model on an Ollama.
+    static func writer(claude: Bool = false) async -> (host: String, model: String)? {
         let named = writerModel
         // Pinned to a host as well as a model: the same name can exist on two
         // machines, and only one of them is the one that was chosen.
         let pinned = UserDefaults.standard.string(forKey: "kinclaw.film.writer.host") ?? ""
-        if !named.isEmpty, !pinned.isEmpty, await models(on: pinned).contains(named) { return (pinned, named) }
+        if pinned == ClaudeWriter.pick, claude, let host = ClaudeWriter.host() { return (host, ClaudeWriter.model) }
+        if !named.isEmpty, !pinned.isEmpty, pinned != ClaudeWriter.pick, await models(on: pinned).contains(named) { return (pinned, named) }
         var hosts = [OllamaCatalog.baseURL]
         if !hosts.contains(OllamaCatalog.defaultBaseURL) { hosts.append(OllamaCatalog.defaultBaseURL) }
         for host in hosts {

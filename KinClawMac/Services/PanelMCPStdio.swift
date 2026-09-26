@@ -25,17 +25,47 @@ enum PanelMCPStdio {
         return Set(args[at + 1].split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
     }()
 
+    /// `--timeout <seconds>`: how long one call may take. The kernel gives up
+    /// at sixty, hence fifty-five for it. A studio agent waits as long as the
+    /// work takes — a download, a render — and was told "连不上面板" at 55 s
+    /// while the app went on doing it.
+    private static let timeout: TimeInterval = {
+        let args = CommandLine.arguments
+        guard let at = args.firstIndex(of: "--timeout"), at + 1 < args.count,
+              let seconds = TimeInterval(args[at + 1]), seconds > 0 else { return 55 }
+        return seconds
+    }()
+
+    /// `--images`: the pictures a tool names in `image://` lines come back as
+    /// pictures too, for an agent that takes them in a tool's answer (Claude
+    /// Code). The kernel attaches them itself, from the lines.
+    private static let images = CommandLine.arguments.contains("--images")
+
     static func run() -> Never {
         // Unbuffered: the kernel reads a line and waits, and a reply sitting
         // in a buffer looks exactly like a server that has hung.
         setvbuf(stdout, nil, _IONBF, 0)
 
+        // Each call on its own thread: one that takes minutes does not hold up
+        // a status read behind it. Replies go out whole, a line each, in the
+        // order they finish — JSON-RPC matches them by id. (The kernel asks
+        // one at a time, so for it nothing changes.)
+        let calls = DispatchQueue(label: "panel-relay", attributes: .concurrent)
+        let out = NSLock()
+        let open = DispatchGroup()
         while let line = readLine(strippingNewline: true) {
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty { continue }
-            guard let reply = forward(trimmed) else { continue }
-            print(reply)
+            open.enter()
+            calls.async {
+                defer { open.leave() }
+                guard let reply = forward(trimmed) else { return }
+                out.lock()
+                print(reply)
+                out.unlock()
+            }
         }
+        open.wait()     // answer what was asked before the other end closed
         exit(0)
     }
 
@@ -53,9 +83,12 @@ enum PanelMCPStdio {
         guard let url = URL(string: "http://127.0.0.1:\(handshake.port)/mcp") else { return nil }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.timeoutInterval = 55 // the kernel gives up at 60
+        request.timeoutInterval = timeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(handshake.token, forHTTPHeaderField: "X-KinClaw-Panel-Token")
+        if images { request.setValue("1", forHTTPHeaderField: "X-KinClaw-Images") }
+        // How long a tool may wait for its work before it answers.
+        if timeout > 60 { request.setValue(String(Int(timeout - 30)), forHTTPHeaderField: "X-KinClaw-Patience") }
         request.httpBody = Data(line.utf8)
 
         var body: Data?
@@ -68,7 +101,7 @@ enum PanelMCPStdio {
             failure = err?.localizedDescription
             done.signal()
         }.resume()
-        _ = done.wait(timeout: .now() + 58)
+        _ = done.wait(timeout: .now() + timeout + 3)
 
         if let failure {
             return id.map { error(id: $0, "连不上 KinClaw Mac 的面板：\(failure)") }

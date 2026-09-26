@@ -56,6 +56,7 @@ struct ComfyView: View {
         }
         .tint(Theme.accent)
         .task { if studio.templates.isEmpty { await studio.refresh() } }
+        .onAppear { if !agent.running { agent.shown = true } }   // its column out, as on Montage
         // A workflow .json, or a PNG ComfyUI made, dropped anywhere on the tab.
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             for provider in providers {

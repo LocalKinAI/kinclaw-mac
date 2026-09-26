@@ -45,7 +45,7 @@ struct MotionStudioView: View {
     var body: some View {
         GeometryReader { space in
             HStack(spacing: 0) {
-                AgentDock(agent: agent, examples: ["找一段太极的参考视频，让她在清晨的公园里打", "把这一条接着往下拍十秒"],
+                AgentDock(agent: agent, examples: ["找一段太极的参考视频，让她在清晨的公园里打", "拍到她的起始画面先停，给我看"],
                           widest: space.size.width - 212 - 480) { ask($0) }
                 library.frame(width: 212).background(Theme.sidebar)
                 Rectangle().fill(Theme.hairline).frame(width: 0.5)
@@ -57,7 +57,10 @@ struct MotionStudioView: View {
             }
         }
         .tint(Theme.accent)
-        .onAppear { studio.reload() }
+        .onAppear {
+            studio.reload()
+            if !agent.running { agent.shown = true }      // its column out, as on Montage
+        }
         .task {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)

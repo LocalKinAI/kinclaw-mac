@@ -51,7 +51,7 @@ extension FilmStudio {
     /// One call: the narrator — a voice from the server's list and how it
     /// speaks — and a description of the music, for MusicGen.
     static func planSound(_ film: Film, seconds: Double = 0) async -> (narrator: Narrator?, music: String?, voiceover: String?) {
-        guard let writer = await writer(), let url = URL(string: writer.host + "/api/chat") else { return (nil, nil, nil) }
+        guard let writer = await writer(claude: true), let url = URL(string: writer.host + "/api/chat") else { return (nil, nil, nil) }
         // The film narrator service when it can be had: a voice designed for
         // this film, reading one continuous passage. Listened to side by side,
         // one flowing passage read in one go beat four short lines stitched

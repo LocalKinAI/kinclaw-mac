@@ -95,7 +95,7 @@ final class MotionFinder: ObservableObject {
 
     /// Two or three searches that find one person demonstrating the topic.
     static func queries(for topic: String) async -> [String] {
-        guard let writer = await FilmStudio.writer(), let url = URL(string: writer.host + "/api/chat") else { return [topic] }
+        guard let writer = await FilmStudio.writer(claude: true), let url = URL(string: writer.host + "/api/chat") else { return [topic] }
         let ask = """
             I need reference videos for motion capture of: "\(topic)". A good one shows ONE person performing it, whole \
             body in frame, filmed by a camera that does not move much — a demonstration, not a talk, a group class, a \

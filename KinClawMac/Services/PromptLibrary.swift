@@ -115,7 +115,7 @@ final class PromptLibrary: ObservableObject {
     /// Keep the craft of a prompt — its structure, its camera and light, its
     /// textures, its look — and change what it is of.
     static func adapt(_ entry: Entry, to subject: String) async -> String? {
-        guard let writer = await FilmStudio.writer(), let url = URL(string: writer.host + "/api/chat") else { return nil }
+        guard let writer = await FilmStudio.writer(claude: true), let url = URL(string: writer.host + "/api/chat") else { return nil }
         let ask = """
             Here is an excellent image prompt, written by someone who knows their craft:
             <<<

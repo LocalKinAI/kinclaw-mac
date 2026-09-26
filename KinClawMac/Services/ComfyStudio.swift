@@ -822,17 +822,19 @@ final class ComfyStudio: NSObject, ObservableObject {
         return nil
     }
 
-    func run() {
+    /// `keepSeed`: keep the seeds that are in the form for this run — an agent
+    /// that set one meant it; nil follows the tab's 固定 box.
+    func run(keepSeed keep: Bool? = nil) {
         guard work == nil, current != nil else { return }
         if let busy = busyElsewhere { note = busy + "。等它拍完再跑"; return }
         if let why = blocked { note = why; return }
         work = Task { @MainActor in
-            await self.perform()
+            await self.perform(keepSeed: keep ?? self.keepSeed)
             self.work = nil
         }
     }
 
-    private func perform() async {
+    private func perform(keepSeed: Bool) async {
         guard let template = current else { return }
         working = "准备"
         since = Date()
@@ -1111,21 +1113,25 @@ final class ComfyStudio: NSObject, ObservableObject {
 
     /// With a workflow open: change what the words ask for, and only that.
     /// With none open: find the template that does it, open it, then change it.
-    func ask(_ words: String) async {
+    /// Nil when it was done; else why not — an agent that asked is told,
+    /// instead of the template running as it was.
+    @discardableResult
+    func ask(_ words: String) async -> String? {
         let wish = words.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !wish.isEmpty, working == nil else { return }
+        guard !wish.isEmpty else { return nil }
+        if let busy = working { return "Comfy 正在\(busy)，等它做完" }
         if current == nil {
             working = "找合适的工作流"
             defer { working = nil }
             if templates.isEmpty { await refresh() }
-            guard let pick = await choose(for: wish) else { if note == nil { note = "没找到合适的模板" }; return }
+            guard let pick = await choose(for: wish) else { if note == nil { note = "没找到合适的模板" }; return note }
             working = nil
             await open(pick)
-            guard current != nil else { return }
+            guard current != nil else { return note ?? "找到的模板打不开" }
         }
         working = "按你说的改"
         defer { working = nil }
-        await adjust(wish)
+        return await adjust(wish)
     }
 
     private func choose(for wish: String) async -> Template? {
@@ -1146,7 +1152,8 @@ final class ComfyStudio: NSObject, ObservableObject {
         return pick
     }
 
-    private func adjust(_ wish: String) async {
+    @discardableResult
+    private func adjust(_ wish: String) async -> String? {
         let list = fields.map { f -> String in
             var line = "{\"node\": \"\(f.node)\", \"in\": \(Self.quoted(f.nodeTitle)), \"name\": \(Self.quoted(f.name)), \"kind\": \"\(f.kind)\", \"value\": \(Self.quoted(String(f.value.prefix(1500))))"
             if let options = f.options { line += ", \"choices\": \(Self.quoted(options.prefix(40).joined(separator: " | ")))" }
@@ -1173,7 +1180,7 @@ final class ComfyStudio: NSObject, ObservableObject {
             Answer with JSON only: {"changes": [{"node": "...", "name": "...", "value": "..."}], \
             "say": "one short sentence, in the language they wrote in, of what you changed"}
             """
-        guard let said = await Self.write(ask), let object = Self.jsonObject(in: said) else { note = "写手模型没回答"; return }
+        guard let said = await Self.write(ask), let object = Self.jsonObject(in: said) else { note = "写手模型没回答"; return note }
         var changed = 0
         for change in object["changes"] as? [[String: Any]] ?? [] {
             guard let node = change["node"].map({ "\($0)" }), let name = change["name"] as? String,
@@ -1185,6 +1192,7 @@ final class ComfyStudio: NSObject, ObservableObject {
             changed += 1
         }
         note = (object["say"] as? String ?? "改了 \(changed) 处") + (changed == 0 ? "（其实没改动）" : "")
+        return nil
     }
 
     /// Some model makers publish how their model wants to be prompted. When
@@ -1221,7 +1229,7 @@ final class ComfyStudio: NSObject, ObservableObject {
     }
 
     private static func write(_ ask: String) async -> String? {
-        guard let writer = await FilmStudio.writer(), let url = URL(string: writer.host + "/api/chat") else { return nil }
+        guard let writer = await FilmStudio.writer(claude: true), let url = URL(string: writer.host + "/api/chat") else { return nil }
         let body: [String: Any] = ["model": writer.model, "stream": false, "think": false,
                                    "messages": [["role": "user", "content": ask]]]
         var request = URLRequest(url: url, timeoutInterval: 180)
