@@ -26,6 +26,8 @@ struct JevView: View {
                 RTSView()
             } else if doing == "city" {
                 CityView()
+            } else if doing == "sandbox" {
+                SandboxView()
             } else {
                 VStack(spacing: 0) {
                     HStack(alignment: .top, spacing: 14) {
@@ -81,6 +83,16 @@ struct JevView: View {
                 }
                 .padding(8)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(doing == "city" ? 0.10 : 0)))
+            }
+            .buttonStyle(.plain)
+            Button { doing = "sandbox" } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "cube").frame(width: 18)
+                    Text("沙盒搭建").font(.system(size: 12, weight: .medium))
+                    Spacer(minLength: 0)
+                }
+                .padding(8)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(doing == "sandbox" ? 0.10 : 0)))
             }
             .buttonStyle(.plain)
             Divider().opacity(0.12).padding(.vertical, 4)

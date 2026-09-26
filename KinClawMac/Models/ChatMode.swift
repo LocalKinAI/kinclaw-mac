@@ -104,7 +104,7 @@ enum ChatMode: String, CaseIterable, Identifiable {
         case .motion:
             return "Motion — 找一段真人动作的视频，只取骨架，让她照着做：太极、舞蹈、任何说不清的动作"
         case .jev:
-            return "Jev — 游戏：帝国时代、放逐之城和帝国、开车、飞机大战、像素鸟、俄罗斯方块、2048、贪吃蛇、21 点和三种棋。决策模型每一步答一道选择题；你也可以自己上手，和它比同一局，或者看它和电脑打"
+            return "Jev — 游戏：帝国时代、放逐之城、沙盒搭建和帝国、开车、飞机大战、像素鸟、俄罗斯方块、2048、贪吃蛇、21 点和三种棋。决策模型每一步答一道选择题；你也可以自己上手，和它比同一局，或者看它和电脑打"
         case .comfy:
             return "Comfy — 盒子上 ComfyUI 的现成工作流：挑模板、填表、运行；或者一句话让 agent 挑和改"
         case .montage:

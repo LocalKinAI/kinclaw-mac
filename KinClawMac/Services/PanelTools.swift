@@ -617,6 +617,24 @@ enum PanelTools {
             "inputSchema": ["type": "object", "properties": [String: Any]()],
         ],
         [
+            "name": "sandbox_build",
+            "description": "沙盒搭建 in the Jev tab — a Minecraft-like world of blocks the user builds in with the mouse (left click puts the block in hand, right click takes one away, drag turns the view). Give a request (\"一座带塔楼的小城堡\") and a chat model writes a plan in the building language, which goes up block by block where the user last clicked; then Jev measures the build and says what it thinks it is and how well it matches the request. Shows the tab and answers, once it stands, with the plan, the measurements and Jev's verdict — up to a few minutes. Without a request it only shows the world.",
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "request": ["type": "string", "description": "What to build, in any language."],
+                    "model": ["type": "string", "description": "The chat model that writes the plan: \"host|model\" or a model name; empty for the app's own pick. Omit to keep."],
+                    "judge": ["type": "boolean", "description": "Ask Jev once it stands. Default true."],
+                    "new_world": ["type": "boolean", "description": "true: a fresh world first — the old one, and everything built on it, is gone."],
+                ],
+            ],
+        ],
+        [
+            "name": "sandbox_status",
+            "description": "How 沙盒搭建 stands, without touching it: blocks placed, the block in hand, whether a build is going up, the last request and plan, the measurements of the build nearest the last click, and Jev's last verdict.",
+            "inputSchema": ["type": "object", "properties": [String: Any]()],
+        ],
+        [
             "name": "comfy_templates",
             "description": "ComfyUI's ready-made workflows on the user's box (about 300 that run locally: text-to-image, image editing, video, audio, 3D…), plus the ones the user saved. Search by words in the title, model or tags — e.g. \"qwen\", \"视频\", \"H3\", \"背景\". Returns name, title, category, models and download size. Pass a name to comfy_run.",
             "inputSchema": [
@@ -1164,6 +1182,33 @@ enum PanelTools {
             return (game.report, false)
         case "city_status":
             return (CityGame.shared.report, false)
+        case "sandbox_build":
+            let game = SandboxGame.shared
+            UserDefaults.standard.set("sandbox", forKey: "kinclaw.jev.doing")
+            NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: ["mode": "jev", "raise": false])
+            if args["new_world"] as? Bool == true { game.newWorld() }
+            if let model = args["model"] as? String { game.model = model }
+            guard let words = (args["request"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !words.isEmpty else {
+                try? await Task.sleep(nanoseconds: 800_000_000)
+                return (game.report, false)
+            }
+            guard !game.building else { return ("还在盖上一个，等它盖完：sandbox_status 看进度", true) }
+            game.request = words
+            game.buildFromRequest()
+            for _ in 0..<480 {                      // the plan (a model can take minutes) and the blocks going up
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                if !game.building { break }
+            }
+            if args["judge"] as? Bool != false, !game.building, game.lastPlan != nil {
+                game.judge()
+                for _ in 0..<90 {
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    if !game.judging { break }
+                }
+            }
+            return (game.report, false)
+        case "sandbox_status":
+            return (SandboxGame.shared.report, false)
         case "motion_find":
             guard let topic = (args["topic"] as? String)?.trimmingCharacters(in: .whitespaces), !topic.isEmpty else { return ("motion_find 需要 topic", true) }
             let finder = MotionFinder.shared

@@ -8,6 +8,44 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Added — 沙盒搭建: a world of blocks, built by hand, by a model, and looked at by Jev
+
+"做沙盒搭建吧". Jev tab → 建造 → 沙盒搭建 — Minecraft-like, in SceneKit.
+
+- **The world** (`Games/SandboxWorld.swift`, Foundation only): 72 × 72 blocks
+  and 40 high — a meadow in the middle, hills, sand by the water, snow on the
+  tops, oaks and pines; nineteen kinds of block in the hotbar (planks, cobble,
+  bricks, glass, logs, roof tiles, stone, wool, sandstone, gold, lamps, coal…).
+  Saved as you build (`~/Library/Application Support/KinClaw/sandbox.world`);
+  新世界 grows another.
+- **Drawn** (`Games/SandboxRender.swift`): 16-pixel textures painted in code,
+  only the faces that can be seen, corners darkened where blocks meet, a low
+  sun with soft shadows, sky and haze; glass and water seen through.
+- **Played with the mouse**: left click puts the block in hand against the
+  face under the pointer (a white box shows where), right click or ⌃-click
+  takes one away, drag turns the view, the wheel zooms; WASD or the arrows
+  walk the view, Q/E down and up, 1–9 and 0 pick from the hotbar.
+- **A model builds what you ask**: type 一座带塔楼的石头小城堡 and pick a
+  model; it writes a plan in a small building language (box, hollow, walls,
+  clear, roof, cylinder, sphere, line, stairs — `hollow` empties the inside
+  as Minecraft's `fill … hollow` does, which is what models expect; block
+  names work as commands, and the names models reach for, like wood, torch
+  or tiles, are understood) and the plan goes up block by block where you
+  last clicked, trees in the way cut down first. kimi-k2.6 plans take 5–30 s;
+  houses, towers, castles and pyramids come out recognisable, round things
+  (a snowman, a boat) crude.
+- **Jev looks**: the program measures the build — size, materials, closed
+  rooms and floors, doorways, glass, roof, symmetry, how the outline changes
+  going up (steps, a tall narrow part, swells), how high the corners, sides
+  and middle reach, a walled yard, battlements, corner towers, open air
+  underneath — and says it in sentences; Jev picks what it is from 13 kinds
+  and, when it was asked for, how well it matches (★). On model builds:
+  castle 57–78%, tower 83–96%, lighthouse 92–95% as a tower, house 91–99%,
+  pyramid 100%; on plans written by hand, a snowman 70% and a bridge 92%.
+  Its misses were builds that were not what was asked.
+- `sandbox_build` (request, model, a new world) and `sandbox_status` in the
+  panel's tools.
+
 ### Added — 放逐之城: a town that has to get through its winters
 
 "做城市建造吧". Jev tab → 建造 → 放逐之城 — Banished-like, played with the mouse.
