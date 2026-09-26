@@ -128,6 +128,9 @@ struct XiangqiPosition {
         }
     }
 
+    /// Could the piece make this move by its own rules, whatever it does to its general?
+    func isPseudoLegal(_ move: Move) -> Bool { pseudoMoves().contains(move) }
+
     private func pseudoMoves() -> [Move] {
         var moves: [Move] = []
         eachPseudoMove { moves.append($0); return false }

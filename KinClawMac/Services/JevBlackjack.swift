@@ -25,9 +25,9 @@ final class JevBlackjack: JevGame {
     let question = "What should the player do with this hand?"
     let howToJudge = "The dealer has to draw until 17, so the dealer's card decides how much risk is worth taking. Against a dealer's 2 to 6 the dealer busts often: with 12 to 16 that could bust, stand and let the dealer bust; with 9, 10 or 11, double down. Against a dealer's 7, 8, 9, 10 or ace the dealer usually finishes on 17 or more: standing on 12 to 16 mostly loses, so hit, even though hitting often busts. Always hit 11 or less when not doubling; never hit a hard 17 or more. A soft hand (an ace counted as 11) cannot bust with one card: hit soft 17 or less, stand on soft 19 or more, and on soft 18 stand against 2 to 8 but hit against 9, 10 or ace. Double 11 against everything but an ace, 10 against 2 to 9, 9 against 3 to 6."
 
-    static let hands = 200, stake = 10
+    nonisolated static let hands = 200, stake = 10
 
-    private struct Card { var rank: Int; var suit: Int }        // rank 1…13
+    fileprivate struct Card { var rank: Int; var suit: Int }    // rank 1…13; suit ♥ ♦ ♠ ♣
     private var shoe: [Card] = []
     private var dice = JevDice(seed: 1)
     private var player: [Card] = [], dealer: [Card] = []
@@ -38,6 +38,11 @@ final class JevBlackjack: JevGame {
     private(set) var dealt = 0
     private(set) var over = false
     private var lastResult = ""
+    /// For the picture: the table before the last move, and the hand that move finished.
+    private var previous = BlackjackTable(player: [], dealer: [], revealed: false, dealt: 0)
+    private var finished: BlackjackTable?
+    private(set) var ticked = Date.distantPast
+    private var table: BlackjackTable { BlackjackTable(player: player, dealer: dealer, revealed: revealed, dealt: dealt, bet: bet) }
     /// What perfect play would have made of the same decisions, in chips: the
     /// sum of what the best action was worth, against what the chosen one was.
     private(set) var given = 0.0
@@ -70,9 +75,21 @@ final class JevBlackjack: JevGame {
 
     init() { reset(seed: 1) }
 
+    let controls = "H 要牌 · S 停牌 · D 加倍（或者点右边的选项）"
+    let letters: Set<Character> = ["h", "s", "d"]
+
+    func react(_ pressed: [JevPress], held: Set<JevPress>, among options: [JevOption]) -> JevReaction {
+        guard case .letter(let letter)? = pressed.last,
+              let action = ["h": "hit", "s": "stand", "d": "double"][letter],
+              let index = actions.firstIndex(of: action),
+              let option = options.first(where: { $0.move == index }) else { return .nothing }
+        return .choose(option)
+    }
+
     func reset(seed: UInt64) {
         dice = JevDice(seed: seed); shoe = []; chips = 1000; dealt = 0; over = false; lastResult = ""; given = 0
         deal()
+        previous = table; finished = nil; ticked = .distantPast
     }
 
     func options() -> [JevOption] {
@@ -102,6 +119,8 @@ final class JevBlackjack: JevGame {
 
     func play(_ option: JevOption) {
         guard actions.indices.contains(option.move), !over else { return }
+        previous = table; finished = nil
+        defer { ticked = Date() }
         let held = Self.total(player), up = Self.points(dealer[0])
         let worth = Self.worth(total: held.value, soft: held.soft, up: up, canDouble: player.count == 2 && chips >= 2 * Self.stake)
         if let best = worth.map(\.value).max(), let mine = worth.first(where: { $0.action == actions[option.move] })?.value {
@@ -145,6 +164,7 @@ final class JevBlackjack: JevGame {
             if mine, !theirs { chips += Self.stake * 3 / 2; lastResult = "天生 21 点，赢 \(Self.stake * 3 / 2)" }
             else if theirs, !mine { chips -= Self.stake; lastResult = "庄家天生 21 点，输 \(Self.stake)" }
             else { lastResult = "双方都是 21 点，平" }
+            finished = BlackjackTable(player: player, dealer: dealer, revealed: true, dealt: dealt, bet: Self.stake, result: lastResult)
         }
     }
 
@@ -165,6 +185,7 @@ final class JevBlackjack: JevGame {
         else if mine > theirs { chips += bet; lastResult = "\(mine) 对 \(theirs)，赢 \(bet)" }
         else if mine < theirs { chips -= bet; lastResult = "\(mine) 对 \(theirs)，输 \(bet)" }
         else { lastResult = "\(mine) 对 \(theirs)，平" }
+        finished = BlackjackTable(player: player, dealer: dealer, revealed: true, dealt: dealt, bet: bet, result: lastResult)
         deal()
     }
 
@@ -256,5 +277,145 @@ final class JevBlackjack: JevGame {
     }
     private static func reach17(total: Int, soft: Bool) -> Double {
         chances.reduce(0) { let next = add(total, soft, $1.points).0; return $0 + (next >= 17 && next <= 21 ? $1.chance : 0) }
+    }
+}
+
+// MARK: - The picture
+
+/// A table at one moment: the hands, whether the dealer's second card is up, which hand of the session it is.
+fileprivate struct BlackjackTable {
+    var player: [JevBlackjack.Card], dealer: [JevBlackjack.Card], revealed: Bool, dealt: Int, bet = JevBlackjack.stake, result = ""
+}
+
+extension JevBlackjack: JevPainted {
+    var aspect: Double { 1.3 }
+
+    func picture(t: Double, since: Double, now: Double) -> JevPicture {
+        let scene = BlackjackScene(previous: previous, table: table, finished: finished, since: since, chips: chips, over: over)
+        return JevPicture { context, size in scene.paint(&context, size) }
+    }
+}
+
+fileprivate struct BlackjackScene {
+    let previous: BlackjackTable, table: BlackjackTable, finished: BlackjackTable?, since: Double, chips: Int, over: Bool
+    /// How long a finished hand stays on the table before the next is dealt.
+    static let linger = 1.3
+
+    static func total(_ cards: [JevBlackjack.Card]) -> (value: Int, soft: Bool) {
+        var sum = cards.reduce(0) { $0 + min($1.rank, 10) }
+        let soft = cards.contains { $0.rank == 1 } && sum + 10 <= 21
+        if soft { sum += 10 }
+        return (sum, soft)
+    }
+
+    func paint(_ g: inout GraphicsContext, _ size: CGSize) {
+        let width = size.width, height = size.height
+        // Felt, with a rail round the edge and the house's words on it.
+        g.fill(Path(CGRect(origin: .zero, size: size)), with: .color(Color(red: 0.25, green: 0.14, blue: 0.08)))
+        let felt = CGRect(origin: .zero, size: size).insetBy(dx: 10, dy: 10)
+        g.fill(Path(roundedRect: felt, cornerRadius: 26),
+               with: .radialGradient(Gradient(colors: [Color(red: 0.12, green: 0.52, blue: 0.3), Color(red: 0.04, green: 0.3, blue: 0.16)]),
+                                     center: CGPoint(x: width / 2, y: height * 0.45), startRadius: 0, endRadius: width * 0.7))
+        g.stroke(Path(roundedRect: felt.insetBy(dx: 14, dy: 14), cornerRadius: 18), with: .color(Color(red: 0.95, green: 0.8, blue: 0.4).opacity(0.35)), lineWidth: 1.5)
+        JevDraw.text(g, "BLACKJACK PAYS 3 TO 2 · 庄家到 17 点停", at: CGPoint(x: width / 2, y: height * 0.47), size: height * 0.032, weight: .semibold,
+                     colour: Color(red: 0.95, green: 0.85, blue: 0.5).opacity(0.6), shadow: false)
+
+        let cardWidth = min(width * 0.1, height * 0.15), cardHeight = cardWidth * 1.42
+        let shoe = CGPoint(x: width * 0.88, y: height * 0.14)
+        for layer in 0..<5 { card(g, at: CGPoint(x: shoe.x + CGFloat(layer) * 1.5, y: shoe.y - CGFloat(layer) * 1.5), width: cardWidth, face: nil) }
+
+        // A finished hand lingers, dealer's cards up and the verdict on it; then the next is dealt.
+        let showingEnd = finished != nil && since < Self.linger
+        let hand = showingEnd ? finished! : table
+        let sameHand = hand.dealt == previous.dealt
+        let clock = showingEnd ? since : since - (finished != nil ? Self.linger : 0)
+        func place(_ index: Int, _ count: Int, row: CGFloat) -> CGPoint {
+            let spread = cardWidth * 0.7
+            return CGPoint(x: width / 2 + (CGFloat(index) - CGFloat(count - 1) / 2) * spread, y: height * row)
+        }
+        for (row, cards, old, dealer) in [(CGFloat(0.26), hand.dealer, previous.dealer.count, true), (CGFloat(0.66), hand.player, previous.player.count, false)] {
+            for (index, face) in cards.enumerated() {
+                // Dealt in the order a dealer deals: you, the dealer, you, the dealer — then one at a time.
+                let order = sameHand ? Double(index - old) : Double(index * 2 + (dealer ? 1 : 0))
+                let fresh = !sameHand || index >= old
+                let arrive = fresh ? JevDraw.smooth(min(max((clock - order * 0.14) / 0.3, 0), 1)) : 1
+                guard arrive > 0 else { continue }
+                let target = place(index, cards.count, row: row)
+                let at = CGPoint(x: JevDraw.mix(Double(shoe.x), Double(target.x), arrive), y: JevDraw.mix(Double(shoe.y), Double(target.y), arrive))
+                let hidden = dealer && index == 1 && !hand.revealed
+                // The hole card turns over when the dealer plays.
+                let turning = dealer && index == 1 && hand.revealed && !previous.revealed && sameHand
+                let flip = turning ? CGFloat(abs(cos(min(clock / 0.3, 1) * .pi))) : 1
+                let faceDown = hidden || (turning && clock < 0.15)
+                card(g, at: at, width: cardWidth, face: faceDown ? nil : face, squeeze: flip)
+            }
+        }
+        // What each hand counts.
+        let up = hand.dealer.first.map { $0.rank == 1 ? 11 : min($0.rank, 10) } ?? 0
+        let dealerCount = hand.revealed ? "庄家 \(Self.total(hand.dealer).value)" : "庄家 \(up) + ?"
+        let mine = Self.total(hand.player)
+        JevDraw.text(g, dealerCount, at: CGPoint(x: width / 2, y: height * 0.26 - cardHeight * 0.5 - height * 0.04), size: height * 0.04, weight: .bold)
+        JevDraw.text(g, "你 " + (mine.soft ? "软 " : "") + "\(mine.value)", at: CGPoint(x: width / 2, y: height * 0.66 + cardHeight * 0.5 + height * 0.045), size: height * 0.045)
+
+        // The bet in its circle, and the stack of chips.
+        let circle = CGPoint(x: width * 0.2, y: height * 0.66)
+        g.stroke(Path(ellipseIn: CGRect(x: circle.x - height * 0.07, y: circle.y - height * 0.07, width: height * 0.14, height: height * 0.14)),
+                 with: .color(.white.opacity(0.5)), lineWidth: 1.5)
+        for chip in 0..<(hand.bet / JevBlackjack.stake) { self.chip(g, at: CGPoint(x: circle.x, y: circle.y - CGFloat(chip) * 5), size: height * 0.09, tint: (0.8, 0.12, 0.12)) }
+        let pile = CGPoint(x: width * 0.12, y: height * 0.88)
+        for chip in 0..<min(max(chips / 100, 1), 14) {
+            self.chip(g, at: CGPoint(x: pile.x + CGFloat(chip / 7) * height * 0.1, y: pile.y - CGFloat(chip % 7) * 4.5), size: height * 0.085,
+                      tint: chip % 3 == 0 ? (0.1, 0.3, 0.8) : chip % 3 == 1 ? (0.1, 0.1, 0.1) : (0.85, 0.85, 0.85))
+        }
+        JevDraw.text(g, "筹码 \(chips)", at: CGPoint(x: width * 0.3, y: height * 0.88), size: height * 0.045, anchor: .leading)
+        JevDraw.text(g, "第 \(hand.dealt) / \(JevBlackjack.hands) 手", at: CGPoint(x: 28, y: 32), size: height * 0.035, weight: .bold, anchor: .leading)
+
+        if showingEnd, let result = finished?.result {
+            let won = result.contains("赢"), lost = result.contains("输")
+            let colour = won ? Color(red: 0.1, green: 0.6, blue: 0.25) : lost ? Color(red: 0.75, green: 0.12, blue: 0.12) : Color(white: 0.35)
+            let banner = CGRect(x: width * 0.3, y: height * 0.41, width: width * 0.4, height: height * 0.12)
+            g.fill(Path(roundedRect: banner.offsetBy(dx: 2, dy: 3), cornerRadius: 12), with: .color(.black.opacity(0.3)))
+            g.fill(Path(roundedRect: banner, cornerRadius: 12), with: .color(colour))
+            JevDraw.text(g, result, at: CGPoint(x: banner.midX, y: banner.midY), size: banner.height * 0.36)
+        }
+        if over { JevDraw.curtain(g, size, title: "打完了", detail: "剩下 \(chips) 个筹码") }
+    }
+
+    /// A playing card: face up with its corners and a big pip, or its back.
+    private func card(_ g: GraphicsContext, at centre: CGPoint, width: CGFloat, face: JevBlackjack.Card?, squeeze: CGFloat = 1) {
+        let height = width * 1.42, w = width * max(squeeze, 0.05)
+        let rect = CGRect(x: centre.x - w / 2, y: centre.y - height / 2, width: w, height: height)
+        g.fill(Path(roundedRect: rect.offsetBy(dx: 2, dy: 3), cornerRadius: width * 0.1), with: .color(.black.opacity(0.3)))
+        guard let face else {
+            g.fill(Path(roundedRect: rect, cornerRadius: width * 0.1), with: .color(.white))
+            let back = rect.insetBy(dx: width * 0.07, dy: width * 0.07)
+            g.fill(Path(roundedRect: back, cornerRadius: width * 0.06), with: .color(Color(red: 0.7, green: 0.1, blue: 0.14)))
+            var lines = g
+            lines.clip(to: Path(roundedRect: back, cornerRadius: width * 0.06))
+            var x = back.minX - back.height
+            while x < back.maxX {
+                lines.stroke(Path { p in p.move(to: CGPoint(x: x, y: back.maxY)); p.addLine(to: CGPoint(x: x + back.height, y: back.minY)) },
+                             with: .color(.white.opacity(0.25)), lineWidth: 1)
+                x += 6
+            }
+            return
+        }
+        guard squeeze > 0.3 else { g.fill(Path(roundedRect: rect, cornerRadius: width * 0.1), with: .color(.white)); return }
+        g.fill(Path(roundedRect: rect, cornerRadius: width * 0.1), with: .color(.white))
+        g.stroke(Path(roundedRect: rect, cornerRadius: width * 0.1), with: .color(.black.opacity(0.15)), lineWidth: 1)
+        let rank = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"][face.rank - 1], suit = ["♥", "♦", "♠", "♣"][face.suit]
+        let ink = face.suit < 2 ? Color(red: 0.82, green: 0.08, blue: 0.1) : Color(white: 0.1)
+        JevDraw.text(g, rank, at: CGPoint(x: rect.minX + width * 0.08, y: rect.minY + width * 0.18), size: width * 0.26, weight: .bold, colour: ink, anchor: .leading, shadow: false)
+        JevDraw.text(g, suit, at: CGPoint(x: rect.minX + width * 0.1, y: rect.minY + width * 0.44), size: width * 0.2, weight: .regular, colour: ink, anchor: .leading, shadow: false)
+        JevDraw.text(g, face.rank >= 11 ? rank : suit, at: CGPoint(x: rect.midX + width * 0.06, y: rect.midY + width * 0.08),
+                     size: width * (face.rank >= 11 ? 0.5 : 0.56), weight: .bold, colour: ink, shadow: false)
+    }
+
+    private func chip(_ g: GraphicsContext, at p: CGPoint, size: CGFloat, tint: (Double, Double, Double)) {
+        let r = size / 2
+        let disc = CGRect(x: p.x - r, y: p.y - r * 0.6, width: size, height: size * 0.6)
+        g.fill(Path(ellipseIn: disc.offsetBy(dx: 0, dy: 3)), with: .color(JevDraw.shade(tint, 0.5)))
+        g.fill(Path(ellipseIn: disc), with: .color(JevDraw.shade(tint, 1)))
+        g.stroke(Path(ellipseIn: disc.insetBy(dx: size * 0.12, dy: size * 0.07)), with: .color(.white.opacity(0.7)), style: StrokeStyle(lineWidth: 1.5, dash: [3, 3]))
     }
 }

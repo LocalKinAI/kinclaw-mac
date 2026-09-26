@@ -533,15 +533,16 @@ enum PanelTools {
         ],
         [
             "name": "jev_play",
-            "description": "Have a decision model play a game in the Jev tab: each move is one multiple-choice question whose options are the legal moves described in words. Games: tetris, 2048, snake, blackjack (200 hands against the dealer; the yardstick is exact basic strategy, so chips and agreement mean something), and three for two players — chess (`white` against `black`), xiangqi, Chinese chess (`red` against `black`), and gomoku, five in a row (`black`, who moves first, against `white`). Players: jev (TypeSafe's API — needs the user's key, which only they can enter in the tab), laya (the open local model of the same kind), llm (a local chat model), duoJev and duoLaya (the fast judge first; when it is unsure, its best three go to the chat model, which is shown the board), deep (the program itself looking as far as the words for a reader look — what a perfect reader could do), heuristic (the game's own evaluator, the yardstick), random. The same seed deals the same game to every player, so they can be compared. Plays up to `moves` moves and reports the score, how often the player agreed with the heuristic, and the time per move.",
+            "description": "Have a decision model play a game in the Jev tab: each move is one multiple-choice question whose options are the legal moves described in words. Games: empire (帝国, a small Age of Empires for two — `blue` against `red`: villagers, three resources, four ages, eight buildings, spearmen/archers/knights that counter one another; one order a side each round; a fallen town centre loses, else the stronger empire at round 100), drive (a five-lane highway: lane, speed and fuel every tick), shooter (a plane shooting down fighters, swoopers and bombers), flappy (Flappy Bird: flap or glide), tetris, 2048, snake, blackjack (200 hands against the dealer; the yardstick is exact basic strategy, so chips and agreement mean something), and three for two players — chess (`white` against `black`), xiangqi, Chinese chess (`red` against `black`), and gomoku, five in a row (`black`, who moves first, against `white`). Players: jev (TypeSafe's API — needs the user's key, which only they can enter in the tab), laya (the open local model of the same kind), llm (a local chat model), duoJev and duoLaya (the fast judge first; when it is unsure, its best three go to the chat model, which is shown the board), deep (the program itself looking as far as the words for a reader look — what a perfect reader could do), heuristic (the game's own evaluator, the yardstick), random. The same seed deals the same game to every player, so they can be compared. Plays up to `moves` moves and reports the score, how often the player agreed with the heuristic, and the time per move.",
             "inputSchema": [
                 "type": "object",
                 "properties": [
-                    "game": ["type": "string", "description": "tetris | 2048 | snake | blackjack | gomoku | chess | xiangqi. Default: the one showing."],
+                    "game": ["type": "string", "description": "empire | drive | shooter | flappy | tetris | 2048 | snake | blackjack | gomoku | chess | xiangqi. Default: the one showing."],
                     "player": ["type": "string", "description": "jev | laya | llm | duoJev | duoLaya | deep | heuristic | random — for the games played alone. Default: the one selected."],
                     "model": ["type": "string", "description": "When player is llm: which chat model, as for white_model."],
                     "white": ["type": "string", "description": "For chess: who plays White, same choices. Any two can meet: jev against laya, a chat model against the yardstick."],
-                    "red": ["type": "string", "description": "For xiangqi: who plays Red, who moves first. Same as `white`."],
+                    "red": ["type": "string", "description": "For xiangqi: who plays Red, who moves first. For empire: who plays Red, who orders second. Same as `white`."],
+                    "blue": ["type": "string", "description": "For empire: who plays Blue, who orders first each round."],
                     "black": ["type": "string", "description": "For chess and xiangqi: who plays Black."],
                     "white_model": ["type": "string", "description": "When white is llm: which chat model — an Ollama model name, or \"http://host:11434|name\" to say which machine's (the box's Ollama has local models that cost no cloud quota). Omit for the app's own pick."],
                     "black_model": ["type": "string", "description": "When black is llm: which chat model."],
@@ -913,6 +914,8 @@ enum PanelTools {
         if arcade.tokens > 0 { lines.append("Jev 读了 \(arcade.tokens) tokens ≈ $\(String(format: "%.4f", arcade.cost))") }
         if let last = arcade.last, let picked = last.options.first(where: { $0.id == last.chosen }) { lines.append("最后一步选了：\(picked.label)") }
         if let trouble = arcade.trouble { lines.append("停下来的原因：\(trouble)") }
+        // A game for two: the position itself, so that "I could not move" can be looked at.
+        if !arcade.game.sides.isEmpty, !arcade.game.position.isEmpty { lines.append("局面：\n" + arcade.game.position) }
         return lines
     }
 
@@ -1027,14 +1030,17 @@ enum PanelTools {
             if let game = args["game"] as? String { arcade.choose(game) }
             if let name = args["player"] as? String, let player = JevArcade.Player(rawValue: name) { arcade.player = player }
             // The first seat is whoever moves first: White at chess, Red at xiangqi, Black at gomoku.
-            let gomoku = (args["game"] as? String ?? arcade.game.id) == "gomoku"
-            let first = gomoku ? args["black"] : (args["white"] ?? args["red"]), second = gomoku ? args["white"] : args["black"]
+            let gomoku = (args["game"] as? String ?? arcade.game.id) == "gomoku", empire = (args["game"] as? String ?? arcade.game.id) == "empire"
+            let first = gomoku ? args["black"] : empire ? args["blue"] : (args["white"] ?? args["red"])
+            let second = gomoku ? args["white"] : empire ? args["red"] : args["black"]
             if let name = first as? String, let player = JevArcade.Player(rawValue: name) { arcade.rivals[0] = player }
             if let name = second as? String, let player = JevArcade.Player(rawValue: name) { arcade.rivals[1] = player }
             if let model = args["model"] as? String { arcade.models[0] = model }
-            if let model = (gomoku ? args["black_model"] : (args["white_model"] ?? args["red_model"])) as? String { arcade.models[0] = model }
-            if let model = (gomoku ? args["white_model"] : args["black_model"]) as? String { arcade.models[1] = model }
+            if let model = (gomoku ? args["black_model"] : empire ? args["blue_model"] : (args["white_model"] ?? args["red_model"])) as? String { arcade.models[0] = model }
+            if let model = (gomoku ? args["white_model"] : empire ? args["red_model"] : args["black_model"]) as? String { arcade.models[1] = model }
             if let seed = args["seed"] as? Int, seed > 0 { arcade.seed = UInt64(seed) }
+            // 「我」 is somebody at the keyboard; a tool does not move for them.
+            if arcade.personSeated { return ("这一局有一方是「我」：那是人在键盘上玩，jev_play 不替人走。换个玩家再来", true) }
             arcade.restart()
             let limit = min(max((args["moves"] as? Int) ?? 50, 1), 2000)
             // A game asked for in conversation is played to be reported, not

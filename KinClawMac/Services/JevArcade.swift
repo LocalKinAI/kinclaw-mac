@@ -33,12 +33,13 @@ final class JevArcade: ObservableObject {
     static let shared = JevArcade()
 
     enum Player: String, CaseIterable, Identifiable {
-        case jev, laya, llm, duoJev, duoLaya, deep, heuristic, random
+        case me, jev, laya, llm, duoJev, duoLaya, deep, heuristic, random
         /// Does this player need a chat model chosen for it?
         var thinks: Bool { self == .llm || self == .duoJev || self == .duoLaya }
         var id: String { rawValue }
         @MainActor var title: String {
             switch self {
+            case .me: return "我"
             case .jev: return "Jev（云）"
             case .laya: return FilmStudio.layaURL == BoxServices.base(.laya) ? "Laya（盒子）" : "Laya（本机）"
             case .llm: return "本地大模型"
@@ -64,7 +65,8 @@ final class JevArcade: ObservableObject {
         var side: String? = nil
     }
 
-    let games: [JevGame] = [JevTetris(), Jev2048(), JevSnake(), JevBlackjack(), JevGomoku(), JevChess(), JevXiangqi()]
+    let games: [JevGame] = [JevEmpire(), JevDrive(), JevShooter(), JevFlappy(), JevTetris(), Jev2048(), JevSnake(), JevBlackjack(),
+                            JevGomoku(), JevChess(), JevXiangqi()]
     /// A game for two has a player a side, and any player can sit on either:
     /// Jev against Laya, a chat model against the yardstick, one chat model
     /// against another.
@@ -89,8 +91,34 @@ final class JevArcade: ObservableObject {
     /// Bumped on every move: a game is a class, and SwiftUI has to be told.
     @Published private(set) var frame = 0
 
+    /// How much faster than its own pace a game on a clock runs for a person.
+    @Published var tempo: Double = 1 { didSet { UserDefaults.standard.set(tempo, forKey: "kinclaw.jev.tempo") } }
+    /// A person's move is awaited, and these are theirs to choose from.
+    @Published private(set) var offered: [JevOption] = []
+    /// Why a person's key or click did nothing, said over the board for a moment.
+    @Published private(set) var notice: String?
+    private(set) var noticed = Date.distantPast
+    /// The best score each player has made on each seed of each game played
+    /// alone — "drive|100" → ["我": 830, "启发式": 1574] — so that a person and a
+    /// model dealt the same game can be compared.
+    @Published private(set) var bests: [String: [String: Int]] = [:]
+    static let bestsKey = "kinclaw.jev.bests"
+
+    /// Seconds between the last two moves: how long a picture takes to glide from one tick to the next.
+    private(set) var glide = 0.2
+    private var lastMove = Date.distantPast
+
     private var loop: Task<Void, Never>?
     private var drawn = Date.distantPast
+    /// The keyboard, for a person: keys pressed since the last move, in order, and keys down now.
+    private var pressed: [JevPress] = []
+    private var held: Set<JevPress> = []
+    private var waiting: CheckedContinuation<JevOption?, Never>?
+
+    /// Whose move it is.
+    var mover: Player { game.sides.isEmpty ? player : rivals[min(game.turn, 1)] }
+    /// Somebody at this Mac has a seat in the game as it is set up.
+    var personSeated: Bool { game.sides.isEmpty ? player == .me : rivals.contains(.me) }
 
     /// Tell the tab to draw — at most thirty times a second. A heuristic
     /// plays a thousand moves a second, and redrawing two hundred squares
@@ -105,6 +133,8 @@ final class JevArcade: ObservableObject {
         if let kept = UserDefaults.standard.string(forKey: "kinclaw.jev.player"), let player = Player(rawValue: kept) { self.player = player }
         if let kept = UserDefaults.standard.stringArray(forKey: "kinclaw.jev.rivals")?.compactMap(Player.init(rawValue:)), kept.count == 2 { rivals = kept }
         if let kept = UserDefaults.standard.stringArray(forKey: "kinclaw.jev.models"), kept.count == 2 { models = kept }
+        if let kept = UserDefaults.standard.object(forKey: "kinclaw.jev.tempo") as? Double { tempo = kept }
+        bests = UserDefaults.standard.dictionary(forKey: Self.bestsKey) as? [String: [String: Int]] ?? [:]
         restart()
     }
 
@@ -128,25 +158,44 @@ final class JevArcade: ObservableObject {
             var played = 0
             while !Task.isCancelled, played < limit, await step() {
                 played += 1
-                if pause > 0 { try? await Task.sleep(nanoseconds: UInt64(pause * 1_000_000_000)) }
+                // The pause is for watching a player that is not a person; a
+                // person's own move comes when they make it, or on the clock.
+                if pause > 0, mover != .me { try? await Task.sleep(nanoseconds: UInt64(pause * 1_000_000_000)) }
                 else if played % 64 == 0 { await Task.yield() }
             }
+            show(now: true)
+            // A picture keeps moving for a moment after the last move — the explosion —
+            // and is told once more to stop when it is done.
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
             show(now: true)
         }
     }
 
-    func stop() { loop?.cancel(); loop = nil; running = false; show(now: true) }
+    func stop() {
+        loop?.cancel(); loop = nil; running = false
+        answer(nil); pressed = []
+        UserDefaults.standard.set(bests, forKey: Self.bestsKey)
+        show(now: true)
+    }
 
     /// One move. False when the game is over or the player could not answer.
     @discardableResult
     func step() async -> Bool {
         let seat = game.sides.isEmpty ? 0 : min(game.turn, 1)
         let mover = game.sides.isEmpty ? player : rivals[seat]
-        game.prepare(reader: mover != .heuristic && mover != .random)
+        game.prepare(person: mover == .me)
+        game.prepare(reader: mover != .heuristic && mover != .random && mover != .me)
         let options = game.options()
         guard !options.isEmpty, !game.over else { show(now: true); return false }
         let best = options.max { $0.merit < $1.merit }!
         let began = Date()
+        if mover == .me {
+            guard let picked = await person(options) else { show(now: true); return false }
+            game.play(picked)
+            count(Decision(chosen: picked.id, options: options, milliseconds: Int(Date().timeIntervalSince(began) * 1000), by: "我",
+                           agreed: picked.merit >= best.merit - 1e-9, side: game.sides.isEmpty ? nil : game.sides[seat]), seat: seat)
+            return !game.over
+        }
         do {
             // One legal move is not a question. Asking anyway costs a call,
             // and Laya answers a one-option choice with an error from inside
@@ -162,12 +211,7 @@ final class JevArcade: ObservableObject {
             }
             decision.agreed = picked.merit >= best.merit - 1e-9
             game.play(mover == .heuristic ? picked.judged : picked)
-            last = decision
-            moves += 1; spent += decision.milliseconds
-            if decision.agreed { agreed += 1 }
-            seats[seat].moves += 1; seats[seat].spent += decision.milliseconds
-            if decision.agreed { seats[seat].agreed += 1 }
-            show(now: game.over)
+            count(decision, seat: seat)
             return !game.over
         } catch {
             trouble = error.localizedDescription
@@ -175,8 +219,128 @@ final class JevArcade: ObservableObject {
         }
     }
 
+    private func count(_ decision: Decision, seat: Int) {
+        let now = Date()
+        glide = min(max(now.timeIntervalSince(lastMove), 0.05), mover == .me && game.clock == nil ? 0.3 : 0.6)
+        lastMove = now
+        last = decision
+        moves += 1; spent += decision.milliseconds
+        if decision.agreed { agreed += 1 }
+        seats[seat].moves += 1; seats[seat].spent += decision.milliseconds
+        if decision.agreed { seats[seat].agreed += 1 }
+        note()
+        show(now: game.over)
+    }
+
     /// US dollars spent on Jev so far: input tokens only, at 1.13's price.
     var cost: Double { Double(tokens) * 0.042 / 1_000_000 }
+
+    // MARK: - A person playing
+
+    /// A person's move. On a clock: what they pressed during the tick, and
+    /// pressing nothing is a move too. Otherwise the keys already pressed,
+    /// then the next key, click on the board or option in the list.
+    private func person(_ options: [JevOption]) async -> JevOption? {
+        if let clock = game.clock {
+            try? await Task.sleep(nanoseconds: UInt64(clock / max(tempo, 0.25) * 1_000_000_000))
+            guard !Task.isCancelled else { return nil }
+            let keys = pressed
+            pressed = []
+            if case .choose(let option) = game.react(keys, held: held, among: options) { return option }
+            return nil
+        }
+        while !pressed.isEmpty {
+            switch game.react([pressed.removeFirst()], held: held, among: options) {
+            case .choose(let option): return option
+            case .redraw: show(now: true)
+            case .explain(let why): say(why)
+            case .nothing: break
+            }
+        }
+        guard !Task.isCancelled else { return nil }
+        offered = options
+        show(now: true)
+        return await withCheckedContinuation { self.waiting = $0 }
+    }
+
+    private func answer(_ option: JevOption?) {
+        let waiter = waiting
+        waiting = nil; offered = []
+        waiter?.resume(returning: option)
+    }
+
+    /// A key from the Jev tab, down or up; the keyboard repeating a held key is not a press.
+    func key(_ key: JevPress, down: Bool, repeat again: Bool) {
+        guard down else { held.remove(key); return }
+        held.insert(key)
+        guard !again, personSeated, !game.over else { return }
+        if waiting != nil {
+            switch game.react([key], held: held, among: offered) {
+            case .choose(let option): answer(option)
+            case .redraw: show(now: true)
+            case .explain(let why): say(why)
+            case .nothing: break
+            }
+            return
+        }
+        pressed.append(key)
+        if pressed.count > 8 { pressed.removeFirst(pressed.count - 8) }
+        if !running, mover == .me { start() }                  // a key starts a game played by hand
+    }
+
+    /// A click on the board, while a person's move is awaited.
+    func tap(row: Int, col: Int) {
+        guard waiting != nil else {
+            // A click that cannot be a move says so, rather than nothing.
+            if personSeated, !game.over { say(running ? "还没轮到你：\(mover.title) 在想" : "先点「开始」") }
+            return
+        }
+        notice = nil
+        switch game.tap(row: row, col: col, among: offered) {
+        case .choose(let option): answer(option)
+        case .redraw: show(now: true)
+        case .explain(let why): say(why)
+        case .nothing: break
+        }
+    }
+
+    /// Say something to the person over the board, for a few seconds.
+    private func say(_ text: String) {
+        notice = text; noticed = Date()
+        show(now: true)
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            if Date().timeIntervalSince(self.noticed) >= 3.9 { self.notice = nil; self.show(now: true) }
+        }
+    }
+
+    /// An option clicked in the list, while a person's move is awaited.
+    func pick(_ option: JevOption) { if waiting != nil { answer(option) } }
+
+    /// Keys held when the tab went away are not held any more.
+    func letGo() { held = []; pressed = [] }
+
+    /// Who is playing, as the table of best scores names them.
+    private var playerName: String {
+        guard player.thinks, let model = models[0].split(separator: "|").last, !model.isEmpty else { return player.title }
+        return "\(player.title) \(model)"
+    }
+
+    /// Keep the table of best scores up as a game played alone goes.
+    private func note() {
+        guard game.sides.isEmpty, moves > 0 else { return }
+        let key = "\(game.id)|\(seed)", who = playerName
+        var table = bests[key] ?? [:]
+        guard game.score > table[who] ?? Int.min else { return }
+        table[who] = game.score
+        bests[key] = table
+        if game.over { UserDefaults.standard.set(bests, forKey: Self.bestsKey) }
+    }
+
+    /// The best scores on the game and the seed on the board, highest first.
+    var standings: [(who: String, score: Int)] {
+        (bests["\(game.id)|\(seed)"] ?? [:]).map { (who: $0.key, score: $0.value) }.sorted { $0.score > $1.score }
+    }
 
     // MARK: - The players
 
@@ -187,6 +351,8 @@ final class JevArcade: ObservableObject {
 
     private static func ask(_ player: Player, game: JevGame, options: [JevOption], model: String = "") async throws -> Decision {
         switch player {
+        case .me:
+            throw Failure.message("「我」的一步由人来走")        // step() waits for the person; nobody asks
         case .heuristic:
             let best = options.max { $0.merit < $1.merit }!
             return Decision(chosen: best.id, options: options, milliseconds: 0, by: "启发式", agreed: true)

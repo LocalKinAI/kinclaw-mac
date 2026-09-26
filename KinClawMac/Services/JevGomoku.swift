@@ -26,6 +26,7 @@ final class JevGomoku: JevGame {
     private var played: [Int] = []
     private(set) var result: String?
     private var line: Set<Int> = []
+    private(set) var ticked = Date.distantPast
     private var dice = JevDice(seed: 1)
     private var reader = false
     /// Forced by the test harness; otherwise a reader is looked further for, and nobody else is.
@@ -33,6 +34,17 @@ final class JevGomoku: JevGame {
     private var deep: Bool { Self.looksFurther ?? reader }
 
     func prepare(reader: Bool) { self.reader = reader }
+    private var person = false
+    func prepare(person: Bool) { self.person = person }
+    let controls = "点棋盘上的空点落子"
+
+    func tap(row: Int, col: Int, among options: [JevOption]) -> JevReaction {
+        let point = row * GomokuPosition.size + col
+        guard let index = moves.firstIndex(of: point), let option = options.first(where: { $0.move == index }) else {
+            return state.board.indices.contains(point) && state.board[point] != 0 ? .explain("这里已经有子了") : .nothing
+        }
+        return .choose(option)
+    }
 
     var turn: Int { state.blackToMove ? 0 : 1 }
     var over: Bool { result != nil }
@@ -88,7 +100,8 @@ final class JevGomoku: JevGame {
 
     func options() -> [JevOption] {
         guard result == nil else { return [] }
-        let points = state.candidates()
+        // A model gets the points near the stones; a person may play anywhere.
+        let points = person ? state.board.indices.filter { state.board[$0] == 0 } : state.candidates()
         if points.isEmpty { result = "棋盘下满了 · 和棋"; return [] }
         var seen = points.map { Seen(point: $0, worth: state.worth(of: $0), shape: state.shape(at: $0)) }
         // The shortlist: the evaluator's best eight, then whatever forces or has to be answered.
@@ -98,7 +111,7 @@ final class JevGomoku: JevGame {
             let shape = seen[index].shape
             if shape.mine.contains(where: { $0 >= .openThree }) || shape.theirs.contains(where: { $0 >= .openThree }) { keep.insert(index) }
         }
-        var chosen = keep.sorted { seen[$0].point < seen[$1].point }           // in board order, which favours nobody
+        var chosen = person ? Array(seen.indices) : keep.sorted { seen[$0].point < seen[$1].point }   // in board order, which favours nobody
         if deep {
             // Further than the evaluator that plays looks: what happens after the stone. What looks
             // best further on belongs on the list too — it is what the words are going to be about.
@@ -141,6 +154,7 @@ final class JevGomoku: JevGame {
         let point = moves[option.move], mover = turn
         state.play(point)
         played.append(point)
+        ticked = Date()
         if let five = state.winningLine {
             line = Set(five)
             result = "\(sides[mover])五连 · \(sides[mover])赢了（\(state.stones) 手）"
@@ -188,5 +202,98 @@ final class JevGomoku: JevGame {
         if parts.isEmpty { parts.append("a quiet move next to stones already there") }
         parts.append(fromEdge <= 1 ? "on the edge of the board" : fromEdge >= 5 ? "in the middle of the board" : "between the middle and the edge")
         return "\(GomokuPosition.name(seen.point)): " + parts.joined(separator: "; ")
+    }
+}
+
+/// Wood, with a little grain.
+fileprivate func woodBoard(_ g: GraphicsContext, _ rect: CGRect, light: (Double, Double, Double), seed: Int) {
+    g.fill(Path(roundedRect: rect, cornerRadius: 8),
+           with: .linearGradient(Gradient(colors: [JevDraw.shade(light, 1.06), JevDraw.shade(light, 0.9), JevDraw.shade(light, 1.02)]),
+                                 startPoint: rect.origin, endPoint: CGPoint(x: rect.maxX, y: rect.maxY)))
+    for grain in 0..<26 {
+        let y = rect.minY + rect.height * CGFloat(JevDraw.hash(grain, seed) % 1000) / 1000
+        let wave = CGFloat(JevDraw.hash(grain, seed + 1) % 7) - 3
+        g.stroke(Path { p in
+            p.move(to: CGPoint(x: rect.minX, y: y))
+            p.addCurve(to: CGPoint(x: rect.maxX, y: y + wave), control1: CGPoint(x: rect.minX + rect.width * 0.3, y: y - wave * 2),
+                       control2: CGPoint(x: rect.minX + rect.width * 0.7, y: y + wave * 3))
+        }, with: .color(JevDraw.shade(light, 0.7).opacity(0.18)), lineWidth: 1)
+    }
+}
+
+// MARK: - The picture
+
+extension JevGomoku: JevPainted {
+    var aspect: Double { 1 }
+
+    func picture(t: Double, since: Double, now: Double) -> JevPicture {
+        let scene = GomokuScene(board: state.board, last: played.last, line: line, t: t, over: over, result: result ?? "")
+        return JevPicture { context, size in scene.paint(&context, size) }
+    }
+
+    func spot(at point: CGPoint, in size: CGSize) -> (row: Int, col: Int)? {
+        let geometry = GomokuScene.geometry(size)
+        let col = Int(((point.x - geometry.origin.x) / geometry.step).rounded()), row = Int(((point.y - geometry.origin.y) / geometry.step).rounded())
+        guard (0..<GomokuPosition.size).contains(row), (0..<GomokuPosition.size).contains(col) else { return nil }
+        return (row, col)
+    }
+}
+
+fileprivate struct GomokuScene {
+    let board: [Int8], last: Int?, line: Set<Int>, t: Double, over: Bool, result: String
+
+    static func geometry(_ size: CGSize) -> (origin: CGPoint, step: CGFloat) {
+        let n = CGFloat(GomokuPosition.size - 1), step = min(size.width, size.height) / (n + 1.8)
+        return (CGPoint(x: (size.width - n * step) / 2, y: (size.height - n * step) / 2), step)
+    }
+
+    func paint(_ g: inout GraphicsContext, _ size: CGSize) {
+        let (origin, step) = Self.geometry(size), n = GomokuPosition.size
+        func at(_ index: Int) -> CGPoint { CGPoint(x: origin.x + CGFloat(index % n) * step, y: origin.y + CGFloat(index / n) * step) }
+        g.fill(Path(CGRect(origin: .zero, size: size)), with: .color(Color(red: 0.36, green: 0.24, blue: 0.14)))
+        woodBoard(g, CGRect(origin: .zero, size: size).insetBy(dx: 6, dy: 6), light: (0.86, 0.69, 0.42), seed: 11)
+        let ink = Color(red: 0.25, green: 0.16, blue: 0.08)
+        for k in 0..<n {
+            let offset = CGFloat(k) * step
+            g.fill(Path(CGRect(x: origin.x, y: origin.y + offset - 0.5, width: CGFloat(n - 1) * step, height: 1)), with: .color(ink.opacity(0.8)))
+            g.fill(Path(CGRect(x: origin.x + offset - 0.5, y: origin.y, width: 1, height: CGFloat(n - 1) * step)), with: .color(ink.opacity(0.8)))
+            JevDraw.text(g, String("ABCDEFGHIJKLMNO"[String.Index(utf16Offset: k, in: "ABCDEFGHIJKLMNO")]),
+                         at: CGPoint(x: origin.x + offset, y: origin.y + CGFloat(n - 1) * step + step * 0.6), size: step * 0.32, weight: .semibold, colour: ink, shadow: false)
+            JevDraw.text(g, "\(n - k)", at: CGPoint(x: origin.x - step * 0.6, y: origin.y + offset), size: step * 0.32, weight: .semibold, colour: ink, shadow: false)
+        }
+        g.stroke(Path(CGRect(x: origin.x, y: origin.y, width: CGFloat(n - 1) * step, height: CGFloat(n - 1) * step)), with: .color(ink), lineWidth: 2)
+        for star in [3 * 15 + 3, 3 * 15 + 11, 7 * 15 + 7, 11 * 15 + 3, 11 * 15 + 11] {
+            let p = at(star)
+            g.fill(Path(ellipseIn: CGRect(x: p.x - step * 0.09, y: p.y - step * 0.09, width: step * 0.18, height: step * 0.18)), with: .color(ink))
+        }
+        for index in board.indices where board[index] != 0 {
+            var r = step * 0.46, alpha = 1.0
+            if index == last, t < 1 { let e = JevDraw.smooth(t); r *= CGFloat(1.35 - 0.35 * e); alpha = 0.4 + 0.6 * e }
+            stone(g, at: at(index), radius: r, black: board[index] == 1, alpha: alpha)
+        }
+        if let last, board.indices.contains(last), board[last] != 0 {
+            let p = at(last)
+            g.fill(Path(ellipseIn: CGRect(x: p.x - step * 0.1, y: p.y - step * 0.1, width: step * 0.2, height: step * 0.2)), with: .color(Color.red.opacity(0.9)))
+        }
+        // Five in a row: a line of light through them.
+        if line.count >= 5 {
+            let points = line.sorted().map(at)
+            if let first = points.first, let end = points.last {
+                for (width, alpha) in [(step * 0.5, 0.25), (step * 0.18, 0.9)] {
+                    g.stroke(Path { p in p.move(to: first); p.addLine(to: end) }, with: .color(Color(red: 1, green: 0.3, blue: 0.2).opacity(alpha)),
+                             style: StrokeStyle(lineWidth: width, lineCap: .round))
+                }
+            }
+        }
+        if over { JevDraw.curtain(g, size, title: result.components(separatedBy: " · ").last ?? result, detail: result.components(separatedBy: " · ").first ?? "") }
+    }
+
+    private func stone(_ g: GraphicsContext, at p: CGPoint, radius r: CGFloat, black: Bool, alpha: Double) {
+        g.fill(Path(ellipseIn: CGRect(x: p.x - r + r * 0.12, y: p.y - r + r * 0.18, width: 2 * r, height: 2 * r)), with: .color(.black.opacity(0.35 * alpha)))
+        let colours = black ? [Color(white: 0.45), Color(white: 0.02)] : [Color.white, Color(white: 0.97), Color(white: 0.84)]
+        g.fill(Path(ellipseIn: CGRect(x: p.x - r, y: p.y - r, width: 2 * r, height: 2 * r)),
+               with: .radialGradient(Gradient(colors: colours.map { $0.opacity(alpha) }), center: CGPoint(x: p.x - r * 0.35, y: p.y - r * 0.35),
+                                     startRadius: 0, endRadius: r * (black ? 1.4 : 1.7)))
+        if !black { g.stroke(Path(ellipseIn: CGRect(x: p.x - r, y: p.y - r, width: 2 * r, height: 2 * r)), with: .color(Color(white: 0.55).opacity(alpha)), lineWidth: 0.8) }
     }
 }

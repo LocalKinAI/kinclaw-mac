@@ -8,6 +8,168 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Added — 帝国时代: a real-time strategy game you build with the mouse
+
+"我要的是真的建造类游戏啊": the turn-based 帝国 was orders from a list with
+the buildings placed for you. This one is played on the map. Jev tab → 建造 →
+帝国时代.
+
+- **帝国 stays**, first in the list: the same game in rounds of ten seconds,
+  one order a side each round — two villagers to a job, three moved from one
+  job to another, a building, the next age, a batch of soldiers, march, come
+  home, wait. For a model each order is measured: what it does to income and
+  population, what it leaves at home, and how any fight it leads to would come
+  out (the engine fights it in advance). A fallen town centre loses; after 100
+  rounds, the stronger empire. Either side can be any player, a person too;
+  `jev_play` takes it as `empire`, with `blue` and `red`.
+- **A 48 × 30 map, in real time** (`Games/RTSEngine.swift`, Foundation only):
+  two towns across a lake with two fords, forests, gold, stone and berry
+  bushes, mirrored so neither side is favoured. Villagers walk (A* over the
+  tiles) to a tree, a bush or a rock, gather, and carry the load to the
+  nearest building that takes it — the town centre, a mill, a lumber camp, a
+  mining camp — so where a camp stands matters; trees fall and rocks run out.
+  Buildings are laid as foundations and put up by the villagers sent to them;
+  farms are fields a farmer works for ever. Houses give room for five; the
+  town centre researches the Feudal and Castle ages; barracks, an archery
+  range and a stable train spearmen, archers and knights, which beat one
+  another in a circle. Soldiers fight what they see; town centres and towers
+  shoot arrows. The side whose town centre falls loses.
+- **Played with the mouse** (`Games/RTSView.swift`): left click or drag a box
+  to select, right click to send — to a tree to chop it, to a foundation to
+  build it, to a farm to work it, to an enemy to attack it, to open ground to
+  go there; a building's right click is its rally point. A villager selected
+  shows the buildings; click one, then the map — green where it fits, red
+  where it does not, ⇧ to keep placing. Train and research from the town
+  centre and the military buildings; 闲置村民 finds the idle; 全军出击 sends
+  every soldier. Speed 1×/2×/4×, space pauses, Esc lets go.
+- **Drawn** (`Games/RTSScene.swift`): trees that shrink as they are cut, rocks
+  that shrink as they are mined, a lake that ripples, buildings in the style of
+  their owner's age with scaffolding while they go up and a mill whose sails
+  turn, villagers swinging their tools and carrying what they gathered,
+  spearmen, archers and knights, arrows in flight, blows, the fallen.
+- **Who plays each side** ("帝国时代除了我也可以选对战对象"): 蓝方 and 红方
+  pickers at the top right — 我, 电脑, Jev, or 大模型 (a chat model on an
+  Ollama, chosen from a menu). One person at most; with nobody it is a game to
+  watch, both stocks shown. The choice is remembered.
+- **The computer** (`Games/RTSBrain.swift`) plays a build order — villagers
+  first, houses before the cap, camps by the trees and the gold, farms when
+  the bushes run out, barracks, the next age with the food kept for it,
+  soldiers that beat what it sees, an attack when the army is big enough —
+  and defends when raided. Against itself on 40 maps: blue 20, red 19, one
+  unfinished at 25 minutes; Feudal at 6–7 minutes, Castle at 11–15, a town
+  centre down at 12–23.
+- **Jev and chat models command** (`Games/RTSCommander.swift`): every five
+  seconds of play (ten for a chat model) one question — which way to lean:
+  grow the economy, build up the army, advance an age, attack, or defend
+  (offered only when raiders at home outmatch the guard). Each option carries
+  what the program measured: villagers against what the age wants, income a
+  minute, what the next age costs and how long saving takes, both armies and
+  which is stronger by how much, what defends their town and the odds of an
+  attack. The computer's hands carry it out; saving for an age is seen
+  through unless home is in danger. Jev against the computer on three maps:
+  three wins, in 18–23 minutes — it is the harder opponent. kimi-k2.6 answers
+  with a bare key in 1–3 s; glm-5.3-flash thinks aloud first and ends with one.
+- **Jev 参谋** for the person: specific moves ("a lumber camp at 12,20: 31
+  trees within four tiles…") with a 照做 button; a saving plan followed is
+  bought by itself the moment there is enough.
+- **Fixed on the way**: soldiers on the tile next to their target counted as
+  arrived while still out of reach, so whole armies stood facing each other
+  for minutes — they close the last step now. Ties in where to build and which
+  tree to cut went to the left, the map's edge for blue and its middle for
+  red — placement and search now mirror. Soldiers with nobody left to fight
+  went for the nearest farm; they go for the town centre, then towers, then
+  military buildings. The counter-pick trained knights against spearmen;
+  archers now.
+
+### Added — Jev: driving, a shooter and Flappy Bird, drawn properly — and a seat for you
+
+Three games that move ("飞行或者射击类游戏啊… 开车啊"), and anybody at the
+keyboard can play any of the ten ("我也可以玩啊").
+
+- **开车** — a five-lane highway from above. Each tick: a lane either way,
+  a speed either way (30–120 km/h). Trucks and cars keep to their lanes and
+  slow behind slower ones, so everything on the road is where the program
+  says it will be; fuel burns a unit a tick and the cans that refill it come
+  by the mile, so a driver who dawdles runs dry. The words say what is ahead
+  in the lane and how fast it closes, whether there is room to brake behind
+  it, whether a lane beside is open, whether a move gets a lane closer to the
+  fuel — and, since the traffic's future is known, whether a crash can still
+  be avoided at all. The evaluator looks four ticks ahead over every
+  combination of moves.
+- **飞机大战** — a plane on the bottom of the sky against fighters (straight
+  down), swoopers (diagonal, off the walls) and bombers (slow, dropping bombs
+  on a beat); a gun that fires every other tick, so a shot that hits nothing
+  costs something; three lives. The words say whether the plane is hit this
+  tick, whether a hit can still be dodged, how long it is safe where it
+  stands, what a shot fired now will hit and when, and what the next one
+  would.
+- **像素鸟** — flap or glide. The bird's future is arithmetic, so the words
+  do it: where each choice puts it, where gliding on would meet the next pipe,
+  and whether any way of flapping still gets it through, with how much room.
+- Measured, seeds 100–102: the evaluator drives ~1,500 rows in 400 ticks, a
+  random driver crashes at ~90; it shoots ~1,100 points in 400 ticks against
+  random's 120; it passes ~100 pipes in 600 ticks where random falls at the
+  first. Jev on its first go: 330 points in 150 ticks without losing a life;
+  30 pipes in 200 ticks (the evaluator's pace); and dry at 136 rows — the words
+  mentioned fuel only in the lane it was already in. They say which way the
+  fuel is now, and the tank is 60, a can 25. It still ran dry, at a crawl: it
+  read "closing 2 rows a tick" as danger and sat behind a car at its speed with
+  the next lane empty. Said as a driver would — "slower than you (you catch it
+  in about 8 ticks, with room to brake behind it)", "going your speed: you are
+  stuck behind it" — and with speed ranked above everything but safety and fuel
+  in the judging, it drove 954 and 927 rows in 250 ticks, agreeing with the
+  evaluator 92% and 88% of the time (the evaluator: ~975).
+- **They are drawn, not gridded** ("你这画面也太弱了"). A game can paint
+  itself (`JevPainted`): a SwiftUI Canvas sixty times a second, each frame part
+  of the way from the last tick to this one, so the car slides into its lane,
+  the stars stream and the bird arcs while the game itself still moves a
+  question at a time. A road with kerbs, lane dashes, trees rolling past, cars
+  with glass and lights, lorries, a glowing fuel can, a speedometer and a fuel
+  gauge; a starfield with jets, lasers, bombs and fireballs; sky, towers,
+  clouds and bushes at their own speeds behind proper pipes and a bird that
+  beats its wing and noses up and down.
+- **All ten are drawn now** ("其他七个也换成画出来的画面"). Tetris: a well
+  of bevelled blocks, the piece falling onto the board it was dropped on,
+  the rows it filled flashing before they go, the next piece beside, and a
+  dashed shadow where a person's piece will land. 2048: the familiar tiles,
+  sliding to where they go, a merge swelling, a new tile growing in. Snake: a
+  blue snake with eyes that look where it is going, sliding a square a tick
+  over checkered grass, an apple that shrinks into its mouth. 21 点: a felt
+  table, real cards dealt from a shoe in dealing order, the hole card turned
+  over when the dealer plays, a finished hand left on the table a moment with
+  its verdict before the next is dealt, chips. 五子棋: a wooden board with its
+  coordinates, glossy stones set down, a line of light through five.
+  Chess: a classic board with coordinates, the last move and a king in check
+  lit, the piece sliding, dots for where a picked-up piece may go. 中国象棋:
+  a wooden board with the river and the palaces, men as wooden discs, the man
+  sliding. Clicks on the pictures land on squares and points
+  (`JevPainted.spot`), and a script played a person's keys and clicks into
+  every game — Tetris dropped by the cursor, e2–e4, 炮二平五, a stone on
+  H8 and one in the far corner.
+- **我** — a seat for a person, in every game. Games that move by themselves
+  run on a clock and read the keys held or pressed during the tick (driving:
+  ←→ lanes, ↑↓ speed; the shooter: ←→ and space, held for automatic fire;
+  Flappy: space or ↑; Snake: the arrows, and a person can steer into a wall);
+  the others wait — 2048 the arrows, 21 点 H/S/D, Tetris a cursor (←→ move,
+  ↑ turn, ↓ or space drop, a shadow where it lands), and at 五子棋, chess and
+  中国象棋 a click on the board (a piece, then where it goes; every legal
+  move, not the models' shortlist). Or click one of the options listed beside
+  the board. A key starts the game; 速度 sets the clock.
+- **A click that cannot move says why** ("那几个炮连到一起的时候…我不能移动棋子").
+  Nothing had been wrong with the rules — a man that is one of two screens
+  between an enemy cannon and its general cannot leave the file — but a click
+  on it did nothing, which looks like a bug. Now a line over the board says
+  why: 这个马被牵制了 / 你正被将军：这个车解不了将 (and the men that can answer
+  a check are ringed) / 车这样走完，你的帅会被将军 / 炮吃子要正好隔一个子 /
+  还没轮到你：Jev 在想. The same at chess; at 五子棋, 这里已经有子了. While the
+  other side is thinking the tab says so. Checked on four set positions
+  (`JevXiangqi.setUp(fen:)`); `jev_status` now prints the position of a game
+  for two.
+- **The same seed, the same game** — under the board, the best score each
+  player has made on this seed: "种子 100 最好成绩：启发式 358 · 我 279".
+  Kept across launches.
+- `jev_play` knows the new games, and will not move for a seat that is 我.
+
 ### Changed — Film: H3 shots are filmed from a pinned first frame
 
 Every H3 shot now starts from a picture made and checked before it is filmed,

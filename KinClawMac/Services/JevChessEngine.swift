@@ -123,6 +123,9 @@ struct ChessPosition {
         }
     }
 
+    /// Could the piece go there by its own rules, whatever it does to its king?
+    func isPseudoLegal(from: Int, to: Int) -> Bool { pseudoMoves().contains { $0.from == from && $0.to == to } }
+
     private func pseudoMoves() -> [Move] {
         var moves: [Move] = []
         let white = whiteToMove, sign: Int8 = white ? 1 : -1
