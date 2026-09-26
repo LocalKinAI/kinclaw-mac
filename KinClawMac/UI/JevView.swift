@@ -24,6 +24,8 @@ struct JevView: View {
                 BookShelfView()
             } else if doing == "rts" {
                 RTSView()
+            } else if doing == "city" {
+                CityView()
             } else {
                 VStack(spacing: 0) {
                     HStack(alignment: .top, spacing: 14) {
@@ -69,6 +71,16 @@ struct JevView: View {
                 }
                 .padding(8)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(doing == "rts" ? 0.10 : 0)))
+            }
+            .buttonStyle(.plain)
+            Button { doing = "city" } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "house.lodge").frame(width: 18)
+                    Text("放逐之城").font(.system(size: 12, weight: .medium))
+                    Spacer(minLength: 0)
+                }
+                .padding(8)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(doing == "city" ? 0.10 : 0)))
             }
             .buttonStyle(.plain)
             Divider().opacity(0.12).padding(.vertical, 4)

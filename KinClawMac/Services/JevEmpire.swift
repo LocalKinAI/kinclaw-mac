@@ -226,25 +226,33 @@ extension JevEmpire: JevPainted {
 fileprivate struct EmpireScene {
     let before: EmpireWorld, after: EmpireWorld, t: Double, since: Double, now: Double, result: String?
     static let team = [Color(red: 0.18, green: 0.42, blue: 0.95), Color(red: 0.88, green: 0.18, blue: 0.16)]
+    static let teamRGB: [Art.RGB] = [(0.2, 0.44, 0.94), (0.86, 0.2, 0.18)]
+    static let season = Art.Season(month: 4.2)
+    /// A tile's size for the shared drawings, from the picture's unit.
+    private func tile(_ unit: CGFloat) -> CGFloat { 15 * unit }
+    private func footprint(_ p: CGPoint, _ n: CGFloat, _ S: CGFloat) -> CGRect { CGRect(x: p.x - n * S / 2, y: p.y - n * S / 2, width: n * S, height: n * S) }
+    /// Walls and roofs by age: logs and thatch, timber and shingles, stone and slate, marble and gold.
+    private func style(_ age: Int) -> (Art.Wall, Art.Roof, Art.RGB, Art.RGB?) {
+        switch age {
+        case 0: return (.logs, .thatch, (0.8, 0.66, 0.36), nil)
+        case 1: return (.plaster, .shingles, (0.68, 0.3, 0.2), nil)
+        case 2: return (.stone, .slate, (0.36, 0.4, 0.5), nil)
+        default: return (.stone, .slate, (0.88, 0.7, 0.22), (0.95, 0.94, 0.9))
+        }
+    }
     /// Roofs and walls by age: timber and thatch, tiles, stone, marble and gold.
     static let roofs = [Color(red: 0.55, green: 0.38, blue: 0.2), Color(red: 0.78, green: 0.3, blue: 0.2), Color(red: 0.3, green: 0.38, blue: 0.55), Color(red: 0.85, green: 0.68, blue: 0.2)]
     static let walls = [Color(red: 0.78, green: 0.64, blue: 0.45), Color(red: 0.88, green: 0.82, blue: 0.7), Color(red: 0.72, green: 0.72, blue: 0.74), Color(red: 0.96, green: 0.95, blue: 0.9)]
 
     func paint(_ g: inout GraphicsContext, _ size: CGSize) {
-        let width = size.width, height = size.height, top: CGFloat = 46
-        g.fill(Path(CGRect(origin: .zero, size: size)),
-               with: .linearGradient(Gradient(colors: [Color(red: 0.42, green: 0.66, blue: 0.3), Color(red: 0.34, green: 0.58, blue: 0.26)]),
-                                     startPoint: .zero, endPoint: CGPoint(x: 0, y: height)))
-        for patch in 0..<80 {
-            let x = CGFloat(JevDraw.hash(patch, 1) % 1000) / 1000 * width, y = top + CGFloat(JevDraw.hash(patch, 2) % 1000) / 1000 * (height - top)
-            let r = CGFloat(8 + JevDraw.hash(patch, 3) % 22)
-            g.fill(Path(ellipseIn: CGRect(x: x - r, y: y - r * 0.6, width: 2 * r, height: 1.2 * r)),
-                   with: .color((patch % 2 == 0 ? Color(red: 0.3, green: 0.52, blue: 0.22) : Color(red: 0.5, green: 0.72, blue: 0.34)).opacity(0.35)))
-        }
-        // The road between the towns.
+        let width = size.width, height = size.height
+        let S = tile(height / 400)
+        Art.ground(&g, size: size, S: S, season: Self.season, visible: CGRect(x: 0, y: 0, width: width / S, height: height / S), tiles: CGSize(width: width / S, height: height / S))
+        // The road between the towns: a trodden path.
         let road = roadPath(width, height)
-        g.stroke(road, with: .color(Color(red: 0.55, green: 0.45, blue: 0.3)), style: StrokeStyle(lineWidth: height * 0.075, lineCap: .round))
-        g.stroke(road, with: .color(Color(red: 0.8, green: 0.7, blue: 0.5)), style: StrokeStyle(lineWidth: height * 0.058, lineCap: .round))
+        g.stroke(road, with: .color(Art.c((0.62, 0.52, 0.38))), style: StrokeStyle(lineWidth: height * 0.07, lineCap: .round, lineJoin: .round))
+        g.stroke(road, with: .color(Art.c((0.78, 0.67, 0.5))), style: StrokeStyle(lineWidth: height * 0.054, lineCap: .round, lineJoin: .round))
+        g.stroke(road, with: .color(Art.c((0.84, 0.74, 0.58), 0.6)), style: StrokeStyle(lineWidth: height * 0.016, lineCap: .round, lineJoin: .round))
         for s in 0..<2 { town(g, s, size) }
         for s in 0..<2 { marching(g, s, size) }
         fights(g, size)
@@ -281,55 +289,58 @@ fileprivate struct EmpireScene {
     // MARK: A town
 
     private func town(_ g: GraphicsContext, _ s: Int, _ size: CGSize) {
-        let side = after.sides[s], unit = size.height / 400, colour = Self.team[s]
-        let roof = Self.roofs[side.age], wall = Self.walls[side.age]
-        // The forest and the gold mine.
+        let side = after.sides[s], unit = size.height / 400, colour = Self.team[s], team = Self.teamRGB[s]
+        var g = g
+        let S = tile(unit)
+        let (wall, roof, roofColour, marble) = style(side.age)
+        let wallKind: Art.Wall = marble != nil ? .stone : wall
+        // Berry bushes while there are berries, and fields in rows, golden once the age is up.
+        for (index, spot) in Self.farmSpots.prefix(min(side.built[EmpireBuilding.farm.rawValue], Self.farmSpots.count)).enumerated() {
+            let p = at(s, spot.0, spot.1, size)
+            field(&g, CGRect(x: p.x - 17 * unit, y: p.y - 11 * unit, width: 34 * unit, height: 22 * unit), S, ripe: side.age >= 2 || index % 3 == 1, team: team)
+        }
+        // Everything that stands, from the back to the front.
+        var standing: [(CGFloat, (inout GraphicsContext) -> Void)] = []
         for tree in 0..<26 {
             let p = at(s, 0.02 + 0.2 * Double(JevDraw.hash(tree, 11 + s) % 1000) / 1000, 0.14 + 0.16 * Double(JevDraw.hash(tree, 13 + s) % 1000) / 1000, size)
-            self.tree(g, p, unit * CGFloat(9 + JevDraw.hash(tree, 17) % 6))
+            let h = JevDraw.hash(tree, 17 + s)
+            let r = unit * CGFloat(9 + h % 6)
+            standing.append((p.y + r * 0.8, { g in Art.tree(&g, foot: CGPoint(x: p.x, y: p.y + r * 0.8), S: r * 2.1, grown: 1, variant: h, season: Self.season, conifer: h % 3 != 0, now: self.now) }))
         }
         let mine = at(s, 0.07, 0.9, size)
         for rock in 0..<5 {
             let p = CGPoint(x: mine.x + CGFloat(rock % 3 - 1) * 14 * unit, y: mine.y + CGFloat(rock / 3) * 9 * unit - 4 * unit)
-            g.fill(Path(ellipseIn: CGRect(x: p.x - 10 * unit, y: p.y - 7 * unit, width: 20 * unit, height: 14 * unit)), with: .color(Color(white: 0.5)))
-            g.fill(Path(ellipseIn: CGRect(x: p.x - 3 * unit, y: p.y - 3 * unit, width: 6 * unit, height: 5 * unit)), with: .color(Color(red: 1, green: 0.82, blue: 0.2)))
+            standing.append((p.y, { g in Art.deposit(&g, .gold, centre: p, S: S * 1.3, left: 1, variant: rock + s * 7, season: Self.season) }))
         }
-        // Berry bushes while there are berries.
         if side.berries > 0 {
             for bush in 0..<4 {
                 let p = at(s, 0.24 + 0.03 * Double(bush % 2), 0.56 + 0.05 * Double(bush / 2), size)
-                g.fill(Path(ellipseIn: CGRect(x: p.x - 8 * unit, y: p.y - 7 * unit, width: 16 * unit, height: 14 * unit)), with: .color(Color(red: 0.2, green: 0.45, blue: 0.2)))
-                for dot in 0..<3 {
-                    g.fill(Path(ellipseIn: CGRect(x: p.x - 5 * unit + CGFloat(dot) * 4 * unit, y: p.y - 2 * unit + CGFloat(dot % 2) * 3 * unit, width: 3 * unit, height: 3 * unit)), with: .color(Color(red: 0.85, green: 0.1, blue: 0.2)))
-                }
+                standing.append((p.y, { g in Art.deposit(&g, .berries, centre: p, S: S * 1.2, left: 1, variant: bush + s * 5, season: Self.season) }))
             }
         }
-        // Farms: fields in rows, golden once the age is up.
-        for (index, spot) in Self.farmSpots.prefix(min(side.built[EmpireBuilding.farm.rawValue], Self.farmSpots.count)).enumerated() {
-            let p = at(s, spot.0, spot.1, size), field = CGRect(x: p.x - 17 * unit, y: p.y - 11 * unit, width: 34 * unit, height: 22 * unit)
-            g.fill(Path(roundedRect: field, cornerRadius: 3), with: .color(Color(red: 0.55, green: 0.4, blue: 0.22)))
-            for row in 0..<4 {
-                g.fill(Path(CGRect(x: field.minX + 3 * unit, y: field.minY + (3 + CGFloat(row) * 5) * unit, width: field.width - 6 * unit, height: 2.5 * unit)),
-                       with: .color(side.age >= 2 || index % 3 == 1 ? Color(red: 0.9, green: 0.78, blue: 0.3) : Color(red: 0.45, green: 0.72, blue: 0.3)))
-            }
+        func put(_ p: CGPoint, _ n: CGFloat, _ draw: @escaping (inout GraphicsContext, CGRect) -> Void) {
+            let F = footprint(p, n, S)
+            standing.append((F.maxY, { g in draw(&g, F) }))
         }
-        // The camps by the forest and the mine; the military buildings toward the road.
-        if side.has(.lumberCamp) { shed(g, at(s, 0.2, 0.22, size), unit, roof, "🪓") }
-        if side.has(.miningCamp) { shed(g, at(s, 0.14, 0.87, size), unit, roof, "⛏") }
-        for (building, spot, mark) in [(EmpireBuilding.barracks, (0.33, 0.37), "⚔️"), (.range, (0.33, 0.5), "🎯"), (.stable, (0.4, 0.43), "🐴")] where side.has(building) {
-            hall(g, at(s, spot.0, spot.1, size), unit, roof, wall, mark)
+        if side.has(.lumberCamp) { put(at(s, 0.2, 0.22, size), 2) { g, F in Art.shed(&g, F, S: S, pile: .logs, team: team, snow: 0, now: self.now) } }
+        if side.has(.miningCamp) { put(at(s, 0.14, 0.87, size), 2) { g, F in Art.shed(&g, F, S: S, pile: .gold, team: team, snow: 0, now: self.now) } }
+        for (building, spot, yard) in [(EmpireBuilding.barracks, (0.33, 0.37), Art.Yard.weapons), (.range, (0.33, 0.5), .target), (.stable, (0.4, 0.43), .hay)] where side.has(building) {
+            put(at(s, spot.0, spot.1, size), 2.6) { g, F in Art.hall(&g, F, S: S, wall: wallKind, roof: roof, roofColour: roofColour, team: team, yard: yard, snow: 0, now: self.now) }
         }
         for index in 0..<min(side.built[EmpireBuilding.tower.rawValue], Self.towerSpots.count) {
             let spot = Self.towerSpots[index]
-            tower(g, at(s, spot.0, spot.1, size), unit, wall, colour)
+            put(at(s, spot.0, spot.1, size), 1) { g, F in Art.tower(&g, F, S: S * 1.2, team: team, snow: 0, now: self.now) }
         }
         for index in 0..<min(side.built[EmpireBuilding.house.rawValue], Self.houseSpots.count) {
             let spot = Self.houseSpots[index]
-            house(g, at(s, spot.0, spot.1, size), unit, roof, wall)
+            put(at(s, spot.0, spot.1, size), 2) { g, F in
+                Art.house(&g, F, S: S, wall: wallKind, roof: roof, roofColour: roofColour, trim: team, snow: 0, glow: false, smoke: index % 3 == 0, now: self.now, seed: index + s * 17)
+            }
         }
         // The town centre, with a banner, its health and — if it burns — fire.
         let centre = at(s, 0.13, 0.55, size)
-        townCentre(g, centre, unit, roof, wall, colour)
+        put(CGPoint(x: centre.x, y: centre.y - S * 0.2), 3.4) { g, F in Art.keep(&g, F, S: S, wall: wallKind, roof: roof, roofColour: roofColour, team: team, snow: 0, glow: false, now: self.now) }
+        for (_, draw) in standing.sorted(by: { $0.0 < $1.0 }) { draw(&g) }
         if side.town < EmpireWorld.townHP {
             let bar = CGRect(x: centre.x - 30 * unit, y: centre.y - 48 * unit, width: 60 * unit, height: 6 * unit)
             g.fill(Path(roundedRect: bar, cornerRadius: 3), with: .color(.black.opacity(0.5)))
@@ -359,7 +370,9 @@ fileprivate struct EmpireScene {
                     let phase = (now * 0.09 + Double(JevDraw.hash(seed, 3) % 100) / 100).truncatingRemainder(dividingBy: 1)
                     let leg = phase < 0.5 ? phase * 2 : 2 - phase * 2              // out and back
                     let p = CGPoint(x: JevDraw.mix(Double(centre.x), Double(spread.x), leg), y: JevDraw.mix(Double(centre.y + 10 * unit), Double(spread.y), leg))
-                    villager(g, p, unit, colour, carrying: phase >= 0.5 ? [Color(red: 0.85, green: 0.2, blue: 0.2), Color(red: 0.5, green: 0.3, blue: 0.1), Color(red: 1, green: 0.8, blue: 0.2)][job] : nil)
+                    let carry: Art.Item = phase >= 0.5 ? [Art.Item.food, .logs, .gold][job] : .none
+                    Art.person(&g, foot: p, height: 13 * unit, clothes: (0.78, 0.66, 0.48), facing: leg < 1 && phase < 0.5 ? (spread.x >= centre.x ? 1 : -1) : (spread.x >= centre.x ? -1 : 1),
+                               walking: true, phase: now * 9 + Double(seed), seed: seed, carry: carry, trim: team)
                 }
             }
         }
@@ -371,7 +384,7 @@ fileprivate struct EmpireScene {
             let shown = min(count, 8)
             for index in 0..<shown {
                 let p = at(s, 0.2 + 0.022 * Double(index % 4), 0.35 + 0.045 * Double(rank + index / 4), size)
-                soldier(g, p, unit, kind, colour, facing: s == 0 ? 1 : -1)
+                Art.soldier(&g, [Art.Soldier.spearman, .archer, .knight][kind], foot: p, S: S * 1.1, team: team, facing: s == 0 ? 1 : -1, walking: false, working: false, seed: index + kind * 9 + s * 31, now: now)
             }
             if count > shown { JevDraw.text(g, "×\(count)", at: at(s, 0.2 + 0.022 * 4.1, 0.35 + 0.045 * Double(rank), size), size: 9 * unit, weight: .bold) }
             rank += (shown + 3) / 4
@@ -393,13 +406,17 @@ fileprivate struct EmpireScene {
         let f = JevDraw.mix(from, to, t) / Double(EmpireWorld.lane)
         let centre = roadPoint(s == 0 ? f : 1 - f, size), unit = size.height / 400
         let facing: CGFloat = (then.heading < 0) == (s == 0) ? -1 : 1
+        var g = g
         var placed = 0
+        var ranks: [(CGPoint, Int)] = []
         for kind in 0..<3 {
             for _ in 0..<min(Int(army[kind].rounded(.up)), 6) {
-                let p = CGPoint(x: centre.x - facing * CGFloat(placed / 3) * 13 * unit, y: centre.y + CGFloat(placed % 3 - 1) * 12 * unit)
-                soldier(g, p, unit, kind, Self.team[s], facing: facing)
+                ranks.append((CGPoint(x: centre.x - facing * CGFloat(placed / 3) * 13 * unit, y: centre.y + CGFloat(placed % 3 - 1) * 12 * unit), kind))
                 placed += 1
             }
+        }
+        for (k, (p, kind)) in ranks.sorted(by: { $0.0.y < $1.0.y }).enumerated() {
+            Art.soldier(&g, [Art.Soldier.spearman, .archer, .knight][kind], foot: p, S: tile(unit) * 1.1, team: Self.teamRGB[s], facing: Double(facing), walking: t < 1, working: false, seed: k + s * 31, now: now)
         }
         let total = Int(army.reduce(0, +).rounded())
         let flag = CGPoint(x: centre.x + facing * 14 * unit, y: centre.y - 26 * unit)
@@ -455,93 +472,20 @@ fileprivate struct EmpireScene {
 
     // MARK: Drawing things
 
-    private func tree(_ g: GraphicsContext, _ p: CGPoint, _ r: CGFloat) {
-        g.fill(Path(ellipseIn: CGRect(x: p.x - r + r * 0.25, y: p.y - r + r * 0.3, width: 2 * r, height: 2 * r)), with: .color(.black.opacity(0.2)))
-        g.fill(Path(ellipseIn: CGRect(x: p.x - r, y: p.y - r, width: 2 * r, height: 2 * r)), with: .color(Color(red: 0.13, green: 0.38, blue: 0.16)))
-        g.fill(Path(ellipseIn: CGRect(x: p.x - r * 0.6, y: p.y - r * 0.65, width: r * 1.1, height: r * 1.1)), with: .color(Color(red: 0.22, green: 0.52, blue: 0.22)))
-    }
-
-    /// A building with walls and a pitched roof, seen a little from the front.
-    private func block(_ g: GraphicsContext, _ p: CGPoint, width: CGFloat, height: CGFloat, roof: Color, wall: Color) {
-        let body = CGRect(x: p.x - width / 2, y: p.y - height / 2, width: width, height: height)
-        g.fill(Path(roundedRect: body.offsetBy(dx: width * 0.08, dy: height * 0.12), cornerRadius: 2), with: .color(.black.opacity(0.25)))
-        g.fill(Path(roundedRect: body, cornerRadius: 2), with: .color(wall))
-        g.fill(Path { path in
-            path.move(to: CGPoint(x: body.minX - width * 0.08, y: body.minY + height * 0.1))
-            path.addLine(to: CGPoint(x: p.x, y: body.minY - height * 0.55))
-            path.addLine(to: CGPoint(x: body.maxX + width * 0.08, y: body.minY + height * 0.1))
-            path.closeSubpath()
-        }, with: .color(roof))
-        g.fill(Path(CGRect(x: p.x - width * 0.1, y: body.maxY - height * 0.45, width: width * 0.2, height: height * 0.45)), with: .color(Color(red: 0.3, green: 0.2, blue: 0.12)))
-    }
-
-    private func house(_ g: GraphicsContext, _ p: CGPoint, _ unit: CGFloat, _ roof: Color, _ wall: Color) {
-        block(g, p, width: 18 * unit, height: 13 * unit, roof: roof, wall: wall)
-    }
-
-    private func shed(_ g: GraphicsContext, _ p: CGPoint, _ unit: CGFloat, _ roof: Color, _ mark: String) {
-        block(g, p, width: 22 * unit, height: 13 * unit, roof: roof, wall: Color(red: 0.7, green: 0.55, blue: 0.35))
-        JevDraw.text(g, mark, at: CGPoint(x: p.x, y: p.y - 16 * unit), size: 10 * unit, shadow: false)
-    }
-
-    private func hall(_ g: GraphicsContext, _ p: CGPoint, _ unit: CGFloat, _ roof: Color, _ wall: Color, _ mark: String) {
-        block(g, p, width: 32 * unit, height: 18 * unit, roof: roof, wall: wall)
-        JevDraw.text(g, mark, at: CGPoint(x: p.x, y: p.y + 1 * unit), size: 11 * unit, shadow: false)
-    }
-
-    private func tower(_ g: GraphicsContext, _ p: CGPoint, _ unit: CGFloat, _ wall: Color, _ colour: Color) {
-        let body = CGRect(x: p.x - 7 * unit, y: p.y - 26 * unit, width: 14 * unit, height: 30 * unit)
-        g.fill(Path(roundedRect: body.offsetBy(dx: 3 * unit, dy: 3 * unit), cornerRadius: 2), with: .color(.black.opacity(0.25)))
-        g.fill(Path(roundedRect: body, cornerRadius: 2), with: .color(wall))
-        for k in 0..<3 { g.fill(Path(CGRect(x: body.minX + CGFloat(k) * 5 * unit, y: body.minY - 3 * unit, width: 3.5 * unit, height: 4 * unit)), with: .color(wall)) }
-        g.fill(Path(CGRect(x: p.x - 1.5 * unit, y: body.minY + 8 * unit, width: 3 * unit, height: 6 * unit)), with: .color(Color(white: 0.2)))
-        g.fill(Path(CGRect(x: p.x, y: body.minY - 14 * unit, width: 1.2 * unit, height: 11 * unit)), with: .color(Color(white: 0.3)))
-        g.fill(Path(CGRect(x: p.x + 1.2 * unit, y: body.minY - 14 * unit, width: 9 * unit, height: 6 * unit)), with: .color(colour))
-    }
-
-    private func townCentre(_ g: GraphicsContext, _ p: CGPoint, _ unit: CGFloat, _ roof: Color, _ wall: Color, _ colour: Color) {
-        block(g, p, width: 56 * unit, height: 30 * unit, roof: roof, wall: wall)
-        block(g, CGPoint(x: p.x, y: p.y - 22 * unit), width: 20 * unit, height: 16 * unit, roof: roof, wall: wall)
-        for side in [-1.0, 1.0] {
-            g.fill(Path(CGRect(x: p.x + CGFloat(side) * 16 * unit - 3 * unit, y: p.y - 6 * unit, width: 6 * unit, height: 7 * unit)), with: .color(Color(red: 0.25, green: 0.2, blue: 0.15)))
+    /// A field in rows, green or ripe, with a low fence in the team's colour.
+    private func field(_ g: inout GraphicsContext, _ r: CGRect, _ S: CGFloat, ripe: Bool, team: Art.RGB) {
+        let soil: Art.RGB = (0.5, 0.36, 0.22)
+        g.fill(Path(roundedRect: r, cornerRadius: S * 0.12), with: .color(Art.c(soil)))
+        for row in 0..<4 {
+            let y = r.minY + r.height * (CGFloat(row) + 0.5) / 4
+            g.stroke(Path { p in p.move(to: CGPoint(x: r.minX + S * 0.1, y: y)); p.addLine(to: CGPoint(x: r.maxX - S * 0.1, y: y)) }, with: .color(Art.c(Art.lit(soil, 0.72))), lineWidth: max(1, S * 0.07))
+            for k in 0..<8 {
+                let p = CGPoint(x: r.minX + S * 0.15 + (r.width - S * 0.3) * CGFloat(k) / 7, y: y)
+                let sway = CGFloat(sin(now * 1.6 + Double(k + row))) * S * 0.03
+                g.stroke(Path { path in path.move(to: p); path.addLine(to: CGPoint(x: p.x + sway, y: p.y - S * 0.26)) }, with: .color(Art.c(ripe ? (0.86, 0.72, 0.3) : (0.4, 0.66, 0.28))), lineWidth: max(0.9, S * 0.05))
+                if ripe { g.fill(Path(ellipseIn: CGRect(x: p.x + sway - S * 0.035, y: p.y - S * 0.33, width: S * 0.07, height: S * 0.11)), with: .color(Art.c((0.95, 0.8, 0.36)))) }
+            }
         }
-        g.fill(Path(CGRect(x: p.x, y: p.y - 58 * unit, width: 1.5 * unit, height: 22 * unit)), with: .color(Color(white: 0.25)))
-        let wave = CGFloat(sin(now * 4)) * 2 * unit
-        g.fill(Path { path in
-            path.move(to: CGPoint(x: p.x + 1.5 * unit, y: p.y - 58 * unit))
-            path.addLine(to: CGPoint(x: p.x + 18 * unit, y: p.y - 54 * unit + wave))
-            path.addLine(to: CGPoint(x: p.x + 1.5 * unit, y: p.y - 48 * unit))
-            path.closeSubpath()
-        }, with: .color(colour))
-    }
-
-    private func villager(_ g: GraphicsContext, _ p: CGPoint, _ unit: CGFloat, _ colour: Color, carrying: Color?) {
-        g.fill(Path(ellipseIn: CGRect(x: p.x - 3.5 * unit, y: p.y - 1 * unit, width: 7 * unit, height: 8 * unit)), with: .color(colour))
-        g.fill(Path(ellipseIn: CGRect(x: p.x - 2.5 * unit, y: p.y - 6 * unit, width: 5 * unit, height: 5 * unit)), with: .color(Color(red: 0.95, green: 0.8, blue: 0.65)))
-        if let carrying { g.fill(Path(ellipseIn: CGRect(x: p.x + 2 * unit, y: p.y - 2 * unit, width: 4.5 * unit, height: 4.5 * unit)), with: .color(carrying)) }
-    }
-
-    /// A spearman, an archer or a knight, from the side, facing +1 (right) or −1.
-    private func soldier(_ g: GraphicsContext, _ p: CGPoint, _ unit: CGFloat, _ kind: Int, _ colour: Color, facing: CGFloat) {
-        let skin = Color(red: 0.95, green: 0.8, blue: 0.65), steel = Color(white: 0.75)
-        if kind == 2 {
-            g.fill(Path(ellipseIn: CGRect(x: p.x - 8 * unit, y: p.y - 2 * unit, width: 16 * unit, height: 8 * unit)), with: .color(Color(red: 0.45, green: 0.3, blue: 0.18)))
-            g.fill(Path(ellipseIn: CGRect(x: p.x + facing * 6 * unit - 3 * unit, y: p.y - 6 * unit, width: 6 * unit, height: 6 * unit)), with: .color(Color(red: 0.45, green: 0.3, blue: 0.18)))
-            g.fill(Path(ellipseIn: CGRect(x: p.x - 3 * unit, y: p.y - 9 * unit, width: 6 * unit, height: 8 * unit)), with: .color(colour))
-            g.fill(Path(ellipseIn: CGRect(x: p.x - 2.2 * unit, y: p.y - 13 * unit, width: 4.4 * unit, height: 4.4 * unit)), with: .color(steel))
-            g.stroke(Path { path in path.move(to: CGPoint(x: p.x, y: p.y - 6 * unit)); path.addLine(to: CGPoint(x: p.x + facing * 13 * unit, y: p.y - 10 * unit)) },
-                     with: .color(Color(white: 0.85)), lineWidth: 1.2 * unit)
-            return
-        }
-        g.fill(Path(ellipseIn: CGRect(x: p.x - 3.5 * unit, y: p.y - 2 * unit, width: 7 * unit, height: 9 * unit)), with: .color(colour))
-        g.fill(Path(ellipseIn: CGRect(x: p.x - 2.5 * unit, y: p.y - 7 * unit, width: 5 * unit, height: 5 * unit)), with: .color(kind == 0 ? steel : skin))
-        if kind == 0 {
-            g.stroke(Path { path in path.move(to: CGPoint(x: p.x + facing * 4 * unit, y: p.y + 6 * unit)); path.addLine(to: CGPoint(x: p.x + facing * 5 * unit, y: p.y - 12 * unit)) },
-                     with: .color(Color(red: 0.5, green: 0.35, blue: 0.2)), lineWidth: 1.3 * unit)
-        } else {
-            g.stroke(Path { path in path.addArc(center: CGPoint(x: p.x + facing * 3 * unit, y: p.y), radius: 5 * unit,
-                                                startAngle: .degrees(facing > 0 ? -70 : 110), endAngle: .degrees(facing > 0 ? 70 : 250), clockwise: false) },
-                     with: .color(Color(red: 0.5, green: 0.32, blue: 0.15)), lineWidth: 1.3 * unit)
-        }
+        g.stroke(Path(roundedRect: r, cornerRadius: S * 0.12), with: .color(Art.c(team, 0.6)), lineWidth: max(1, S * 0.05))
     }
 }

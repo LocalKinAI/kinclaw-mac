@@ -599,6 +599,24 @@ enum PanelTools {
             "inputSchema": ["type": "object", "properties": [String: Any]()],
         ],
         [
+            "name": "city_play",
+            "description": "Run 放逐之城 in the Jev tab — a town that has to get through its winters (Banished-like): seasons, fields planted in spring and harvested in autumn, firewood for the cold months, houses, families, newcomers, tools. Choose the mayor (me: the user plays with the mouse; computer: the script; jev: TypeSafe's Jev picks which need comes first every few seconds of play; llm: a chat model does), the speed, or a new town. Shows the tab on the town and answers with how it stands. Games start paused unless a speed is given here.",
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "mayor": ["type": "string", "description": "me | computer | jev | llm. Omit to keep."],
+                    "model": ["type": "string", "description": "For llm: \"host|model\" or a model name; empty for the app's own pick."],
+                    "speed": ["type": "number", "description": "0 (pause), 1, 2, 4 or 8. A year is four minutes at 1×."],
+                    "restart": ["type": "boolean", "description": "true: a new town on a new map."],
+                ],
+            ],
+        ],
+        [
+            "name": "city_status",
+            "description": "How 放逐之城 stands, without touching it: year and month, the mayor, people, the stores, food made and eaten this past year, births, newcomers and deaths by cause, the buildings, the mayor's last decision.",
+            "inputSchema": ["type": "object", "properties": [String: Any]()],
+        ],
+        [
             "name": "comfy_templates",
             "description": "ComfyUI's ready-made workflows on the user's box (about 300 that run locally: text-to-image, image editing, video, audio, 3D…), plus the ones the user saved. Search by words in the title, model or tags — e.g. \"qwen\", \"视频\", \"H3\", \"背景\". Returns name, title, category, models and download size. Pass a name to comfy_run.",
             "inputSchema": [
@@ -1131,6 +1149,21 @@ enum PanelTools {
             let arcade = JevArcade.shared
             let state = arcade.running ? "正在玩" : arcade.game.over ? "这一局结束了" : arcade.moves > 0 ? "停着，没下完" : "还没开始"
             return (([state] + jevReport(arcade)).joined(separator: "\n"), false)
+        case "city_play":
+            let game = CityGame.shared
+            UserDefaults.standard.set("city", forKey: "kinclaw.jev.doing")
+            NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: ["mode": "jev", "raise": false])
+            if args["restart"] as? Bool == true { game.restart() }
+            if let raw = args["mayor"] as? String {
+                guard let seat = CitySeat(rawValue: raw) else { return ("mayor 只能是 me、computer、jev 或 llm", true) }
+                game.seat = seat
+            }
+            if let model = args["model"] as? String { game.model = model }
+            if let speed = (args["speed"] as? Double) ?? (args["speed"] as? Int).map(Double.init) { game.speed = [0, 1, 2, 4, 8].contains(speed) ? speed : 1 }
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            return (game.report, false)
+        case "city_status":
+            return (CityGame.shared.report, false)
         case "motion_find":
             guard let topic = (args["topic"] as? String)?.trimmingCharacters(in: .whitespaces), !topic.isEmpty else { return ("motion_find 需要 topic", true) }
             let finder = MotionFinder.shared

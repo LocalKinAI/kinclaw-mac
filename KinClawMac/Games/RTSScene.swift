@@ -1,122 +1,98 @@
 import SwiftUI
 
-/// The map of 帝国时代 at one moment, drawn from above: ground, trees, rocks
-/// and water, the buildings of both towns in the style of their age, every
-/// villager and soldier, arrows in the air, and what the player is doing with
-/// the mouse — the selection, a box being dragged, a building about to be put down.
+/// The map of 帝国时代 at one moment, from above at three-quarters: grass,
+/// woods, lakes with sandy shores, gold and stone and berry bushes; the two
+/// towns' buildings standing up in the style of their age — wood and thatch,
+/// then timber and shingles, then stone and slate — with their team's banners;
+/// villagers carrying what they gathered, spearmen, archers, knights on
+/// horseback; arrows in the air; and what the player is doing with the mouse.
 struct RTSScene {
     let world: RTSWorld
     /// The side whose view this is: whose rally point shows, whose age and stock a building being placed is judged by.
     let viewer: Int
     let selected: Set<Int>, building: Int?
     let placing: RTSBuildingKind?, hover: RTSTile?
+    /// The box being dragged, in tiles.
     let box: (CGPoint, CGPoint)?
     let now: Double
 
     static let team = [Color(red: 0.2, green: 0.45, blue: 0.98), Color(red: 0.9, green: 0.18, blue: 0.16)]
-    static let roofs = [Color(red: 0.55, green: 0.38, blue: 0.2), Color(red: 0.8, green: 0.32, blue: 0.2), Color(red: 0.3, green: 0.4, blue: 0.58)]
-    static let walls = [Color(red: 0.8, green: 0.66, blue: 0.46), Color(red: 0.9, green: 0.84, blue: 0.72), Color(red: 0.75, green: 0.75, blue: 0.77)]
+    static let teamRGB: [Art.RGB] = [(0.22, 0.44, 0.92), (0.86, 0.2, 0.18)]
+    /// Summer all game long.
+    static let season = Art.Season(month: 4.2)
 
-    func paint(_ g: inout GraphicsContext, tile T: CGFloat) {
-        let width = CGFloat(RTSWorld.width) * T, height = CGFloat(RTSWorld.height) * T
-        func rect(_ x: Int, _ y: Int, _ w: Int = 1, _ h: Int = 1) -> CGRect { CGRect(x: CGFloat(x) * T, y: CGFloat(y) * T, width: CGFloat(w) * T, height: CGFloat(h) * T) }
+    func paint(_ g: inout GraphicsContext, tile S: CGFloat, view: CGRect) {
+        let W = RTSWorld.width, H = RTSWorld.height
+        let season = Self.season
+        let near = view.insetBy(dx: -2, dy: -2)
+        let x0 = max(0, Int(near.minX)), x1 = min(W - 1, Int(near.maxX)), y0 = max(0, Int(near.minY)), y1 = min(H - 1, Int(near.maxY))
+        func rect(_ x: Int, _ y: Int, _ n: Int = 1) -> CGRect { CGRect(x: CGFloat(x) * S, y: CGFloat(y) * S, width: CGFloat(n) * S, height: CGFloat(n) * S) }
 
-        // Ground.
-        g.fill(Path(CGRect(x: 0, y: 0, width: width, height: height)), with: .color(Color(red: 0.42, green: 0.64, blue: 0.3)))
-        for patch in 0..<140 {
-            let x = CGFloat(JevDraw.hash(patch, 5) % 1000) / 1000 * width, y = CGFloat(JevDraw.hash(patch, 6) % 1000) / 1000 * height
-            let r = T * CGFloat(0.6 + Double(JevDraw.hash(patch, 7) % 100) / 60)
-            g.fill(Path(ellipseIn: CGRect(x: x - r, y: y - r * 0.7, width: 2 * r, height: 1.4 * r)),
-                   with: .color((patch % 2 == 0 ? Color(red: 0.36, green: 0.58, blue: 0.25) : Color(red: 0.5, green: 0.72, blue: 0.35)).opacity(0.4)))
-        }
-        // Water, then everything growing or lying on the ground.
-        for y in 0..<RTSWorld.height {
-            for x in 0..<RTSWorld.width where world.terrain[y * RTSWorld.width + x] == .water {
-                g.fill(Path(rect(x, y).insetBy(dx: -0.5, dy: -0.5)), with: .color(Color(red: 0.2, green: 0.46, blue: 0.78)))
-                if (x * 7 + y * 3) % 5 == 0 {
-                    let wave = CGFloat(sin(now * 1.5 + Double(x + y))) * T * 0.15
-                    g.stroke(Path { p in
-                        p.move(to: CGPoint(x: CGFloat(x) * T + T * 0.2 + wave, y: CGFloat(y) * T + T * 0.5))
-                        p.addLine(to: CGPoint(x: CGFloat(x) * T + T * 0.7 + wave, y: CGFloat(y) * T + T * 0.5))
-                    }, with: .color(.white.opacity(0.35)), lineWidth: 1.2)
-                }
+        Art.ground(&g, size: CGSize(width: CGFloat(W) * S, height: CGFloat(H) * S), S: S, season: season, visible: view, tiles: CGSize(width: W, height: H))
+        var woods: [(Int, Int)] = [], waters: [(Int, Int, Int)] = []
+        for y in y0...y1 { for x in x0...x1 {
+            switch world.terrain[y * W + x] {
+            case .forest: woods.append((x, y))
+            case .water: waters.append((x, y, depth(x, y)))
+            default: break
             }
-        }
-        for y in 0..<RTSWorld.height {
-            for x in 0..<RTSWorld.width {
-                let i = y * RTSWorld.width + x, c = CGPoint(x: (CGFloat(x) + 0.5) * T, y: (CGFloat(y) + 0.5) * T)
-                switch world.terrain[i] {
-                case .forest:
-                    let r = T * CGFloat(0.42 + 0.2 * min(world.amount[i], 100) / 100)
-                    disc(g, CGPoint(x: c.x + T * 0.12, y: c.y + T * 0.16), r, .black.opacity(0.22))
-                    disc(g, c, r, Color(red: 0.12, green: 0.36 + 0.04 * Double(JevDraw.hash(x, y) % 3), blue: 0.15))
-                    disc(g, CGPoint(x: c.x - r * 0.3, y: c.y - r * 0.32), r * 0.55, Color(red: 0.22, green: 0.5, blue: 0.22))
-                case .gold, .stone:
-                    let gold = world.terrain[i] == .gold, left = CGFloat(min(world.amount[i] / (gold ? 400 : 350), 1))
-                    let r = T * (0.25 + 0.2 * left)
-                    disc(g, CGPoint(x: c.x + 2, y: c.y + 3), r, .black.opacity(0.25))
-                    disc(g, c, r, gold ? Color(red: 0.55, green: 0.48, blue: 0.35) : Color(white: 0.55))
-                    for k in 0..<3 {
-                        let a = Double(k) * 2.1 + Double(x)
-                        disc(g, CGPoint(x: c.x + CGFloat(cos(a)) * r * 0.45, y: c.y + CGFloat(sin(a)) * r * 0.45), r * 0.28,
-                             gold ? Color(red: 1, green: 0.84, blue: 0.2) : Color(white: 0.78))
-                    }
-                case .berries:
-                    disc(g, c, T * 0.4, Color(red: 0.18, green: 0.42, blue: 0.2))
-                    for k in 0..<4 where world.amount[i] > Double(k) * 30 {
-                        disc(g, CGPoint(x: c.x + CGFloat(k % 2) * T * 0.3 - T * 0.15, y: c.y + CGFloat(k / 2) * T * 0.3 - T * 0.15), T * 0.09, Color(red: 0.88, green: 0.12, blue: 0.22))
-                    }
-                default: break
-                }
-            }
+        } }
+        Art.forestFloor(&g, woods, S: S, season: season)
+        Art.water(&g, tiles: waters, S: S, season: season, now: now)
+        for b in world.buildings where b.kind == .farm { farm(&g, b, rect(b.x, b.y, 3), S) }
+        for b in world.buildings where b.kind != .farm {
+            Art.plot(&g, rect(b.x, b.y, RTSWorld.size(b.kind)), S: S, season: season)
         }
 
-        // Buildings: fields flat on the ground first, then the rest from the back.
+        // Standing things, back to front.
+        enum Thing { case tree(Int, Int), deposit(Int, Int), building(RTSBuilding), unit(RTSUnit) }
+        var things: [(CGFloat, Thing)] = []
+        for (x, y) in woods { things.append((CGFloat(y) + 0.82, .tree(x, y))) }
+        for y in y0...y1 { for x in x0...x1 where [.gold, .stone, .berries].contains(world.terrain[y * W + x]) { things.append((CGFloat(y) + 0.75, .deposit(x, y))) } }
+        for b in world.buildings where b.kind != .farm { things.append((CGFloat(b.y + RTSWorld.size(b.kind)) - 0.15, .building(b))) }
+        for u in world.units where near.contains(CGPoint(x: u.x, y: u.y)) { things.append((CGFloat(u.y), .unit(u))) }
+        things.sort { $0.0 < $1.0 }
         let recentHits = Set(world.events.filter { $0.kind == .attacked && world.time - $0.time < 0.25 }.map { Int($0.x) * 1000 + Int($0.y) })
-        for b in world.buildings.sorted(by: { ($0.kind == .farm ? 0 : 1, $0.y) < ($1.kind == .farm ? 0 : 1, $1.y) }) {
-            let n = RTSWorld.size(b.kind), area = rect(b.x, b.y, n, n)
-            let age = world.players[b.owner].age
-            if !b.done {
-                // A foundation: the outline, scaffolding, and as much as is built.
-                g.stroke(Path(roundedRect: area.insetBy(dx: 2, dy: 2), cornerRadius: 3), with: .color(Color(red: 0.45, green: 0.32, blue: 0.18)), style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
-                var partial = g
-                partial.opacity = 0.35 + 0.6 * b.progress
-                draw(partial, b.kind, area, age: age, owner: b.owner)
-                for k in 0..<3 {
-                    let x = area.minX + area.width * CGFloat(k + 1) / 4
-                    g.stroke(Path { p in p.move(to: CGPoint(x: x, y: area.minY + 3)); p.addLine(to: CGPoint(x: x, y: area.maxY - 3)) },
-                             with: .color(Color(red: 0.5, green: 0.36, blue: 0.2)), lineWidth: 1.4)
+        for (_, thing) in things {
+            switch thing {
+            case .tree(let x, let y):
+                let h = Art.hash(x, y)
+                let foot = CGPoint(x: (CGFloat(x) + 0.5 + CGFloat(h % 9 - 4) * 0.035) * S, y: (CGFloat(y) + 0.82) * S)
+                Art.tree(&g, foot: foot, S: S, grown: 0.45 + 0.55 * min(1, world.amount[y * W + x] / 100), variant: h, season: season, conifer: h % 10 < 5, now: now)
+            case .deposit(let x, let y):
+                let i = y * W + x
+                let kind: Art.Deposit = world.terrain[i] == .gold ? .gold : world.terrain[i] == .stone ? .stone : .berries
+                let full: Double = kind == .gold ? 400 : kind == .stone ? 350 : 125
+                Art.deposit(&g, kind, centre: CGPoint(x: (CGFloat(x) + 0.5) * S, y: (CGFloat(y) + 0.6) * S), S: S, left: world.amount[i] / full, variant: Art.hash(x, y), season: season)
+            case .building(let b):
+                structure(&g, b, S)
+                let area = rect(b.x, b.y, RTSWorld.size(b.kind))
+                if recentHits.contains(b.x * 1000 + b.y) || recentHits.contains((b.x + 1) * 1000 + b.y + 1) {
+                    g.fill(Path(roundedRect: area, cornerRadius: S * 0.2), with: .color(Color.red.opacity(0.22)))
                 }
-                bar(g, area, b.progress, Color(red: 0.95, green: 0.75, blue: 0.2))
-            } else {
-                draw(g, b.kind, area, age: age, owner: b.owner, farmed: b.farmer != nil)
-                if b.hp < RTSWorld.health(b.kind) - 1 || b.id == building { bar(g, area, b.hp / RTSWorld.health(b.kind), b.owner == viewer ? .green : .red) }
-            }
-            if recentHits.contains(b.x * 1000 + b.y) || recentHits.contains((b.x + 1) * 1000 + b.y + 1) {
-                g.fill(Path(roundedRect: area, cornerRadius: 4), with: .color(Color.red.opacity(0.25)))
-            }
-            if b.id == building {
-                g.stroke(Path(roundedRect: area.insetBy(dx: -2, dy: -2), cornerRadius: 5), with: .color(.yellow), lineWidth: 2)
-                if let rally = b.rally {
-                    let to = CGPoint(x: (CGFloat(rally.x) + 0.5) * T, y: (CGFloat(rally.y) + 0.5) * T)
-                    g.stroke(Path { p in p.move(to: CGPoint(x: area.midX, y: area.midY)); p.addLine(to: to) }, with: .color(.white.opacity(0.6)), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
-                    flag(g, to, T, Self.team[b.owner])
+                if b.done, b.hp < RTSWorld.health(b.kind) - 1 || b.id == building {
+                    Art.bar(&g, CGRect(x: area.minX + S * 0.2, y: area.minY - S * 0.9, width: area.width - S * 0.4, height: max(3, S * 0.1)), b.hp / RTSWorld.health(b.kind), colour: b.owner == viewer ? .green : .red)
+                }
+                if b.done, b.hp < RTSWorld.health(b.kind) * 0.5 { fire(&g, CGPoint(x: area.midX, y: area.minY + S * 0.3), S, seed: b.id) }
+            case .unit(let u):
+                let p = CGPoint(x: CGFloat(u.x) * S, y: CGFloat(u.y) * S)
+                if selected.contains(u.id) {
+                    g.stroke(Path(ellipseIn: CGRect(x: p.x - S * 0.4, y: p.y - S * 0.12, width: S * 0.8, height: S * 0.3)), with: .color(.green), lineWidth: 1.6)
+                }
+                unit(&g, u, p, S)
+                if selected.contains(u.id) || u.hp < RTSWorld.unitHP(u.kind) - 0.5 {
+                    Art.bar(&g, CGRect(x: p.x - S * 0.35, y: p.y - S * (u.kind == .knight ? 1.3 : 1.0), width: S * 0.7, height: max(2.5, S * 0.08)), u.hp / RTSWorld.unitHP(u.kind), colour: u.owner == viewer ? .green : .red)
                 }
             }
         }
-
-        // People, from the back.
-        for u in world.units.sorted(by: { $0.y < $1.y }) {
-            let p = CGPoint(x: CGFloat(u.x) * T, y: CGFloat(u.y) * T)
-            if selected.contains(u.id) {
-                g.stroke(Path(ellipseIn: CGRect(x: p.x - T * 0.42, y: p.y - T * 0.05, width: T * 0.84, height: T * 0.4)), with: .color(.green), lineWidth: 1.6)
-            }
-            person(g, u, p, T)
-            if selected.contains(u.id) || u.hp < RTSWorld.unitHP(u.kind) - 0.5 {
-                let bar = CGRect(x: p.x - T * 0.35, y: p.y - T * 0.75, width: T * 0.7, height: 3)
-                g.fill(Path(bar), with: .color(.black.opacity(0.5)))
-                g.fill(Path(CGRect(x: bar.minX, y: bar.minY, width: bar.width * CGFloat(max(u.hp, 0) / RTSWorld.unitHP(u.kind)), height: bar.height)),
-                       with: .color(u.owner == viewer ? .green : .red))
+        // The selected building: its outline and its rally point.
+        if let id = building, let b = world.building(id) {
+            let area = rect(b.x, b.y, RTSWorld.size(b.kind))
+            g.stroke(Path(roundedRect: area.insetBy(dx: -2, dy: -2), cornerRadius: S * 0.2), with: .color(.yellow), lineWidth: 2)
+            if let rally = b.rally {
+                let to = CGPoint(x: (CGFloat(rally.x) + 0.5) * S, y: (CGFloat(rally.y) + 0.5) * S)
+                g.stroke(Path { p in p.move(to: CGPoint(x: area.midX, y: area.midY)); p.addLine(to: to) }, with: .color(.white.opacity(0.6)), style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                Art.banner(&g, to, S * 0.8, Self.teamRGB[b.owner], now: now)
             }
         }
 
@@ -127,159 +103,153 @@ struct RTSScene {
             case .arrow(let from, let to):
                 guard age < 0.35 else { continue }
                 let f = CGFloat(age / 0.35)
-                let a = CGPoint(x: (CGFloat(from.x) + 0.5) * T, y: (CGFloat(from.y) + 0.5) * T), b = CGPoint(x: (CGFloat(to.x) + 0.5) * T, y: (CGFloat(to.y) + 0.5) * T)
-                let head = CGPoint(x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f - sin(f * .pi) * T * 0.8)
-                let tail = CGPoint(x: head.x - (b.x - a.x) * 0.08, y: head.y - (b.y - a.y) * 0.08)
-                g.stroke(Path { p in p.move(to: tail); p.addLine(to: head) }, with: .color(Color(red: 0.35, green: 0.25, blue: 0.1)), lineWidth: 1.5)
+                let a = CGPoint(x: (CGFloat(from.x) + 0.5) * S, y: (CGFloat(from.y) + 0.5) * S), b = CGPoint(x: (CGFloat(to.x) + 0.5) * S, y: (CGFloat(to.y) + 0.5) * S)
+                let head = CGPoint(x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f - sin(f * .pi) * S * 0.9)
+                let tail = CGPoint(x: head.x - (b.x - a.x) * 0.09, y: head.y - (b.y - a.y) * 0.09 + S * 0.05)
+                g.stroke(Path { p in p.move(to: tail); p.addLine(to: head) }, with: .color(Art.c((0.3, 0.22, 0.12))), lineWidth: max(1, S * 0.05))
             case .hit:
                 guard age < 0.25 else { continue }
-                let p = CGPoint(x: CGFloat(e.x) * T, y: CGFloat(e.y) * T - T * 0.3)
-                for k in 0..<5 {
-                    let a = Double(k) * 1.26
-                    g.stroke(Path { path in path.move(to: p); path.addLine(to: CGPoint(x: p.x + CGFloat(cos(a)) * T * 0.3, y: p.y + CGFloat(sin(a)) * T * 0.3)) },
-                             with: .color(Color.yellow.opacity(1 - age / 0.25)), lineWidth: 1.5)
+                let p = CGPoint(x: CGFloat(e.x) * S, y: CGFloat(e.y) * S - S * 0.4)
+                for k in 0..<6 {
+                    let a = Double(k) * 1.05
+                    g.stroke(Path { path in path.move(to: p); path.addLine(to: CGPoint(x: p.x + CGFloat(cos(a)) * S * 0.3, y: p.y + CGFloat(sin(a)) * S * 0.3)) },
+                             with: .color(Color.yellow.opacity(1 - age / 0.25)), lineWidth: max(1, S * 0.05))
                 }
             case .death:
                 guard age < 1.5 else { continue }
-                JevDraw.text(g, "✕", at: CGPoint(x: CGFloat(e.x) * T, y: CGFloat(e.y) * T - CGFloat(age) * T * 0.4), size: T * 0.6,
-                             colour: Self.team[e.owner].opacity(1 - age / 1.5), shadow: false)
+                JevDraw.text(g, "✕", at: CGPoint(x: CGFloat(e.x) * S, y: CGFloat(e.y) * S - CGFloat(age) * S * 0.4), size: S * 0.55, colour: Self.team[e.owner].opacity(1 - age / 1.5), shadow: false)
             case .age(let n):
                 guard age < 2.5 else { continue }
-                JevDraw.text(g, RTSWorld.ageNames[n] + "！", at: CGPoint(x: CGFloat(e.x) * T, y: CGFloat(e.y) * T - T * (1.8 + CGFloat(age) * 0.5)), size: T * 0.8,
-                             colour: Color.yellow.opacity(1 - age / 2.5))
+                JevDraw.text(g, RTSWorld.ageNames[n] + "！", at: CGPoint(x: CGFloat(e.x) * S, y: CGFloat(e.y) * S - S * (2.2 + CGFloat(age) * 0.5)), size: max(14, S * 0.75), colour: Color.yellow.opacity(1 - age / 2.5))
             case .finished:
-                guard age < 0.8 else { continue }
-                JevDraw.text(g, "✨", at: CGPoint(x: CGFloat(e.x) * T, y: CGFloat(e.y) * T - T), size: T * 0.8, shadow: false)
-            case .attacked:
-                break
+                guard age < 1.2 else { continue }
+                for k in 0..<8 {
+                    let a = Double(k) * 0.785 + age * 2, r = S * CGFloat(0.8 + age)
+                    JevDraw.text(g, "✦", at: CGPoint(x: CGFloat(e.x) * S + CGFloat(cos(a)) * r, y: CGFloat(e.y) * S - S * 0.5 + CGFloat(sin(a)) * r * 0.7), size: S * 0.35, colour: Color.yellow.opacity(1 - age / 1.2), shadow: false)
+                }
+            case .attacked: break
             }
         }
 
-        // A building about to be put down: where it would go, green if it fits.
+        // A building about to be put down: the building itself, faint, and green or red.
         if let kind = placing, let hover {
             let n = RTSWorld.size(kind), origin = RTSTile(x: hover.x - (n - 1) / 2, y: hover.y - (n - 1) / 2)
             let fits = world.fits(kind, at: origin) && world.afford(RTSWorld.cost(kind), viewer)
-            let area = rect(origin.x, origin.y, n, n)
+            let area = rect(origin.x, origin.y, n)
             var ghost = g
             ghost.opacity = 0.55
-            draw(ghost, kind, area, age: world.players[viewer].age, owner: viewer)
-            g.fill(Path(roundedRect: area, cornerRadius: 3), with: .color((fits ? Color.green : Color.red).opacity(0.3)))
-            g.stroke(Path(roundedRect: area, cornerRadius: 3), with: .color(fits ? .green : .red), lineWidth: 2)
+            let probe = RTSBuilding(id: -1, owner: viewer, kind: kind, x: origin.x, y: origin.y, hp: 1, progress: 1)
+            if kind == .farm { farm(&ghost, probe, area, S) } else { structure(&ghost, probe, S) }
+            g.fill(Path(roundedRect: area, cornerRadius: S * 0.2), with: .color((fits ? Color.green : Color.red).opacity(0.25)))
+            g.stroke(Path(roundedRect: area, cornerRadius: S * 0.2), with: .color(fits ? .green : .red), lineWidth: 2)
         }
         if let box {
-            let r = CGRect(x: min(box.0.x, box.1.x), y: min(box.0.y, box.1.y), width: abs(box.1.x - box.0.x), height: abs(box.1.y - box.0.y))
+            let r = CGRect(x: min(box.0.x, box.1.x) * S, y: min(box.0.y, box.1.y) * S, width: abs(box.1.x - box.0.x) * S, height: abs(box.1.y - box.0.y) * S)
             g.fill(Path(r), with: .color(Color.green.opacity(0.12)))
             g.stroke(Path(r), with: .color(.green), lineWidth: 1)
         }
     }
 
-    // MARK: Pieces
-
-    private func disc(_ g: GraphicsContext, _ c: CGPoint, _ r: CGFloat, _ colour: Color) {
-        g.fill(Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r)), with: .color(colour))
+    private func depth(_ x: Int, _ y: Int) -> Int {
+        for d in 1...3 {
+            for dy in -d...d { for dx in -d...d where abs(dx) == d || abs(dy) == d {
+                let t = RTSTile(x: x + dx, y: y + dy)
+                if RTSWorld.inside(t), world.terrain[RTSWorld.index(t)] != .water { return d }
+            } }
+        }
+        return 4
     }
 
-    private func bar(_ g: GraphicsContext, _ area: CGRect, _ fraction: Double, _ colour: Color) {
-        let r = CGRect(x: area.minX + 3, y: area.minY - 6, width: area.width - 6, height: 4)
-        g.fill(Path(roundedRect: r, cornerRadius: 2), with: .color(.black.opacity(0.5)))
-        g.fill(Path(roundedRect: CGRect(x: r.minX, y: r.minY, width: r.width * CGFloat(max(0, min(fraction, 1))), height: r.height), cornerRadius: 2), with: .color(colour))
+    // MARK: Buildings
+
+    private func fire(_ g: inout GraphicsContext, _ at: CGPoint, _ S: CGFloat, seed: Int) {
+        for k in 0..<4 {
+            let t = (now * 1.2 + Double(k) * 0.25 + Double(seed % 7) / 7).truncatingRemainder(dividingBy: 1)
+            let p = CGPoint(x: at.x + CGFloat(sin(Double(k) * 2.1)) * S * 0.3, y: at.y - CGFloat(t) * S * 0.8)
+            let r = S * CGFloat(0.12 + 0.12 * (1 - t))
+            g.fill(Path(ellipseIn: CGRect(x: p.x - r, y: p.y - r * 1.3, width: 2 * r, height: 2.6 * r)), with: .color(Color(red: 1, green: 0.5 + 0.3 * (1 - t), blue: 0.1).opacity(0.8 * (1 - t))))
+            g.fill(Path(ellipseIn: CGRect(x: p.x - r * 1.3, y: p.y - S * 0.6 - r, width: 2.6 * r, height: 2.6 * r)), with: .color(Color(white: 0.3).opacity(0.35 * (1 - t))))
+        }
     }
 
-    private func flag(_ g: GraphicsContext, _ at: CGPoint, _ T: CGFloat, _ colour: Color) {
-        g.fill(Path(CGRect(x: at.x, y: at.y - T * 0.8, width: 1.4, height: T * 0.8)), with: .color(Color(white: 0.25)))
-        let wave = CGFloat(sin(now * 5)) * T * 0.05
-        g.fill(Path { p in p.move(to: CGPoint(x: at.x + 1.4, y: at.y - T * 0.8)); p.addLine(to: CGPoint(x: at.x + T * 0.5, y: at.y - T * 0.66 + wave)); p.addLine(to: CGPoint(x: at.x + 1.4, y: at.y - T * 0.52)); p.closeSubpath() },
-               with: .color(colour))
-    }
-
-    /// A wall and a roof in an area, the style of the owner's age.
-    private func block(_ g: GraphicsContext, _ area: CGRect, age: Int, inset: CGFloat = 0.12) {
-        let body = CGRect(x: area.minX + area.width * inset, y: area.minY + area.height * 0.34, width: area.width * (1 - 2 * inset), height: area.height * 0.58)
-        g.fill(Path(roundedRect: body.offsetBy(dx: 3, dy: 4), cornerRadius: 2), with: .color(.black.opacity(0.25)))
-        g.fill(Path(roundedRect: body, cornerRadius: 2), with: .color(Self.walls[age]))
-        g.fill(Path { p in
-            p.move(to: CGPoint(x: body.minX - area.width * 0.05, y: body.minY + 2))
-            p.addLine(to: CGPoint(x: body.midX, y: area.minY + area.height * 0.06))
-            p.addLine(to: CGPoint(x: body.maxX + area.width * 0.05, y: body.minY + 2))
-            p.closeSubpath()
-        }, with: .color(Self.roofs[age]))
-        g.fill(Path(CGRect(x: body.midX - body.width * 0.1, y: body.maxY - body.height * 0.45, width: body.width * 0.2, height: body.height * 0.45)), with: .color(Color(red: 0.3, green: 0.2, blue: 0.12)))
-    }
-
-    private func draw(_ g: GraphicsContext, _ kind: RTSBuildingKind, _ area: CGRect, age: Int, owner: Int, farmed: Bool = false) {
-        let T = area.width / CGFloat(RTSWorld.size(kind)), colour = Self.team[owner]
-        switch kind {
-        case .farm:
-            g.fill(Path(roundedRect: area.insetBy(dx: 1.5, dy: 1.5), cornerRadius: 3), with: .color(Color(red: 0.55, green: 0.4, blue: 0.22)))
-            for row in 0..<6 {
-                g.fill(Path(CGRect(x: area.minX + 4, y: area.minY + 4 + CGFloat(row) * (area.height - 8) / 6, width: area.width - 8, height: (area.height - 8) / 12)),
-                       with: .color(farmed ? Color(red: 0.55, green: 0.78, blue: 0.3) : Color(red: 0.42, green: 0.3, blue: 0.16)))
+    private func farm(_ g: inout GraphicsContext, _ b: RTSBuilding, _ area: CGRect, _ S: CGFloat) {
+        let inner = area.insetBy(dx: S * 0.08, dy: S * 0.08)
+        let soil: Art.RGB = (0.5, 0.36, 0.22)
+        g.fill(Path(roundedRect: inner, cornerRadius: S * 0.12), with: .color(Art.c(soil, b.done ? 1 : 0.4 + 0.6 * b.progress)))
+        for row in 0..<9 {
+            let y = inner.minY + inner.height * (CGFloat(row) + 0.5) / 9
+            g.stroke(Path { p in p.move(to: CGPoint(x: inner.minX + S * 0.1, y: y)); p.addLine(to: CGPoint(x: inner.maxX - S * 0.1, y: y)) }, with: .color(Art.c(Art.lit(soil, 0.72))), lineWidth: max(1, S * 0.07))
+            guard b.done, b.farmer != nil else { continue }
+            for k in 0..<10 {
+                let p = CGPoint(x: inner.minX + S * 0.15 + (inner.width - S * 0.3) * CGFloat(k) / 9, y: y)
+                let sway = CGFloat(sin(now * 1.6 + Double(k + row))) * S * 0.03
+                g.stroke(Path { path in path.move(to: p); path.addLine(to: CGPoint(x: p.x + sway, y: p.y - S * 0.24)) }, with: .color(Art.c((0.62, 0.72, 0.3))), lineWidth: max(0.9, S * 0.04))
+                g.fill(Path(ellipseIn: CGRect(x: p.x + sway - S * 0.03, y: p.y - S * 0.3, width: S * 0.06, height: S * 0.1)), with: .color(Art.c((0.9, 0.78, 0.34))))
             }
-            g.stroke(Path(roundedRect: area.insetBy(dx: 1.5, dy: 1.5), cornerRadius: 3), with: .color(colour.opacity(0.6)), lineWidth: 1)
-        case .tower:
-            let body = CGRect(x: area.minX + T * 0.2, y: area.minY - T * 0.4, width: T * 0.6, height: T * 1.3)
-            g.fill(Path(roundedRect: body.offsetBy(dx: 3, dy: 3), cornerRadius: 2), with: .color(.black.opacity(0.25)))
-            g.fill(Path(roundedRect: body, cornerRadius: 2), with: .color(Self.walls[max(age, 1)]))
-            for k in 0..<3 { g.fill(Path(CGRect(x: body.minX + CGFloat(k) * body.width * 0.38, y: body.minY - T * 0.12, width: body.width * 0.24, height: T * 0.16)), with: .color(Self.walls[max(age, 1)])) }
-            flag(g, CGPoint(x: body.midX, y: body.minY - T * 0.1), T * 0.8, colour)
-        case .townCenter:
-            block(g, area, age: age, inset: 0.06)
-            block(g, CGRect(x: area.midX - T * 0.6, y: area.minY - T * 0.55, width: T * 1.2, height: T * 1.3), age: age, inset: 0.1)
-            flag(g, CGPoint(x: area.midX, y: area.minY - T * 0.45), T * 1.3, colour)
+        }
+        g.stroke(Path(roundedRect: inner, cornerRadius: S * 0.12), with: .color(Art.c(Self.teamRGB[b.owner], 0.7)), lineWidth: max(1, S * 0.05))
+        if !b.done { Art.bar(&g, CGRect(x: area.minX + S * 0.2, y: area.minY - S * 0.2, width: area.width - S * 0.4, height: max(3, S * 0.1)), b.progress, colour: Color(red: 0.98, green: 0.78, blue: 0.2)) }
+    }
+
+    /// A building standing on its plot, in the style of its owner's age.
+    private func structure(_ g: inout GraphicsContext, _ b: RTSBuilding, _ S: CGFloat) {
+        let n = CGFloat(RTSWorld.size(b.kind))
+        let F = CGRect(x: CGFloat(b.x) * S, y: CGFloat(b.y) * S, width: n * S, height: n * S)
+        let age = world.players[b.owner].age, colour = Self.teamRGB[b.owner]
+        let wall: Art.Wall = age == 0 ? .logs : age == 1 ? .plaster : .stone
+        let roof: Art.Roof = age == 0 ? .thatch : age == 1 ? .shingles : .slate
+        let roofColour: Art.RGB = age == 0 ? (0.8, 0.66, 0.36) : age == 1 ? (0.68, 0.3, 0.2) : (0.36, 0.4, 0.5)
+        var draw = g
+        if !b.done { draw.opacity = 0.25 + 0.65 * b.progress }
+        switch b.kind {
+        case .tower: Art.tower(&draw, F, S: S, team: colour, snow: 0, now: now)
+        case .townCenter: Art.keep(&draw, F, S: S, wall: wall, roof: roof, roofColour: roofColour, team: colour, snow: 0, glow: false, now: now)
+        case .house: Art.house(&draw, F, S: S, wall: wall, roof: roof, roofColour: roofColour, trim: colour, snow: 0, glow: false, smoke: b.done && b.id % 3 == 0, now: now, seed: b.id)
         case .mill:
-            block(g, area, age: age)
-            let hub = CGPoint(x: area.midX, y: area.minY + area.height * 0.42)
+            Art.house(&draw, F, S: S, wall: wall, roof: roof, roofColour: roofColour, trim: colour, snow: 0, glow: false, smoke: false, now: now, seed: b.id)
+            let f = Art.Frame(F, S: S, tall: false)
+            let hub = CGPoint(x: f.wall.midX, y: f.wall.minY - S * 0.3)
             for k in 0..<4 {
-                let a = now * 1.6 + Double(k) * .pi / 2
-                g.stroke(Path { p in p.move(to: hub); p.addLine(to: CGPoint(x: hub.x + CGFloat(cos(a)) * T * 0.9, y: hub.y + CGFloat(sin(a)) * T * 0.9)) },
-                         with: .color(Color(red: 0.95, green: 0.92, blue: 0.85)), lineWidth: T * 0.12)
+                let a = now * 1.4 + Double(k) * .pi / 2
+                let tip = CGPoint(x: hub.x + CGFloat(cos(a)) * S * 0.95, y: hub.y + CGFloat(sin(a)) * S * 0.95)
+                draw.stroke(Path { p in p.move(to: hub); p.addLine(to: tip) }, with: .color(Art.c((0.45, 0.32, 0.2))), lineWidth: max(1, S * 0.05))
+                let side = CGPoint(x: CGFloat(-sin(a)) * S * 0.14, y: CGFloat(cos(a)) * S * 0.14)
+                draw.fill(Path { p in
+                    p.move(to: CGPoint(x: hub.x + (tip.x - hub.x) * 0.25, y: hub.y + (tip.y - hub.y) * 0.25)); p.addLine(to: tip)
+                    p.addLine(to: CGPoint(x: tip.x + side.x, y: tip.y + side.y)); p.addLine(to: CGPoint(x: hub.x + (tip.x - hub.x) * 0.25 + side.x, y: hub.y + (tip.y - hub.y) * 0.25 + side.y)); p.closeSubpath()
+                }, with: .color(Art.c((0.94, 0.9, 0.8))))
             }
-            disc(g, hub, T * 0.1, Color(red: 0.35, green: 0.25, blue: 0.15))
-        default:
-            block(g, area, age: age)
-            let mark: String? = [RTSBuildingKind.lumberCamp: "🪓", .miningCamp: "⛏", .barracks: "⚔️", .range: "🎯", .stable: "🐴"][kind]
-            if let mark { JevDraw.text(g, mark, at: CGPoint(x: area.midX, y: area.minY + area.height * 0.7), size: T * 0.62, shadow: false) }
-            if [.barracks, .range, .stable].contains(kind) { flag(g, CGPoint(x: area.maxX - T * 0.35, y: area.minY + T * 0.5), T, colour) }
-            if kind == .lumberCamp {
-                for k in 0..<3 { g.fill(Path(roundedRect: CGRect(x: area.minX + T * 0.2, y: area.maxY - T * (0.3 + CGFloat(k) * 0.14), width: T * 0.7, height: T * 0.12), cornerRadius: 2), with: .color(Color(red: 0.5, green: 0.32, blue: 0.15))) }
+            draw.fill(Path(ellipseIn: CGRect(x: hub.x - S * 0.08, y: hub.y - S * 0.08, width: S * 0.16, height: S * 0.16)), with: .color(Art.c((0.35, 0.25, 0.15))))
+        case .lumberCamp: Art.shed(&draw, F, S: S, pile: .logs, team: colour, snow: 0, now: now)
+        case .miningCamp: Art.shed(&draw, F, S: S, pile: .gold, team: colour, snow: 0, now: now)
+        case .barracks, .range, .stable:
+            Art.hall(&draw, F, S: S, wall: wall, roof: roof, roofColour: roofColour, team: colour, yard: b.kind == .barracks ? .weapons : b.kind == .range ? .target : .hay, snow: 0, now: now)
+        case .farm: break
+        }
+        if !b.done {
+            if b.kind == .tower { Art.scaffold(&g, CGRect(x: F.minX + S * 0.14, y: F.maxY - S * 1.9, width: S * 0.72, height: S * 1.8), S: S * 0.7, progress: b.progress, brought: 1) }
+            else {
+                let f = Art.Frame(F, S: S, tall: n >= 3)
+                Art.scaffold(&g, CGRect(x: f.wall.minX, y: f.roof.minY, width: f.wall.width, height: f.bottom - f.roof.minY), S: S, progress: b.progress, brought: 1)
             }
         }
     }
 
-    /// A villager or a soldier, in its owner's colours, doing what it does.
-    private func person(_ g: GraphicsContext, _ u: RTSUnit, _ p: CGPoint, _ T: CGFloat) {
-        let colour = Self.team[u.owner], skin = Color(red: 0.95, green: 0.8, blue: 0.65), s = T / 22, facing = CGFloat(u.facing)
-        let working = u.swung < 0.3
-        let swing = working ? CGFloat(sin(now * 14)) : 0
-        if u.kind == .knight {
-            g.fill(Path(ellipseIn: CGRect(x: p.x - 9 * s, y: p.y - 3 * s, width: 18 * s, height: 9 * s)), with: .color(Color(red: 0.45, green: 0.3, blue: 0.18)))
-            g.fill(Path(ellipseIn: CGRect(x: p.x + facing * 7 * s - 3.5 * s, y: p.y - 8 * s, width: 7 * s, height: 7 * s)), with: .color(Color(red: 0.45, green: 0.3, blue: 0.18)))
-            g.fill(Path(ellipseIn: CGRect(x: p.x - 3.5 * s, y: p.y - 11 * s, width: 7 * s, height: 9 * s)), with: .color(colour))
-            disc(g, CGPoint(x: p.x, y: p.y - 13 * s), 2.6 * s, Color(white: 0.78))
-            g.stroke(Path { path in path.move(to: CGPoint(x: p.x, y: p.y - 7 * s)); path.addLine(to: CGPoint(x: p.x + facing * 14 * s, y: p.y - (11 + 3 * swing) * s)) },
-                     with: .color(Color(white: 0.85)), lineWidth: 1.4 * s)
-            return
-        }
-        g.fill(Path(ellipseIn: CGRect(x: p.x - 4 * s, y: p.y - 3 * s, width: 8 * s, height: 10 * s)), with: .color(colour))
-        disc(g, CGPoint(x: p.x, y: p.y - 6 * s), 3 * s, u.kind == .spearman ? Color(white: 0.75) : skin)
+    // MARK: Units
+
+    /// A villager or a soldier in its team's colours, doing what it does.
+    private func unit(_ g: inout GraphicsContext, _ u: RTSUnit, _ foot: CGPoint, _ S: CGFloat) {
+        let colour = Self.teamRGB[u.owner]
+        let walking = !u.path.isEmpty, working = u.swung < 0.35
         switch u.kind {
         case .villager:
-            if working {
-                g.stroke(Path { path in path.move(to: CGPoint(x: p.x + facing * 3 * s, y: p.y)); path.addLine(to: CGPoint(x: p.x + facing * (7 + 2 * swing) * s, y: p.y - (7 - 4 * swing) * s)) },
-                         with: .color(Color(red: 0.45, green: 0.3, blue: 0.15)), lineWidth: 1.6 * s)
-            }
-            if u.load > 0.5, let r = u.carrying {
-                disc(g, CGPoint(x: p.x - facing * 4 * s, y: p.y - 1 * s), 3 * s * CGFloat(0.5 + 0.5 * min(u.load / RTSWorld.carry, 1)),
-                     [Color(red: 0.9, green: 0.25, blue: 0.25), Color(red: 0.55, green: 0.35, blue: 0.15), Color(red: 1, green: 0.82, blue: 0.2), Color(white: 0.7)][r.rawValue])
-            }
-        case .spearman:
-            g.stroke(Path { path in path.move(to: CGPoint(x: p.x + facing * 5 * s, y: p.y + 6 * s)); path.addLine(to: CGPoint(x: p.x + facing * (6 + 3 * swing) * s, y: p.y - 14 * s)) },
-                     with: .color(Color(red: 0.5, green: 0.35, blue: 0.2)), lineWidth: 1.4 * s)
-        case .archer:
-            g.stroke(Path { path in path.addArc(center: CGPoint(x: p.x + facing * 3 * s, y: p.y - 1 * s), radius: 6 * s,
-                                                startAngle: .degrees(facing > 0 ? -70 : 110), endAngle: .degrees(facing > 0 ? 70 : 250), clockwise: false) },
-                     with: .color(Color(red: 0.5, green: 0.32, blue: 0.15)), lineWidth: 1.4 * s)
-        case .knight: break
+            var item = Art.Item.none
+            if u.load > 0.5, let r = u.carrying { item = [Art.Item.food, .logs, .gold, .stone][r.rawValue] }
+            Art.person(&g, foot: foot, height: S * 0.72, clothes: (0.78, 0.66, 0.48), facing: u.facing, walking: walking, phase: now * 11 + Double(u.id), seed: u.id,
+                       hat: .none, carry: item, swing: working && item == .none ? u.swung : nil, trim: colour)
+        case .spearman: Art.soldier(&g, .spearman, foot: foot, S: S, team: colour, facing: u.facing, walking: walking, working: working, seed: u.id, now: now)
+        case .archer: Art.soldier(&g, .archer, foot: foot, S: S, team: colour, facing: u.facing, walking: walking, working: working, seed: u.id, now: now)
+        case .knight: Art.soldier(&g, .knight, foot: foot, S: S, team: colour, facing: u.facing, walking: walking, working: working, seed: u.id, now: now)
         }
     }
 }

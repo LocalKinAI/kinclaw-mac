@@ -344,15 +344,20 @@ fileprivate struct ChessScene {
         if over { JevDraw.curtain(g, size, title: result.components(separatedBy: " · ").first ?? result, detail: result.components(separatedBy: " · ").dropFirst().joined(separator: " · ")) }
     }
 
-    /// A piece: the solid glyph, filled white or black and outlined in the other.
+    /// A piece: the solid glyph, large, in ivory or ebony shaded from the top, outlined in the other colour,
+    /// with a soft shadow at its foot.
     private func piece(_ g: GraphicsContext, _ piece: Int8, at p: CGPoint, cell: CGFloat, alpha: Double = 1) {
         let glyph = ["", "♟", "♞", "♝", "♜", "♛", "♚"][Int(abs(piece))] + "\u{FE0E}"
-        let white = piece > 0, font = Font.system(size: cell * 0.78)
-        let edge = white ? Color(white: 0.12).opacity(alpha) : Color(white: 0.95).opacity(0.7 * alpha)
-        g.draw(Text(glyph).font(font).foregroundColor(.black.opacity(0.3 * alpha)), at: CGPoint(x: p.x + 2, y: p.y + 3))
-        for (dx, dy) in [(-1.2, 0.0), (1.2, 0), (0, -1.2), (0, 1.2), (-0.9, -0.9), (0.9, 0.9), (-0.9, 0.9), (0.9, -0.9)] {
-            g.draw(Text(glyph).font(font).foregroundColor(edge), at: CGPoint(x: p.x + CGFloat(dx), y: p.y + CGFloat(dy)))
+        let white = piece > 0, font = Font.system(size: cell * 0.96)
+        let at = CGPoint(x: p.x, y: p.y - cell * 0.03)
+        g.fill(Path(ellipseIn: CGRect(x: p.x - cell * 0.3, y: p.y + cell * 0.22, width: cell * 0.62, height: cell * 0.16)), with: .color(.black.opacity(0.28 * alpha)))
+        let edge = white ? Color(red: 0.2, green: 0.15, blue: 0.1).opacity(alpha) : Color(white: 0.92).opacity(0.75 * alpha)
+        for (dx, dy) in [(-1.4, 0.0), (1.4, 0), (0, -1.4), (0, 1.4), (-1.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (1.0, -1.0)] {
+            g.draw(Text(glyph).font(font).foregroundColor(edge), at: CGPoint(x: at.x + CGFloat(dx), y: at.y + CGFloat(dy)))
         }
-        g.draw(Text(glyph).font(font).foregroundColor(white ? Color(white: 0.98).opacity(alpha) : Color(white: 0.1).opacity(alpha)), at: p)
+        let shading = white
+            ? Gradient(colors: [Color(red: 1, green: 0.98, blue: 0.93), Color(red: 0.92, green: 0.86, blue: 0.74)])
+            : Gradient(colors: [Color(red: 0.36, green: 0.3, blue: 0.28), Color(red: 0.06, green: 0.05, blue: 0.05)])
+        g.draw(Text(glyph).font(font).foregroundStyle(LinearGradient(gradient: shading, startPoint: .top, endPoint: .bottom)).foregroundColor(nil), at: at)
     }
 }

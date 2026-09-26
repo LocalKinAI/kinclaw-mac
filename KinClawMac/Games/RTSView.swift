@@ -36,7 +36,22 @@ final class RTSGame: ObservableObject {
     @Published var building: Int?
     @Published var placing: RTSBuildingKind?
     var hover: RTSTile?
+    /// The box being dragged, in tiles.
     var box: (CGPoint, CGPoint)?
+    /// The camera: zoom and where it looks, and the size of the view it looks through.
+    @Published var camera = GameCamera(map: CGSize(width: RTSWorld.width, height: RTSWorld.height), focus: CGPoint(x: 24, y: 15), zoom: 1.6)
+    var viewSize = CGSize(width: 1200, height: 800)
+
+    func zoom(by factor: CGFloat, at p: CGPoint? = nil) { camera.zoom(by: factor, at: p ?? CGPoint(x: viewSize.width / 2, y: viewSize.height / 2), viewSize) }
+    func pan(_ dx: CGFloat, _ dy: CGFloat) { camera.pan(dx, dy, viewSize) }
+    /// A point of the view in tiles, and the tile it falls on.
+    func spot(at p: CGPoint) -> CGPoint { camera.at(p, viewSize) }
+    func tile(at p: CGPoint) -> RTSTile { let t = spot(at: p); return RTSTile(x: Int(floor(t.x)), y: Int(floor(t.y))) }
+    /// Look at the person's town centre — or, watching, the middle of the map.
+    func lookHome() {
+        if let side = me, let tc = world.buildings.first(where: { $0.owner == side && $0.kind == .townCenter }) { camera.focus = CGPoint(x: Double(tc.x) + 1.5, y: Double(tc.y) + 1.5); camera.zoom = 1.8 }
+        else { camera.focus = CGPoint(x: 24, y: 15); camera.zoom = 1 }
+    }
     @Published private(set) var message: String?
     private var said = Date.distantPast
     private var loop: Task<Void, Never>?
@@ -100,6 +115,7 @@ final class RTSGame: ObservableObject {
         selected = []; building = nil; placing = nil; message = nil
         advice = nil; notes = [nil, nil]; lastAsked = [-99, -99]; lastAdvised = -99
         speed = 0; beat += 1                      // laid out, waiting for 开始
+        lookHome()
     }
 
     func say(_ text: String) { message = text; said = Date() }
@@ -205,9 +221,10 @@ final class RTSGame: ObservableObject {
 
     // MARK: What a click means
 
-    func click(_ t: RTSTile, at point: CGPoint, tile size: CGFloat, adding: Bool) {
+    /// A left click on tile `t`, at `spot` in tiles.
+    func click(_ t: RTSTile, at spot: CGPoint, adding: Bool) {
         if let kind = placing { put(kind, at: t); return }
-        let px = Double(point.x / size), py = Double(point.y / size)
+        let px = Double(spot.x), py = Double(spot.y)
         if let unit = world.units.filter({ hypot($0.x - px, $0.y - py) < 0.7 }).min(by: { hypot($0.x - px, $0.y - py) < hypot($1.x - px, $1.y - py) }) {
             if unit.owner == me {
                 if adding { if selected.contains(unit.id) { selected.remove(unit.id) } else { selected.insert(unit.id) } }
@@ -223,9 +240,10 @@ final class RTSGame: ObservableObject {
         if !adding { selected = []; building = nil }
     }
 
-    func select(from a: CGPoint, to b: CGPoint, tile size: CGFloat) {
+    /// Everybody of the person's inside a box, in tiles — the soldiers only, if there are any.
+    func select(from a: CGPoint, to b: CGPoint) {
         guard let me else { return }
-        let x0 = Double(min(a.x, b.x) / size), x1 = Double(max(a.x, b.x) / size), y0 = Double(min(a.y, b.y) / size), y1 = Double(max(a.y, b.y) / size)
+        let x0 = Double(min(a.x, b.x)), x1 = Double(max(a.x, b.x)), y0 = Double(min(a.y, b.y)), y1 = Double(max(a.y, b.y))
         let inside = world.units.filter { $0.owner == me && $0.x >= x0 && $0.x <= x1 && $0.y >= y0 && $0.y <= y1 }
         let soldiers = inside.filter { $0.kind != .villager }
         selected = Set((soldiers.isEmpty ? inside : soldiers).map(\.id))
@@ -322,17 +340,20 @@ struct RTSView: View {
         VStack(spacing: 0) {
             top
             GeometryReader { space in
-                let size = CGFloat(RTSWorld.width), rows = CGFloat(RTSWorld.height)
-                let tile = min(space.size.width / size, space.size.height / rows)
-                let map = CGSize(width: tile * size, height: tile * rows)
+                let size = space.size
+                let S = game.camera.tile(size), origin = game.camera.origin(size), view = game.camera.visible(size)
                 ZStack(alignment: .topLeading) {
                     TimelineView(.animation(minimumInterval: 1.0 / 30, paused: game.speed == 0 && game.placing == nil)) { timeline in
                         let now = timeline.date.timeIntervalSinceReferenceDate
                         let scene = RTSScene(world: game.world, viewer: game.me ?? 0, selected: game.selected, building: game.building, placing: game.placing,
                                              hover: game.hover, box: game.box, now: now)
-                        Canvas { context, _ in scene.paint(&context, tile: tile) }
+                        Canvas(rendersAsynchronously: true) { context, canvas in
+                            context.fill(Path(CGRect(origin: .zero, size: canvas)), with: .color(Color(red: 0.12, green: 0.2, blue: 0.13)))
+                            context.translateBy(x: -origin.x * S, y: -origin.y * S)
+                            scene.paint(&context, tile: S, view: view)
+                        }
                     }
-                    RTSMouse(tile: tile).frame(width: map.width, height: map.height)
+                    RTSMouse().frame(width: size.width, height: size.height)
                     if game.speed == 0, game.world.winner == nil, game.placing == nil {
                         Button { game.speed = 1 } label: {
                             Label(game.world.time == 0 ? "开始" : "继续", systemImage: "play.fill")
@@ -341,14 +362,23 @@ struct RTSView: View {
                                 .background(Capsule().fill(Color.black.opacity(0.65)))
                         }
                         .buttonStyle(.plain)
-                        .frame(width: map.width, height: map.height)
+                        .frame(width: size.width, height: size.height)
                     }
                     if let text = game.saying {
                         Text(text).font(.system(size: 13, weight: .semibold)).foregroundColor(.white)
                             .padding(.horizontal, 14).padding(.vertical, 8)
                             .background(Capsule().fill(Color.black.opacity(0.7)))
-                            .frame(width: map.width).padding(.top, 10).allowsHitTesting(false)
+                            .frame(width: size.width).padding(.top, 10).allowsHitTesting(false)
                     }
+                    VStack(spacing: 6) {
+                        Button { game.zoom(by: 1.25) } label: { Image(systemName: "plus.magnifyingglass").frame(width: 28, height: 28) }
+                        Button { game.zoom(by: 0.8) } label: { Image(systemName: "minus.magnifyingglass").frame(width: 28, height: 28) }
+                        Button { game.lookHome() } label: { Image(systemName: "house").frame(width: 28, height: 28) }
+                    }
+                    .buttonStyle(.plain).foregroundColor(.white)
+                    .padding(6).background(RoundedRectangle(cornerRadius: 10).fill(Color.black.opacity(0.45)))
+                    .padding(10)
+                    .frame(width: size.width, height: size.height, alignment: .bottomTrailing)
                     if let winner = game.world.winner {
                         VStack(spacing: 10) {
                             Text(game.me == nil ? "\(RTSWorld.names[winner])赢了" : winner == game.me ? "胜利！" : "失败…").font(.system(size: 44, weight: .heavy, design: .rounded))
@@ -358,13 +388,15 @@ struct RTSView: View {
                         }
                         .foregroundColor(.white).padding(30)
                         .background(RoundedRectangle(cornerRadius: 18).fill(Color.black.opacity(0.7)))
-                        .frame(width: map.width, height: map.height)
+                        .frame(width: size.width, height: size.height)
                     }
                 }
-                .frame(width: map.width, height: map.height)
+                .frame(width: size.width, height: size.height)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .onAppear { game.viewSize = size; game.lookHome() }
+                .onChange(of: size) { _, new in game.viewSize = new }
             }
+            .padding(.horizontal, 8)
             bottom
         }
         .onAppear { game.start(); RTSKeys.install() }
@@ -532,13 +564,10 @@ struct RTSView: View {
 // MARK: - The mouse, straight from AppKit: left and right buttons, drags, where it hovers
 
 struct RTSMouse: NSViewRepresentable {
-    let tile: CGFloat
-
     func makeNSView(context: Context) -> Catcher { Catcher() }
-    func updateNSView(_ view: Catcher, context: Context) { view.tile = tile }
+    func updateNSView(_ view: Catcher, context: Context) {}
 
     final class Catcher: NSView {
-        var tile: CGFloat = 20
         private var start: CGPoint?
         override var isFlipped: Bool { true }
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
@@ -549,11 +578,8 @@ struct RTSMouse: NSViewRepresentable {
             addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect, .mouseEnteredAndExited], owner: self))
         }
         private func point(_ e: NSEvent) -> CGPoint { convert(e.locationInWindow, from: nil) }
-        private func tileAt(_ p: CGPoint) -> RTSTile { RTSTile(x: Int(p.x / tile), y: Int(p.y / tile)) }
 
-        override func mouseMoved(with event: NSEvent) {
-            MainActor.assumeIsolated { RTSGame.shared.hover = tileAt(point(event)) }
-        }
+        override func mouseMoved(with event: NSEvent) { MainActor.assumeIsolated { RTSGame.shared.hover = RTSGame.shared.tile(at: point(event)) } }
         override func mouseExited(with event: NSEvent) { MainActor.assumeIsolated { RTSGame.shared.hover = nil } }
         override func mouseDown(with event: NSEvent) {
             window?.makeFirstResponder(self)
@@ -564,8 +590,9 @@ struct RTSMouse: NSViewRepresentable {
             guard let start else { return }
             let p = point(event)
             MainActor.assumeIsolated {
-                RTSGame.shared.hover = tileAt(p)
-                if RTSGame.shared.placing == nil { RTSGame.shared.box = (start, p) }
+                let game = RTSGame.shared
+                game.hover = game.tile(at: p)
+                if game.placing == nil { game.box = (game.spot(at: start), game.spot(at: p)) }
             }
         }
         override func mouseUp(with event: NSEvent) {
@@ -575,8 +602,8 @@ struct RTSMouse: NSViewRepresentable {
             MainActor.assumeIsolated {
                 let game = RTSGame.shared
                 game.box = nil
-                if game.placing == nil, hypot(p.x - from.x, p.y - from.y) > 6 { game.select(from: from, to: p, tile: tile) }
-                else { game.click(tileAt(p), at: p, tile: tile, adding: adding) }
+                if game.placing == nil, hypot(p.x - from.x, p.y - from.y) > 6 { game.select(from: game.spot(at: from), to: game.spot(at: p)) }
+                else { game.click(game.tile(at: p), at: game.spot(at: p), adding: adding) }
             }
         }
         override func rightMouseDown(with event: NSEvent) {
@@ -584,13 +611,28 @@ struct RTSMouse: NSViewRepresentable {
             MainActor.assumeIsolated {
                 let game = RTSGame.shared
                 if game.placing != nil { game.placing = nil; return }
-                game.order(tileAt(p))
+                game.order(game.tile(at: p))
             }
+        }
+        override func scrollWheel(with event: NSEvent) {
+            let p = point(event)
+            MainActor.assumeIsolated {
+                let game = RTSGame.shared
+                if event.modifierFlags.contains(.command) || !event.hasPreciseScrollingDeltas {
+                    game.zoom(by: pow(1.02, event.scrollingDeltaY * (event.hasPreciseScrollingDeltas ? 0.5 : 3)), at: p)
+                } else {
+                    game.pan(event.scrollingDeltaX, event.scrollingDeltaY)
+                }
+            }
+        }
+        override func magnify(with event: NSEvent) {
+            let p = point(event)
+            MainActor.assumeIsolated { RTSGame.shared.zoom(by: 1 + event.magnification, at: p) }
         }
     }
 }
 
-/// The keyboard while the map is showing: Esc lets go, space pauses.
+/// The keyboard while the map is showing: Esc lets go, space pauses, arrows move, = and - zoom.
 @MainActor
 enum RTSKeys {
     private static var monitor: Any?
@@ -602,6 +644,12 @@ enum RTSKeys {
             switch event.keyCode {
             case 53: game.placing = nil; game.selected = []; game.building = nil; return nil
             case 49: game.speed = game.speed == 0 ? 1 : 0; return nil
+            case 123: game.pan(120, 0); return nil
+            case 124: game.pan(-120, 0); return nil
+            case 125: game.pan(0, -120); return nil
+            case 126: game.pan(0, 120); return nil
+            case 24: game.zoom(by: 1.25); return nil
+            case 27: game.zoom(by: 0.8); return nil
             default: return event
             }
         }

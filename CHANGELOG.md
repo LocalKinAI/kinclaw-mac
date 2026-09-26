@@ -8,6 +8,89 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Added — 放逐之城: a town that has to get through its winters
+
+"做城市建造吧". Jev tab → 建造 → 放逐之城 — Banished-like, played with the mouse.
+
+- **A year in twelve months** (`Games/CityEngine.swift`, Foundation only): a
+  64 × 40 map with a river and two fords, a pond, woods, rock and ore.
+  Everybody eats a food a month. Fields are planted in spring, grow through
+  summer and come in in autumn — what is not in by winter is lost; gatherers
+  pick berries and mushrooms in the woods from spring to autumn; fishermen
+  fish all year, slower in winter. From the first month of winter to the
+  first of spring every house burns two firewood a month, split from logs at
+  the woodcutter's; a family without it freezes, and so does anybody without
+  a house. Hunger and cold kill in three or four months. Children are born
+  into houses with a couple and room, grow up at twelve and work until
+  sixty-five; young couples move out of crowded houses into empty ones;
+  newcomers arrive in spring when there are three free places and half a
+  year of food. Tools wear out with work; without them every job is 40%
+  slower — a mine and a smithy make more.
+- **Eleven kinds of building** — houses, storage, fields, gatherer's hut,
+  lumber camp, woodcutter's, quarry (on rock), mine (on ore), smithy,
+  fishing hut (on water) and the town hall. The people with no other job put
+  everything up: they fetch the logs and the stone from a storage, carry them
+  to the site and build. Workers carry what they make to the nearest storage,
+  so where a storage stands matters; families fetch food and firewood home.
+- **Played with the mouse** (`Games/CityView.swift`): pick a building, click
+  the map (⇧ to keep placing); drag roads — people walk faster on them;
+  拆除 takes a building down and gives half back; click a building for what it
+  does, who works there (−/+) and what it made this year. The computer sets
+  how many work where unless you do. Pause to 8×; the town waits for 开始.
+- **Who is mayor**: 我, 电脑, Jev or 大模型. The computer weighs each need by
+  how urgent it measures — a roof before winter, food, firewood for the cold
+  months, logs and stone, tools, room to grow — and builds and staffs in that
+  order, never spending the wood for the first lumber camp on anything else
+  (the first Jev test starved a whole town that way). Jev and chat models
+  choose which need comes first every ten seconds, each option with the
+  measurements — months of food, firewood against the coming winter, the
+  homeless, tools per worker; whatever they choose, people about to die come
+  first. Jev 参谋 tells the person what to build where, with 照做.
+- **Measured**: the computer on twelve maps for twenty years — every town
+  alive with 95–129 people, 3 starved in all, none frozen. Jev as mayor on
+  three maps for fifteen years: 94, 85 and 96 people to the computer's 104, 89
+  and 100, nobody starved or frozen.
+- `city_play` (mayor, speed, a new town) and `city_status` in the panel's tools.
+
+### Changed — the building games, drawn properly
+
+"游戏画面太糙了啊，都优化一下啊". 帝国时代 and 放逐之城 share one painter
+(`Games/GameArt.swift`): from above at three-quarters, lit from the top left,
+shadows to the lower right, all vector and sharp at any zoom.
+
+- **A camera**: pinch or ⌘-scroll to zoom, two-finger scroll, drag or the
+  arrow keys to move, = and - and the buttons in the corner; it starts close
+  on your town.
+- **Land**: grass with tufts and flowers when close; water as one body with a
+  sandy shore, shallows and deeper water and glints; roads as trodden paths,
+  round where they bend and meet; woods of pines and broadleaves with trunks,
+  layered crowns and shadows; rocks, gold and ore as boulders; berry bushes.
+- **Buildings stand up out of their plots**: front walls of plaster and
+  timber, logs, planks or stone; gabled and hipped roofs of shingles, thatch
+  or slate; doors and windows, chimneys with smoke, scaffolding and the
+  materials piled while they go up. The town hall has a bell tower and a flag;
+  the storage its goods in front; the smithy a glowing forge, an anvil and
+  sparks; the quarry terraces, blocks and a crane; the mine a timbered mouth,
+  rails and a cart; the fishing hut a jetty and a boat.
+- **放逐之城's year**: fresh grass and blossom in spring, deep green in summer,
+  gold grass and orange, red and yellow trees in autumn with leaves falling,
+  snow on the ground, the roofs and the pines in winter, bare broadleaves,
+  frozen water, snow falling; windows lit and chimneys smoking in the houses
+  that are warm; fields that sprout, ripen to gold and are cut to stubble.
+- **帝国时代's towns change with the age** — wood and thatch, then timber and
+  shingles, then stone and slate — with the team's banners on every building;
+  a mill whose sails turn, a stone tower with battlements, fire on a building
+  half destroyed.
+- **The turn-based 帝国 is drawn the same way**: houses, keeps, halls, towers
+  and camps from the same drawings, in the style of its four ages — the last
+  marble walls under gold roofs — with fields, woods, gold and berries, and
+  villagers and ranks of soldiers as figures. Chess pieces are larger, ivory
+  and ebony, with a shadow at their foot.
+- **People** with legs that step, arms, faces, hair and hats by their work —
+  straw hats in the fields, hoods among the berries, helmets in the mine and
+  the ranks — carrying logs, stone, baskets and tools; spearmen with spear and
+  shield, archers with bows, knights on horses.
+
 ### Added — Montage: OpenMontage on the box, where it can be seen
 
 "openmontage看不见怎么用啊": installed on the box and tested, OpenMontage was
