@@ -2449,8 +2449,12 @@ final class FilmStudio: ObservableObject {
     /// goes on a track of its own a quarter of a second into the shot, and
     /// the shot's own sound sits at a third under it — waves under a
     /// sentence, not against it.
+    ///
+    /// `ending`: the last shot fades to black, its sound with it, over this
+    /// many seconds. A film used to stop on a bright frame mid-breath, the
+    /// music already gone ("加上片尾淡出吧").
     static func cut(_ clips: [URL], voices: [URL] = [], voiceover: URL? = nil, music: URL? = nil,
-                    fade: Double = 0.4, to out: URL) async throws {
+                    fade: Double = 0.4, ending: Double = 1.2, to out: URL) async throws {
         let composition = AVMutableComposition()
         let video = (0..<2).compactMap { _ in composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) }
         let audio = (0..<2).compactMap { _ in composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) }
@@ -2557,6 +2561,14 @@ final class FilmStudio: ObservableObject {
                 alone.timeRange = CMTimeRange(start: soloStart, end: soloEnd)
                 let only = AVMutableVideoCompositionLayerInstruction(assetTrack: video[span.track])
                 only.setTransform(fill(sizes[index]), at: soloStart)
+                // The last shot goes to black, and its own sound with it — at
+                // most a third of what it shows alone.
+                if next == nil, ending > 0 {
+                    let seconds = min(ending, CMTimeGetSeconds(CMTimeSubtract(soloEnd, soloStart)) / 3)
+                    let out = CMTimeRange(start: CMTimeSubtract(soloEnd, CMTime(seconds: seconds, preferredTimescale: 600)), end: soloEnd)
+                    only.setOpacityRamp(fromStartOpacity: 1, toEndOpacity: 0, timeRange: out)
+                    volumes[span.track].setVolumeRamp(fromStartVolume: level[index], toEndVolume: 0, timeRange: out)
+                }
                 alone.layerInstructions = [only]
                 instructions.append(alone)
             }

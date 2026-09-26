@@ -226,6 +226,9 @@ can read, and the long steps wait to be looked at.
   anyway, was brought back and the film cut again by hand). film_status now
   says when the music began and how long it takes, and the agent's briefing
   and film_guide say it too.
+- **Films end in black.** The last shot fades out over 1.2 seconds (at
+  most a third of it), its own sound with it; a film used to stop on a
+  bright frame, the waves still breaking, after the music had gone.
 
 ### Added — Montage: OpenMontage on the box, where it can be seen
 
