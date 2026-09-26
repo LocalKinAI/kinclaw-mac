@@ -262,6 +262,11 @@ final class FilmStudio: ObservableObject {
         /// what it wants instead of taking whatever the tab was left on.
         var pinFrames: Bool?
         var withMusic: Bool?
+        /// How the cut is finished: the title over the last shot, one warm
+        /// grade over all of it, the picture doubled. Nil is on.
+        var titleCard: Bool?
+        var finishGrade: Bool?
+        var upscale: Bool?
         /// Integrated loudness of the cut after mastering, in LUFS.
         var loudness: Double?
         var seconds: Double
@@ -427,7 +432,7 @@ final class FilmStudio: ObservableObject {
               seconds: Double, shots: [Draft], tongue: String = "", retakes: Int? = nil,
               read: Understanding? = nil, shape: Shape = .square, engine: Engine = .ltx,
               cast: [Cast]? = nil, hold: String? = nil, pinFrames: Bool? = nil, withMusic: Bool? = nil,
-              literal: Bool = false) -> Result<Film, Failure> {
+              literal: Bool = false, finishing: (title: Bool?, grade: Bool?, upscale: Bool?) = (nil, nil, nil)) -> Result<Film, Failure> {
         guard shooting == nil else { return .failure(.message("片场正在拍「\(shooting!)」，等它拍完")) }
         let wanted = shots.filter { !$0.still.trimmingCharacters(in: .whitespaces).isEmpty }
         guard !wanted.isEmpty else { return .failure(.message("分镜是空的：每个镜头要有 still（画面）和 motion（动作）")) }
@@ -468,6 +473,7 @@ final class FilmStudio: ObservableObject {
         film.hold = hold
         film.pinFrames = pinFrames
         film.withMusic = withMusic
+        (film.titleCard, film.finishGrade, film.upscale) = finishing
         for (index, draft) in wanted.enumerated() {
             let said = draft.narration.trimmingCharacters(in: .whitespacesAndNewlines)
             // Asked for silence, and a writer that narrates anyway is not obeyed.
@@ -2314,9 +2320,12 @@ final class FilmStudio: ObservableObject {
 
     /// Cut a film again from what is on disk — the shots, the voice-over, the
     /// music — without making anything. For when a piece was put in by hand.
-    func recut(film id: String) -> Result<Film, Failure> {
+    func recut(film id: String, titleCard: Bool? = nil, grade: Bool? = nil, upscale: Bool? = nil) -> Result<Film, Failure> {
         guard shooting == nil else { return .failure(.message("片场正在拍「\(shooting!)」，等它拍完")) }
         guard var film = films.first(where: { $0.id == id || $0.title == id }) else { return .failure(.message("没有这部片子：\(id)")) }
+        if let titleCard { film.titleCard = titleCard }
+        if let grade { film.finishGrade = grade }
+        if let upscale { film.upscale = upscale }
         let done = film.shots.filter { $0.state == .done }
         guard !done.isEmpty else { return .failure(.message("还没有拍好的镜头")) }
         let stamp = Int(Date().timeIntervalSince1970)

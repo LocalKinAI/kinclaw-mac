@@ -229,6 +229,15 @@ can read, and the long steps wait to be looked at.
 - **Films end in black.** The last shot fades out over 1.2 seconds (at
   most a third of it), its own sound with it; a film used to stop on a
   bright frame, the waves still breaking, after the music had gone.
+- **Films finished like the OpenMontage one.** In the same pass as the
+  mastering, the cut gets the film's title over its last shot (Songti,
+  letters spread, a thin rule, a soft shadow; faded in and out before the
+  black), one warm grade over every shot (a little more red, less blue,
+  saturation and contrast up a touch, a light vignette), and the picture
+  doubled — H3's 544×928 to 1088×1856, the longer side at most 1920,
+  sharpened a little. About three seconds for a twenty-second film. Each
+  can be turned off in film_make or film_recut (`title_card`, `grade`,
+  `upscale`), and film_status says which are on.
 
 ### Added — Montage: OpenMontage on the box, where it can be seen
 

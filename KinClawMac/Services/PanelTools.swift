@@ -472,6 +472,9 @@ enum PanelTools {
                     "pin": ["type": "boolean", "description": "H3: make each shot's first frame from the portraits and the set and pin it where the shot starts. Omit for the user's setting (usually on)."],
                     "music": ["type": ["boolean", "string"], "description": "false: no music under the film. A text: what the music should be. Omit for the user's setting and the studio's choice."],
                     "as_written": ["type": "boolean", "description": "Use every shot's still and motion exactly as written: no pass rereads the pose off the shot before or rewrites the movement, and no reviewer sends a shot back. Default false."],
+                    "title_card": ["type": "boolean", "description": "The title over the last shot, faded in and out. Default true."],
+                    "grade": ["type": "boolean", "description": "One warm grade over every shot. Default true."],
+                    "upscale": ["type": "boolean", "description": "The picture doubled (the longer side at most 1920). Default true."],
                     "look": ["type": "string", "description": "Shared by every frame: \"35mm film still, golden hour, warm palette, shallow depth of field\"."],
                     "place": ["type": "string", "description": "The one location, said once, with the landmarks that make it that spot."],
                     "lead": ["type": "boolean", "description": "true: she (the companion) is in every shot. Default false."],
@@ -852,8 +855,13 @@ enum PanelTools {
         ],
         [
             "name": "film_recut",
-            "description": "Cut a film again from the files it has — shots, voice-over, music — without making anything new. Use after a shot, the narration or the music was replaced by hand.",
-            "inputSchema": ["type": "object", "properties": ["film": ["type": "string", "description": "The film's id or title."]], "required": ["film"]],
+            "description": "Cut a film again from the files it has — shots, voice-over, music — without making anything new, and finish it: the title over the last shot, one warm grade, the picture doubled (each on unless turned off, here or in film_make). Use after a shot, the narration or the music was replaced by hand, or to change the finishing.",
+            "inputSchema": ["type": "object", "properties": [
+                "film": ["type": "string", "description": "The film's id or title."],
+                "title_card": ["type": "boolean", "description": "The film's title over its last shot. Kept for later cuts."],
+                "grade": ["type": "boolean", "description": "One warm grade over every shot. Kept for later cuts."],
+                "upscale": ["type": "boolean", "description": "The picture doubled (the longer side at most 1920). Kept for later cuts."],
+            ] as [String: Any], "required": ["film"]],
         ],
         [
             "name": "film_rescore",
@@ -1663,7 +1671,8 @@ enum PanelTools {
             return ("停了。项目还在盒子上，看板上能看", false)
         case "film_recut":
             guard let id = args["film"] as? String else { return ("film_recut 需要 film", true) }
-            switch FilmStudio.shared.recut(film: id) {
+            switch FilmStudio.shared.recut(film: id, titleCard: args["title_card"] as? Bool, grade: args["grade"] as? Bool,
+                                           upscale: args["upscale"] as? Bool) {
             case .success(let film): return ("在重新剪「\(film.title)」", false)
             case .failure(let failure): return (failure.localizedDescription, true)
             }
@@ -1912,7 +1921,8 @@ enum PanelTools {
                                       retakes: args["retakes"] as? Int, read: told,
                                       shape: FilmStudio.Shape(rawValue: (args["shape"] as? String) ?? "") ?? .square,
                                       engine: engine, cast: cast, hold: hold, pinFrames: pin, withMusic: withMusic,
-                                      literal: args["as_written"] as? Bool ?? false) {
+                                      literal: args["as_written"] as? Bool ?? false,
+                                      finishing: (args["title_card"] as? Bool, args["grade"] as? Bool, args["upscale"] as? Bool)) {
         case .success(let film):
             FilmStudio.shared.presetSound(film: film.id, voice: args["narrator_voice"] as? String,
                                           voiceover: args["voiceover"] as? String, music: brief)
@@ -1970,6 +1980,8 @@ enum PanelTools {
             if film.engine == .h3 { how.append("钉帧" + ((film.pinFrames ?? FilmStudio.pinOn) ? "开" : "关") + (film.pinFrames == nil ? "（跟着片场的开关）" : "")) }
             how.append("配乐" + ((film.withMusic ?? FilmStudio.musicOn) ? "开" : "关") + (film.withMusic == nil ? "（跟着片场的开关）" : ""))
             if let hold = film.hold { how.append("会停在" + (hold == "sets" ? "布景" : "首帧")) }
+            how.append("片名" + (film.titleCard ?? true ? "开" : "关") + "、调色" + (film.finishGrade ?? true ? "开" : "关")
+                       + "、放大" + (film.upscale ?? true ? "开" : "关"))
             lines.append("  " + how.joined(separator: " · "))
             if let place = film.place { lines.append("  地点：\(place)") }
             if let narrator = film.narrator { lines.append("  旁白：\(narrator.voice ?? narrator.speaker)\(narrator.instruct.map { "（\($0)）" } ?? "")") }

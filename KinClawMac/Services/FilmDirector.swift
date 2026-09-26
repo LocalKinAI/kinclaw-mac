@@ -959,8 +959,10 @@ extension FilmStudio {
         try await Self.cut(clips, voices: done.map { film.voice($0.id) },
                            voiceover: film.voiceover == nil ? nil : film.voiceoverFile,
                            music: music && (film.withMusic ?? Self.musicOn) ? film.music : nil, to: film.file)
+        let finish = Finish(title: film.titleCard ?? true ? film.title : nil, grade: film.finishGrade ?? true,
+                            upscale: film.upscale ?? true)
         do {
-            film.loudness = try await Self.master(film.file, keeping: film.premaster)
+            film.loudness = try await Self.master(film.file, keeping: film.premaster, finish: finish)
         } catch {
             NSLog("film: mastering failed, the cut is as it came out: \(error.localizedDescription)")
         }
@@ -974,7 +976,8 @@ extension FilmStudio {
     /// ffmpeg's loudnorm on the box; this Mac's ffmpeg does not run, and a
     /// stereo track needs nothing it lacks. The cut as it came out is kept as
     /// `premaster`. Returns the loudness after.
-    nonisolated static func master(_ file: URL, keeping premaster: URL, target: Double = -16) async throws -> Double? {
+    nonisolated static func master(_ file: URL, keeping premaster: URL, target: Double = -16,
+                                   finish: Finish? = nil) async throws -> Double? {
         let asset = AVURLAsset(url: file)
         guard let track = try await asset.loadTracks(withMediaType: .audio).first,
               let format = try await track.load(.formatDescriptions).first,
@@ -1052,12 +1055,115 @@ extension FilmStudio {
         let lane = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
         try lane?.insertTimeRange(CMTimeRange(start: .zero, duration: CMTimeMinimum(lineLength, whole)), of: line, at: .zero)
         let partial = folder.appendingPathComponent("film.mastered.partial.mp4")
-        try await export(composition, preset: AVAssetExportPresetPassthrough, to: partial)
+        // The picture finished in the same pass: the one re-encoding it gets.
+        if let finish, !finish.isNone, let seen = try await asset.loadTracks(withMediaType: .video).first {
+            let natural = try await seen.load(.naturalSize)
+            let video = Self.finishing(composition, natural: natural, duration: CMTimeGetSeconds(whole), finish)
+            try await export(composition, preset: AVAssetExportPresetHighestQuality, video: video, to: partial)
+        } else {
+            try await export(composition, preset: AVAssetExportPresetPassthrough, to: partial)
+        }
         try? fm.removeItem(at: premaster)
         try fm.moveItem(at: file, to: premaster)
         try fm.moveItem(at: partial, to: file)
         try? fm.removeItem(at: sound)
         return after
+    }
+
+    // MARK: - Finishing
+
+    /// What a cut is finished with, in the same pass as its sound: the film's
+    /// title over its last shot, one warm grade over every shot, and the
+    /// picture doubled (H3's 544×928 to 1088×1856) — what the OpenMontage
+    /// film of the same brief had and this one did not ("补上看看").
+    struct Finish {
+        var title: String?
+        var grade: Bool
+        var upscale: Bool
+        var isNone: Bool { (title ?? "").isEmpty && !grade && !upscale }
+    }
+
+    /// The finishing, as a video composition over `asset`: graded at its own
+    /// size, scaled up (at most twice, the longer side at most 1920, sharpened
+    /// a little), a light vignette, and the title faded in and out over the
+    /// last shot, gone before the picture goes to black.
+    nonisolated static func finishing(_ asset: AVAsset, natural: CGSize, duration: Double, _ finish: Finish) -> AVVideoComposition {
+        let scale = finish.upscale ? min(2, 1920 / max(natural.width, natural.height, 1)) : 1
+        let out = CGSize(width: (natural.width * scale / 2).rounded() * 2, height: (natural.height * scale / 2).rounded() * 2)
+        let frame = CGRect(origin: .zero, size: out)
+        let title = (finish.title ?? "").isEmpty ? nil : titleCard(finish.title!, in: out)
+        let showing = max(0.5, duration - 3.8), gone = max(showing + 1.5, duration - 1.0)
+        let video = AVMutableVideoComposition(asset: asset) { request in
+            var image = request.sourceImage.clampedToExtent()
+            if finish.grade {
+                // Warm, a little denser: more red, less blue, a touch of
+                // saturation and contrast — the honey the other film had.
+                image = image
+                    .applyingFilter("CIColorMatrix", parameters: [
+                        "inputRVector": CIVector(x: 1.03, y: 0, z: 0, w: 0),
+                        "inputGVector": CIVector(x: 0, y: 1.0, z: 0, w: 0),
+                        "inputBVector": CIVector(x: 0, y: 0, z: 0.94, w: 0),
+                        "inputBiasVector": CIVector(x: 0.008, y: 0.004, z: 0, w: 0)])
+                    .applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 1.05, kCIInputContrastKey: 1.04,
+                                                                    kCIInputBrightnessKey: 0])
+            }
+            if scale != 1 {
+                image = image.applyingFilter("CILanczosScaleTransform", parameters: [kCIInputScaleKey: scale, kCIInputAspectRatioKey: 1])
+                    .applyingFilter("CISharpenLuminance", parameters: [kCIInputSharpnessKey: 0.3])
+            }
+            image = image.cropped(to: frame)
+            if finish.grade {
+                image = image.applyingFilter("CIVignette", parameters: [kCIInputIntensityKey: 0.35, kCIInputRadiusKey: 1.4])
+                    .cropped(to: frame)
+            }
+            if let title {
+                let t = CMTimeGetSeconds(request.compositionTime)
+                let alpha = t < showing ? 0 : t < showing + 0.7 ? (t - showing) / 0.7
+                    : t < gone - 0.7 ? 1 : t < gone ? (gone - t) / 0.7 : 0
+                if alpha > 0 {
+                    image = title.applyingFilter("CIColorMatrix", parameters: ["inputAVector": CIVector(x: 0, y: 0, z: 0, w: CGFloat(alpha))])
+                        .composited(over: image).cropped(to: frame)
+                }
+            }
+            request.finish(with: image, context: nil)
+        }
+        video.renderSize = out
+        return video
+    }
+
+    /// The title as it is laid over the film: a serif (Songti, the face the
+    /// OpenMontage film's title was set in), letters spread apart, a thin rule
+    /// under it and a soft shadow for a bright sky — centred, an eighth of the
+    /// way up from the bottom.
+    nonisolated static func titleCard(_ text: String, in size: CGSize) -> CIImage? {
+        var points = (size.width * 0.05).rounded()
+        func font(_ points: CGFloat) -> NSFont {
+            NSFont(descriptor: NSFontDescriptor(fontAttributes: [.family: "Songti SC"]), size: points)
+                ?? NSFont.systemFont(ofSize: points)
+        }
+        func spaced(_ points: CGFloat, _ color: NSColor) -> NSAttributedString {
+            NSAttributedString(string: text, attributes: [.font: font(points), .foregroundColor: color, .kern: points * 0.45])
+        }
+        // A long title is set smaller, not off the edges.
+        let wide = spaced(points, .white).size().width
+        if wide > size.width * 0.8 { points = (points * size.width * 0.8 / wide).rounded(.down) }
+        guard let glyphs = CIFilter(name: "CIAttributedTextImageGenerator",
+                                    parameters: ["inputText": spaced(points, .white), "inputScaleFactor": 1])?.outputImage,
+              let dark = CIFilter(name: "CIAttributedTextImageGenerator",
+                                  parameters: ["inputText": spaced(points, NSColor(white: 0, alpha: 0.5)), "inputScaleFactor": 1])?.outputImage
+        else { return nil }
+        // The spacing trails the last letter: half of it, back, to centre.
+        let kern = points * 0.45
+        let x = (size.width - glyphs.extent.width + kern) / 2 - glyphs.extent.minX
+        let y = size.height * 0.125 - glyphs.extent.minY
+        let letters = glyphs.transformed(by: CGAffineTransform(translationX: x, y: y))
+        let shadow = dark.applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: points * 0.15])
+            .transformed(by: CGAffineTransform(translationX: x, y: y - points * 0.05))
+        let ruleWidth = (glyphs.extent.width - kern) * 0.6
+        let rule = CIImage(color: CIColor(red: 1, green: 1, blue: 1, alpha: 0.75))
+            .cropped(to: CGRect(x: (size.width - ruleWidth) / 2, y: size.height * 0.125 - points * 0.55,
+                                width: ruleWidth, height: max(1, (size.width / 540).rounded())))
+        return letters.composited(over: rule.composited(over: shadow))
     }
 
     /// Integrated loudness, ITU-R BS.1770-4: K-weighted, mean square over 400 ms
