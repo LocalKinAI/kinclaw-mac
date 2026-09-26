@@ -1119,7 +1119,16 @@ final class FilmStudio: ObservableObject {
     /// A failure is said and the film is cut without it.
     private func makeMusic(_ film: inout Film, seconds: Double) async {
         guard film.withMusic ?? Self.musicOn, let score = film.score, !FileManager.default.fileExists(atPath: film.music.path) else { return }
-        film.note = "在盒子上作配乐"
+        // How long it will take, said with when it began: MiniMax Music 3 reads
+        // its caption token by token, about 67 s of work a second of music (568
+        // tokens at 2.7 s for 23 s). Without it an agent took twenty quiet
+        // minutes for a hang, stopped the film and cut it with no music.
+        let clock = DateFormatter()
+        clock.dateFormat = "HH:mm"
+        let minutes = Int(((seconds + 2) * 67 + 120) / 60)
+        film.note = Self.musicEngine == "minimax3"
+            ? "在盒子上作配乐（MiniMax Music 3，\(clock.string(from: Date())) 开始，大约 \(minutes) 分钟：先逐字读描述、再出声音，中间没有进度，不是卡住）"
+            : "在盒子上作配乐（\(clock.string(from: Date())) 开始）"
         save(film)
         await ComfyStudio.yieldMemory()
         do {

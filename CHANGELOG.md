@@ -219,6 +219,13 @@ can read, and the long steps wait to be looked at.
   on — a download, a render. Their relay waits fifteen minutes and answers
   calls side by side; the kernel's keeps its minute.
 - Film, Motion and Comfy open with their agent's column out, as Montage.
+- **Music that looked stuck.** MiniMax Music 3 reads its brief token by
+  token, about a minute of work for every second of music, and shows no
+  progress meanwhile: Film's agent took twenty quiet minutes for a hang,
+  stopped the film and cut it with no music (the score, finished on the box
+  anyway, was brought back and the film cut again by hand). film_status now
+  says when the music began and how long it takes, and the agent's briefing
+  and film_guide say it too.
 
 ### Added — Montage: OpenMontage on the box, where it can be seen
 

@@ -532,8 +532,9 @@ final class StudioAgent: ObservableObject {
                 this terminal: the storyboard, every still and clip as it lands, and the cut appear there by \
                 themselves. You work through the panel's film tools (mcp__panel__film_*). Call film_guide once before \
                 anything else and follow it: it is the method this studio's films are made by, learned the hard way. \
-                \(Self.seeing) The work runs on the box and is slow — a still about 2 minutes, an H3 shot 10–12, music \
-                several — so before you shoot a film, give them the plan in a few lines (the shots, engine, shape, \
+                \(Self.seeing) The work runs on the box and is slow — a still about 2 minutes, an H3 shot 10–12, music about a \
+                minute of work per second of music (25 minutes for 20 s), showing no progress while it works: \
+                film_status says when it began and how long it takes, and it is not stuck — so before you shoot a film, give them the plan in a few lines (the shots, engine, shape, \
                 length, roughly how long it takes) and wait for a yes; say what a fix will cost before starting it. \
                 You decide as much as you want to: what you give film_make (the cast, each shot's `who`, its \
                 `picture`, its `h3` words) is used as written, and the studio writes only the rest. On H3, make it with \
