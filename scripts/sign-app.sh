@@ -89,27 +89,19 @@ if [[ ! -x "$EXECUTABLE" ]]; then
   exit 1
 fi
 # DYLD_PRINT_LIBRARIES would dump too much; we just need to know if
-# the linker can resolve everything. Spawn-and-kill, with cleanup
-# of orphaned helper subprocesses (kinclaw + kincode) afterward.
+# the linker can resolve everything, and dyld resolves every library
+# before main runs — whichever way main goes. So the smoke test runs
+# the binary as the panel's MCP relay (`--mcp-stdio`), which reads
+# stdin and touches nothing else, with a stdin that stays open.
 #
-# Why the helper cleanup matters: KinClawMac's supervisors auto-spawn
-# kinclaw on :5001 and kincode on :5002 within ~1s of launch. When we
-# SIGTERM the smoke-test KinClawMac, those helpers see their parent
-# go away and self-exit via their own orphan-watch — but that takes
-# 0-2s (orphan-watch ticks every 2s in kinclaw v1.11.0+).
-#
-# Without the wait, `make run`'s subsequent `open $APP` triggers a
-# new KinClawMac whose supervisor pings :5001 and finds the dying
-# orphan still answering — supervisor moves to .adoptedExternal,
-# does NOT spawn its own kinclaw. ~1s later the orphan exits, :5001
-# goes empty, but supervisor is stuck in .adoptedExternal forever.
-# User clicks Cowork → "kinclaw not reachable". This is the race
-# we hit immediately after every `make run`.
-#
-# The fix: after killing KinClawMac, explicitly wait until kinclaw
-# and kincode have actually exited. Up to 5s timeout — orphan-watch
-# tick is 2s, plus jitter.
-( "$EXECUTABLE" >/dev/null 2>&1 & echo $! > /tmp/.kinclawmac-smoketest-pid )
+# It used to launch the whole app. That instance started the panel
+# bridge, which rewrote ~/.localkin/panel.json with its own token and
+# died a second later — every panel tool the kernel has then got a 403
+# from the app that was really running. And its supervisors spawned
+# kinclaw and kincode, so afterwards this script waited for them and
+# pkill'd whatever kinclaw and kincode were left: with the app already
+# running, that was the app's own kernel, and any turn it was in.
+( sleep 5 | "$EXECUTABLE" --mcp-stdio >/dev/null 2>&1 & echo $! > /tmp/.kinclawmac-smoketest-pid )
 SMOKE_PID="$(cat /tmp/.kinclawmac-smoketest-pid)"
 sleep 1
 if kill -0 "$SMOKE_PID" 2>/dev/null; then
@@ -124,28 +116,6 @@ else
   exit 1
 fi
 rm -f /tmp/.kinclawmac-smoketest-pid
-
-# Wait for the orphan helpers to clean themselves up. Without this
-# the next `make run` adopts a dying kinclaw and gets stuck.
-echo "  → waiting for orphan helpers to exit..."
-deadline=$(($(date +%s) + 5))
-while [[ $(date +%s) -lt $deadline ]]; do
-  if ! pgrep -x kinclaw >/dev/null 2>&1 && \
-     ! pgrep -x kincode >/dev/null 2>&1; then
-    break
-  fi
-  sleep 0.5
-done
-# If they're still alive past the deadline (orphan-watch broken /
-# disabled / kinclaw didn't notice yet), force them down. The next
-# `make run` deserves a clean slate either way.
-if pgrep -x kinclaw >/dev/null 2>&1 || pgrep -x kincode >/dev/null 2>&1; then
-  echo "  → helpers didn't self-exit, sending SIGTERM"
-  pkill -x kinclaw 2>/dev/null || true
-  pkill -x kincode 2>/dev/null || true
-  sleep 0.5
-fi
-echo "  ✓ helper cleanup complete"
 
 echo
 echo "✓ Signed: $APP"
