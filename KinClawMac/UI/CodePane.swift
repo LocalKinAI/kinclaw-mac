@@ -169,6 +169,8 @@ struct CodePane: View {
             inputBar
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
+                .frame(maxWidth: 984)
+                .frame(maxWidth: .infinity)
         }
         .onAppear {
             inputFocused = true
@@ -295,7 +297,7 @@ struct CodePane: View {
             // for visual weight.
             Circle()
                 .fill(connectError == nil
-                      ? Color.green.opacity(0.7)
+                      ? Theme.accent.opacity(0.7)
                       : Color.orange.opacity(0.7))
                 .frame(width: 6, height: 6)
                 .help(connectError ?? "kincode :5002 connected")
@@ -394,6 +396,9 @@ struct CodePane: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
+                // The column Chat reads in; a reply 1900pt wide is not read.
+                .frame(maxWidth: 960, alignment: .leading)
+                .frame(maxWidth: .infinity)
             }
             .onChange(of: messages.count) { _, _ in
                 if let last = messages.last(where: { $0.role != .toolResult })?.id {
@@ -543,7 +548,7 @@ struct CodePane: View {
                             .font(.system(size: 13))
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
-                            .background(Color.green.opacity(0.18))
+                            .background(Theme.accent.opacity(0.18))
                             .foregroundColor(.primary)
                             .clipShape(RoundedRectangle(cornerRadius: 10))
                             .textSelection(.enabled)
@@ -631,7 +636,7 @@ struct CodePane: View {
                                   : "exclamationmark.triangle")
                     .font(.system(size: 10))
                     .foregroundColor(msg.toolError == nil
-                                     ? .green.opacity(0.85)
+                                     ? Theme.accent.opacity(0.85)
                                      : .orange.opacity(0.9))
                 Text(truncate(msg.text, max: 220))
                     .font(.system(size: 10, design: .monospaced))
@@ -645,7 +650,7 @@ struct CodePane: View {
             HStack(alignment: .top, spacing: 6) {
                 Image(systemName: failed ? "hammer.circle" : "checkmark.circle")
                     .font(.system(size: 11))
-                    .foregroundColor(failed ? .orange : .green.opacity(0.8))
+                    .foregroundColor(failed ? .orange : Theme.accent.opacity(0.8))
                 Text(msg.text)
                     .font(.system(size: 11, design: failed ? .monospaced : .default))
                     .foregroundColor(failed ? .orange : .secondary)
@@ -784,7 +789,7 @@ struct CodePane: View {
                         .font(.system(size: 22))
                         .foregroundColor(isStreaming
                                          ? .red
-                                         : (canSend ? .green : .secondary.opacity(0.4)))
+                                         : (canSend ? Theme.accent : .secondary.opacity(0.4)))
                 }
                 .buttonStyle(.plain)
                 .disabled(!isStreaming && !canSend)

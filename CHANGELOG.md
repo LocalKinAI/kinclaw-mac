@@ -8,6 +8,138 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Added — Montage: OpenMontage on the box, where it can be seen
+
+"openmontage看不见怎么用啊": installed on the box and tested, OpenMontage was
+a folder there and nothing here. Studio → Montage is where it shows.
+
+- **The board** — OpenMontage's own Backlot: the production as it happens
+  (stages, script, scene cards, takes, renders) and a library of every
+  project. The app starts it on the box if it is not running and brings it
+  here through an ssh tunnel (it listens on the box's 127.0.0.1:4750 only).
+  Once the agent opens a project the board follows it; back, home — the
+  library ("openmontage应该可以回到首页啊") — and reload sit above it, and the
+  Safari button opens the same board in a browser.
+- **The agent** stands on the tab's left, as on every Studio tab (below). It
+  runs on this Mac and works ~/OpenMontage on the box through a bridge,
+  `Resources/om_bridge.py`: an MCP server the app installs on the box and
+  the agent starts over ssh — list, read, look (a picture, or a clip as a
+  contact sheet), write, run (a command in OpenMontage's venv, up to 15
+  minutes), and start + job for renders, H3 and music. So it can think with
+  this Mac's Claude subscription instead of the box's Claude Code, which
+  bills by use. It is briefed to follow OpenMontage's own guide, checkpoints
+  and approval gates, to generate with the box's qwen_image, h3_video and
+  minimax_music instead of paid APIs, and to say what a plan costs in time.
+- **Tools**: `montage_ask` (so "用 OpenMontage 拍…" said to her starts one),
+  `montage_status` (board, agent, the terminal's last lines), `montage_stop`.
+  Quitting the app ends the agents and the tunnel.
+- **scripts/openmontage**: the three tools that plug OpenMontage into the
+  box's ComfyUI — `qwen_image` (Qwen-Image 2.1, edit mode composes first
+  frames), `h3_video` (MiniMax H3 from portraits, first frame pinned, `hold`
+  pins start, middle and end) and `minimax_music` (MiniMax Music 3) — and the
+  skill that says how to film with them. Tested on a shot of 五饼二鱼: first
+  frame in 135 s, the shot in 712 s with frame 0 exactly the pinned picture,
+  a 14 s cue in 982 s.
+- The first film made this way, 海边漫步者: twenty seconds, vertical — a cast
+  portrait, first frames composed on it, four H3 shots, a MiniMax score and a
+  Remotion cut, from one sentence.
+
+### Added — An agent on each Studio tab
+
+"这个真的很酷啊，我们的film和comfyui我就想要这种啊，就是通过agent来操作啊":
+Film, Motion, Comfy and Montage each have an agent standing along their
+left. Say what you want in a sentence, watch it work in its terminal and
+the result land on the tab beside it, answer when it asks.
+
+- **One each, kept apart.** Tried as one agent for all four and taken back
+  ("我后悔了……他们是独立分开的"): each has its own conversation, its own
+  folder, and its own choice of agent and brain.
+- **Claude Code or Codex** ("而且应该也可以用codex"), thinking with its own
+  sign-in — the Claude subscription, ChatGPT — or a model from this Mac's
+  Ollama, the box's Ollama or the box's kinfer. The menu says whether a
+  sign-in is a subscription or billed by use.
+- **Only its tab's tools**: Film's agent the film tools (film_guide first:
+  the method this studio's films are made by) and Comfy's; Motion's
+  motion_find, motion_make and motion_status; Comfy's the comfy tools —
+  each through the panel's MCP relay cut down with `--mcp-stdio --tools
+  a,b`, which lists only those and refuses the rest. Claude Code's file
+  editing is off.
+- **A column, not a strip** ("对话agent应该在左侧竖立着"): about 85 columns
+  wide to start, its edge dragged wider or narrower, put away while it keeps
+  working. Once it runs, its own prompt is the one place to type
+  ("为什么有两个输入框呢").
+- **接着上一次 and 重启** ("加个可以重启的按钮"): back into its last
+  conversation, found by id where the harness keeps it — Claude Code's by
+  folder, Codex's by the folder each session names — and offered only when
+  there is one. After it stops, its screen stays, with 重启 and 新开一个
+  under it, and words typed go on in that conversation. It used to die with
+  "No conversation found to continue" and "退出码 256" — an exit code of 1,
+  as waitpid gives it — and nothing to click.
+- **What needs you is said in words** above the terminal: the folder-trust
+  question, a sign-in that has run out. Neither is answered for you.
+- **The wheel scrolls Claude Code** ("不能在claude code里面滚轮啊"): a TUI on
+  the alternate screen asks for the mouse, and SwiftTerm never passed it
+  the wheel. It gets buttons 4 and 5 now; a program without the mouse gets
+  arrow keys.
+- **A server's model, everywhere**: with an Ollama or kinfer brain, every
+  model name Claude Code asks for — its default, the aliases, the small
+  model for its chores, its subagents' — is that model. The messages typed
+  while it answered went out as its default, claude-opus-5-5[1m], and the
+  box said model_not_found. The Term tab aims Claude Code the same way.
+
+### Changed — The panel's look: one theme, four groups, a film tab laid out for watching
+
+"你能把kinclaw-mac的UI搞一下吗": 整体视觉更精致, 标签太多重新组织, 片场 Film
+用起来更顺.
+
+- **Why it looked flat**: the panel was drawn for dark glass and forced dark
+  with `.preferredColorScheme(.dark)`, which an NSHostingView in a plain
+  NSPanel never passes to its window. On a Mac in light mode it came up grey,
+  and every `Color.white.opacity(…)` meant as a card vanished into it.
+  `Theme.swift` now has the few values everything is drawn with — one accent
+  (the app's jade, a shade deeper), canvas, sidebar, card, well, hairline, a
+  type scale — each with a light and a dark side, and Settings → General →
+  外观 sets 跟随系统 / 浅色 / 深色 on the app itself. Each tab's own green,
+  blue and purple became the one accent.
+- **Four groups instead of nine tabs**: Talk (Chat, Cowork) · Work (Code,
+  Term, Web) · Studio (Film, Motion, Montage, Comfy) · Jev, centred in the
+  title bar and level with the traffic lights. The open group shows its
+  members; a closed one is one word and goes back to the member used last;
+  right-click one to go straight to any member. The blank band that sat
+  under the bar is gone.
+- **Film**: the player takes the video's own shape (an H3 film is 928×544,
+  and a player cut to the stills' 16:9 had black bars) and no longer starts
+  over every two seconds while a film is being shot. Shot cards are in the
+  film's shape and cut to it — a wide picture used to fill past its cell and
+  lie over the next card. The English prompts moved into a tooltip and a
+  folded 「片子是怎么写的」. The header keeps 接着拍 and the folder; the rest is
+  in a ⋯ menu, in words (重做旁白和配乐, 重新检查每个镜头). While shooting, a
+  bar says which shot is doing what, with 停 beside it. The ten controls
+  under the idea are chips that say what they are set to, and 钉帧 shows
+  only for H3.
+- **Motion, Comfy, the conversations**: Motion laid out like Film (the
+  player in the video's shape, the reference, the scene and the button in
+  rows that read); Comfy's ask bar and welcome with examples; Chat, Cowork
+  and Code read in a centred column instead of lines 1900 points long.
+
+### Fixed
+
+- Comfy showed an empty "Choose an agent" row: it was missing from the list
+  of tabs without an agent picker.
+- Full screen did nothing, and the panel sat on top of every other window
+  ("不能全屏……窗口不要总是放在最前面"). It is an ordinary window on one Space
+  now, and the green button takes it full screen. There the mode bar sits
+  below the strip AppKit keeps for the title bar, which took every click on
+  it ("全屏模式下，没有办法点最上面的菜单"); and tools that switch tabs no
+  longer bring the panel over what you are doing.
+- `make sign-app`'s smoke test launched the whole app for a second. That
+  instance started the panel bridge and rewrote ~/.localkin/panel.json with a
+  token that died with it — every panel tool the kernel had then got a 403
+  from the app really running — and its cleanup pkill'd whatever kinclaw and
+  kincode were left, which with the app open were the app's own. It now runs
+  the binary as the MCP relay (`--mcp-stdio`), which loads every library the
+  same way and starts nothing.
+
 ### Added — 帝国时代: a real-time strategy game you build with the mouse
 
 "我要的是真的建造类游戏啊": the turn-based 帝国 was orders from a list with

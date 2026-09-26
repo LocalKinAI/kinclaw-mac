@@ -27,7 +27,6 @@ struct KinClawMacApp: App {
             // referenced from here; that whole tier belongs on
             // localkin.dev account pages, not on a free local dock.
             KinClawMacSettingsView()
-                .preferredColorScheme(.dark)
         }
     }
 }
@@ -94,10 +93,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         //    Spotlight-shaped single-pane chat view (replacing the
         //    iOS-shaped TabView ContentView, which was too cramped
         //    in a 380×600 floating panel).
+        // The wheel, for programs in the agents' terminals (see TerminalWheel).
+        TerminalWheel.install()
+        // Light, dark or the Mac's: set on the app before the first window,
+        // so the panel, its blur and Settings all come up the same.
+        Appearance.apply()
         spotlightWindow = SpotlightWindow {
             SpotlightContentView()
                 .environmentObject(self.appState)
-                .preferredColorScheme(.dark)
         }
 
         // 2. Wire the menubar (🦞) + its dropdown actions.
@@ -112,9 +115,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NotificationCenter.default.post(name: .kinclawEnterCompanion, object: nil)
             }
         }
+        // A tool asked for a tab. Asked for the panel itself (panel_show), it
+        // comes forward; as a side effect of other work — a game, a workflow,
+        // a Montage run — it only changes tab, unless it was not up at all:
+        // an agent working the panel should not pull it over what the user
+        // has in front of them every time it runs something.
         NotificationCenter.default.addObserver(forName: .kinclawShowPanel, object: nil,
-                                               queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.spotlightWindow.show() }
+                                               queue: .main) { [weak self] note in
+            let raise = note.userInfo?["raise"] as? Bool ?? true
+            let full = note.userInfo?["fullScreen"] as? Bool
+            MainActor.assumeIsolated {
+                guard let window = self?.spotlightWindow else { return }
+                if raise || !window.isVisible { window.show() }
+                if let full { window.setFullScreen(full) }
+            }
         }
         NotificationCenter.default.addObserver(forName: .kinclawOpenCompanion, object: nil,
                                                queue: .main) { [weak self] _ in
@@ -172,6 +186,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // (either kernel) are left alone — they belong to the user.
         supervisor.stop()
         kincodeSupervisor.stop()
+        // The OpenMontage agent's ssh session and the board's tunnel: an ssh
+        // left running after the app is gone holds the port for nobody.
+        MontageStudio.shared.shutdown()
+        StudioAgent.all.forEach { $0.stop() }
         // The handshake file is a live claim about a port; a dead app should
         // not leave one lying around.
         PanelBridge.shared.stop()

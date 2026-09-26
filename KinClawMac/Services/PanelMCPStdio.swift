@@ -14,6 +14,16 @@ import Foundation
 /// honest answer: the panel's tools are the panel's, and without it there is
 /// nothing to read.
 enum PanelMCPStdio {
+    /// `--tools a,b,c`: the only tools this relay lets through — listed, and
+    /// callable. A studio agent is given its tab's tools this way; a deny list
+    /// in the agent itself stops the calls but leaves every other tool the
+    /// panel has (the signed-in browser, the terminals) in its list. nil is
+    /// all of them, for the kernel.
+    private static let only: Set<String>? = {
+        let args = CommandLine.arguments
+        guard let at = args.firstIndex(of: "--tools"), at + 1 < args.count else { return nil }
+        return Set(args[at + 1].split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
+    }()
 
     static func run() -> Never {
         // Unbuffered: the kernel reads a line and waits, and a reply sitting
@@ -33,6 +43,10 @@ enum PanelMCPStdio {
     /// back — a notification, which has no id and wants no reply.
     private static func forward(_ line: String) -> String? {
         let id = Self.id(in: line)
+        let method = Self.method(in: line)
+        if let only, method == "tools/call", let name = Self.toolName(in: line), !only.contains(name) {
+            return id.map { error(id: $0, "\(name) 不在这个 agent 能用的工具里") }
+        }
         guard let handshake = Handshake.read() else {
             return id.map { error(id: $0, "KinClaw Mac 没在运行 —— 面板的浏览器和终端工具要等它起来") }
         }
@@ -63,6 +77,17 @@ enum PanelMCPStdio {
         guard status == 200, let body, !body.isEmpty else {
             return id.map { error(id: $0, "面板回了 HTTP \(status)") }
         }
+        // The list, cut down to what this relay lets through.
+        if let only, method == "tools/list",
+           var object = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+           var result = object["result"] as? [String: Any],
+           let tools = result["tools"] as? [[String: Any]] {
+            result["tools"] = tools.filter { ($0["name"] as? String).map(only.contains) ?? false }
+            object["result"] = result
+            if let data = try? JSONSerialization.data(withJSONObject: object) {
+                return String(decoding: data, as: UTF8.self)
+            }
+        }
         // One line: the kernel's reader is line-based, and the app answers
         // with compact JSON, but a stray newline would desynchronise it.
         return String(decoding: body, as: UTF8.self)
@@ -84,6 +109,19 @@ enum PanelMCPStdio {
             return String(wrapped.dropFirst().dropLast()) // ["x"] → "x"
         }
         return nil
+    }
+
+    private static func method(in line: String) -> String? {
+        guard let data = line.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return object["method"] as? String
+    }
+
+    private static func toolName(in line: String) -> String? {
+        guard let data = line.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let params = object["params"] as? [String: Any] else { return nil }
+        return params["name"] as? String
     }
 
     private static func error(id: String, _ message: String) -> String {

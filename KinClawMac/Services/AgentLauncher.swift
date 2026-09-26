@@ -30,8 +30,8 @@ enum AgentLauncher {
         /// Binary names to look for, in order. Empty means the login shell,
         /// which is always here.
         let binaries: [String]
-        /// The environment that aims the agent at `host`.
-        let env: (_ host: String) -> [String: String]
+        /// The environment that aims the agent at `host`, and `model` there.
+        let env: (_ host: String, _ model: String) -> [String: String]
         /// Arguments that aim it at `host` and pin `model` — not every
         /// agent takes its endpoint from the environment.
         let args: (_ host: String, _ model: String) -> [String]
@@ -42,7 +42,7 @@ enum AgentLauncher {
         let needsModel: Bool
 
         init(id: String, label: String, binaries: [String],
-             env: @escaping (_ host: String) -> [String: String],
+             env: @escaping (_ host: String, _ model: String) -> [String: String],
              args: @escaping (_ host: String, _ model: String) -> [String],
              dialect: Dialect, needsModel: Bool = true) {
             self.id = id
@@ -71,13 +71,25 @@ enum AgentLauncher {
         id: "claude",
         label: "Claude Code",
         binaries: ["claude"],
-        env: { host in
-            [
+        env: { host, model in
+            var env = [
                 "ANTHROPIC_BASE_URL": host,
                 // Any non-empty token. Ollama ignores it; Claude Code
                 // will not start without one.
                 "ANTHROPIC_AUTH_TOKEN": "ollama",
             ]
+            // And every model name it asks for is this one — its default,
+            // the aliases, the small model for its own chores, its
+            // subagents' — for the host has no other. With --model alone,
+            // the messages queued while it answered went out as its
+            // default, claude-opus-5-5[1m], and the box said model_not_found.
+            if !model.isEmpty {
+                for name in ["ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
+                             "ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_SMALL_FAST_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL"] {
+                    env[name] = model
+                }
+            }
+            return env
         },
         args: { _, model in ["--model", model] },
         dialect: .anthropicMessages
@@ -101,7 +113,7 @@ enum AgentLauncher {
         id: "codex",
         label: "Codex",
         binaries: ["codex"],
-        env: { _ in [:] },
+        env: { _, _ in [:] },
         args: { host, model in
             [
                 "-c", "model_provider=kinhost",
@@ -125,7 +137,7 @@ enum AgentLauncher {
         id: "shell",
         label: "Shell",
         binaries: [],
-        env: { _ in [:] },
+        env: { _, _ in [:] },
         args: { _, _ in [] },
         dialect: .anthropicMessages,
         needsModel: false
@@ -209,7 +221,7 @@ enum AgentLauncher {
             "#   export CLAUDE_CODE_MAX_CONTEXT_TOKENS=32768",
             "cd \(shellQuoted(dir)) || exit 1",
         ]
-        for (key, value) in item.integration.env(host).sorted(by: { $0.key < $1.key }) {
+        for (key, value) in item.integration.env(host, model).sorted(by: { $0.key < $1.key }) {
             lines.append("export \(key)=\(shellQuoted(value))")
         }
         if item.integration.needsModel {

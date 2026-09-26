@@ -90,7 +90,7 @@ struct BookShelfView: View {
                             if let put = book.shelf {
                                 Text(put).font(.system(size: 9, weight: .medium))
                                     .padding(.horizontal, 5).padding(.vertical, 1)
-                                    .background(Capsule().fill((book.unsure ? Color.orange : Color.accentColor).opacity(0.22)))
+                                    .background(Capsule().fill((book.unsure ? Color.orange : Theme.accent).opacity(0.22)))
                             }
                             if let sure = book.sure {
                                 Text(String(format: "%.2f", sure)).font(.system(size: 9, design: .monospaced))

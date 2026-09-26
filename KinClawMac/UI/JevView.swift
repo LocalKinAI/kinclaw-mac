@@ -18,8 +18,8 @@ struct JevView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            games.frame(width: 150)
-            Divider().opacity(0.15)
+            games.frame(width: 150).background(Theme.sidebar)
+            Rectangle().fill(Theme.hairline).frame(width: 0.5)
             if doing == "books" {
                 BookShelfView()
             } else if doing == "rts" {
@@ -179,7 +179,7 @@ struct JevView: View {
         VStack(alignment: .leading, spacing: 8) {
             if arcade.personSeated {
                 Text(arcade.game.controls + (arcade.running ? "" : "（点「开始」或直接按键）"))
-                    .font(.system(size: 11, weight: .semibold)).foregroundColor(.accentColor)
+                    .font(.system(size: 11, weight: .semibold)).foregroundColor(Theme.accent)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if arcade.running, arcade.personSeated, arcade.mover != .me, !arcade.game.over {
@@ -220,7 +220,7 @@ struct JevView: View {
                     Text("\(last.milliseconds) ms").font(.system(size: 10)).foregroundColor(.secondary)
                     if let sure = last.confidence { Text("把握 \(String(format: "%.2f", sure))").font(.system(size: 10)).foregroundColor(.secondary) }
                     Text(last.agreed ? "和启发式一致" : "和启发式不同").font(.system(size: 10))
-                        .foregroundColor(last.agreed ? Color.accentColor : .orange)
+                        .foregroundColor(last.agreed ? Theme.accent : .orange)
                 }
                 ForEach(ranked(last).prefix(7)) { option in
                     let chance = last.chances[option.id]
@@ -228,7 +228,7 @@ struct JevView: View {
                         HStack(spacing: 6) {
                             Text(option.id).font(.system(size: 9, design: .monospaced)).foregroundColor(.secondary)
                             if let chance { Text("\(Int((chance * 100).rounded()))%").font(.system(size: 9, weight: .semibold)) }
-                            if option.id == last.chosen { Text("选了这个").font(.system(size: 9, weight: .semibold)).foregroundColor(.accentColor) }
+                            if option.id == last.chosen { Text("选了这个").font(.system(size: 9, weight: .semibold)).foregroundColor(Theme.accent) }
                         }
                         if let title = option.title {
                             Text(title).font(.system(size: 11, weight: .semibold)).foregroundColor(option.id == last.chosen ? .primary : .secondary)
@@ -237,7 +237,7 @@ struct JevView: View {
                             .fixedSize(horizontal: false, vertical: true)
                         if let chance {
                             GeometryReader { space in
-                                Capsule().fill(option.id == last.chosen ? Color.accentColor : Color.primary.opacity(0.25))
+                                Capsule().fill(option.id == last.chosen ? Theme.accent : Color.primary.opacity(0.25))
                                     .frame(width: max(2, space.size.width * chance), height: 3)
                             }
                             .frame(height: 3)

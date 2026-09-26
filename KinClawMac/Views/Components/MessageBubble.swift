@@ -31,7 +31,7 @@ struct MessageBubble: View {
                     .padding(.vertical, 10)
                     .background(
                         message.isUser
-                            ? Color.green.opacity(0.2)
+                            ? Theme.accent.opacity(0.2)
                             : Color.platformSecondaryBackground
                     )
                     .foregroundColor(.primary)

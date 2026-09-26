@@ -127,7 +127,7 @@ struct CoworkSidebar: View {
                 Image(systemName: g.workspace.isEmpty ? "tray"
                       : (isActive ? "folder.fill" : "folder"))
                     .font(.system(size: 11))
-                    .foregroundColor(isActive ? .green.opacity(0.85) : .secondary)
+                    .foregroundColor(isActive ? Theme.accent.opacity(0.85) : .secondary)
                 Text(g.name)
                     .font(.system(size: 12, weight: isActive ? .semibold : .regular))
                     .lineLimit(1)
@@ -139,7 +139,7 @@ struct CoworkSidebar: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 4)
-            .background(isActive ? Color.green.opacity(0.10) : .clear)
+            .background(isActive ? Theme.accent.opacity(0.10) : .clear)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -168,7 +168,7 @@ struct CoworkSidebar: View {
             HStack(spacing: 5) {
                 Image(systemName: isActive ? "bubble.left.fill" : "bubble.left")
                     .font(.system(size: 9))
-                    .foregroundColor(isActive ? .green.opacity(0.85) : .secondary.opacity(0.7))
+                    .foregroundColor(isActive ? Theme.accent.opacity(0.85) : .secondary.opacity(0.7))
                 VStack(alignment: .leading, spacing: 0) {
                     Text(s.displayTitle)
                         .font(.system(size: 11, weight: isActive ? .medium : .regular))
@@ -188,7 +188,7 @@ struct CoworkSidebar: View {
             .padding(.leading, 26)
             .padding(.trailing, 8)
             .padding(.vertical, 2)
-            .background(isActive ? Color.green.opacity(0.08) : .clear)
+            .background(isActive ? Theme.accent.opacity(0.08) : .clear)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

@@ -358,13 +358,17 @@ enum PanelTools {
         ],
         [
             "name": "panel_show",
-            "description": "Show the KinClaw panel, optionally on one of its tabs: chat, cowork, code, term, web, film, motion, jev. Use it when the user asks to see the panel or to go to a tab (\"打开片场\" → film). With mode film, `film` selects a film and `shot` opens that shot's words for rewriting (\"我想改第三个镜头\").",
+            "description": "Show the KinClaw panel, optionally on one of its tabs: chat, cowork, code, term, web, film, motion, montage, comfy, jev; or make it full screen. With film, motion, comfy or montage, `ask` hands a request to the agent on that tab's left. Use it when the user asks to see the panel or to go to a tab (\"打开片场\" → film). With mode film, `film` selects a film and `shot` opens that shot's words for rewriting (\"我想改第三个镜头\").",
             "inputSchema": [
                 "type": "object",
                 "properties": [
-                    "mode": ["type": "string", "description": "chat | cowork | code | term | web | film | motion | jev. Omit to leave the tab as it is."],
+                    "mode": ["type": "string", "description": "chat | cowork | code | term | web | film | motion | montage | comfy | jev. Omit to leave the tab as it is."],
                     "film": ["type": "string", "description": "With mode film: the film to show, by id or title."],
                     "shot": ["type": "integer", "description": "With film: open this shot's prompt editor."],
+                    "full_screen": ["type": "boolean", "description": "true: the panel goes full screen; false: back to a window. Omit to leave it."],
+                    "ask": ["type": "string", "description": "With mode film, motion, comfy or montage: hand these words to the agent docked in that tab (Claude Code or Codex, holding that tab's tools, which plans, asks, runs and checks), starting it if it is not running. For \"让片场的 agent 拍…\" / \"让 Comfy 那边的 agent 做…\"."],
+                    "agent": ["type": "boolean", "description": "With mode film, motion, comfy or montage: open that tab's agent dock without saying anything to it."],
+                    "resume": ["type": "boolean", "description": "With mode film, motion, comfy or montage: bring that tab's agent back into its last conversation, waiting for the next word — after the app was restarted in the middle of one."],
                 ] as [String: Any],
             ],
         ],
@@ -642,6 +646,25 @@ enum PanelTools {
         [
             "name": "comfy_stop",
             "description": "Stop the ComfyUI workflow that is running (ComfyUI interrupts it on the box).",
+            "inputSchema": ["type": "object", "properties": [String: Any]()],
+        ],
+        [
+            "name": "montage_ask",
+            "description": "Make a video with OpenMontage on the box: shows the Montage tab and says the words to that tab's agent (Claude Code or Codex on the Mac, working ~/OpenMontage on the box through a bridge: it writes, generates with the box's Qwen-Image, H3 and MiniMax Music, and edits), starting it if it is not running. Use it when the user asks for a video by OpenMontage (\"用 OpenMontage 拍…\"). It is slow and it asks the user to approve its script and plan in its terminal; say so.",
+            "inputSchema": [
+                "type": "object",
+                "properties": ["words": ["type": "string", "description": "What to say to the agent, in the user's words."]],
+                "required": ["words"],
+            ],
+        ],
+        [
+            "name": "montage_stop",
+            "description": "End the OpenMontage agent on the box. Its projects stay on the box and on the board; a new agent can be told to carry one on.",
+            "inputSchema": ["type": "object", "properties": [String: Any]()],
+        ],
+        [
+            "name": "montage_status",
+            "description": "The Montage tab: whether OpenMontage's Backlot board is open and on which project, whether the agent on the box is running and on what model, and the last lines of its terminal.",
             "inputSchema": ["type": "object", "properties": [String: Any]()],
         ],
         [
@@ -964,7 +987,22 @@ enum PanelTools {
         case "panel_show":
             var info: [String: Any] = [:]
             if let mode = args["mode"] as? String, !mode.isEmpty { info["mode"] = mode }
+            if let full = args["full_screen"] as? Bool { info["fullScreen"] = full }
             NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: info)
+            // The tab's own agent: film and comfy have one docked under them.
+            // Each of the Studio's tabs has its own agent, on its left.
+            let docked = (args["mode"] as? String).flatMap(StudioAgent.Place.init(rawValue:)).map(StudioAgent.of)
+            if let agent = docked, let words = (args["ask"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !words.isEmpty {
+                agent.say(words)
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                return ("面板打开了，交给了 \(agent.place.rawValue) 标签的 agent。它会先说打算怎么做，要花时间的事等人点头。\n" + agent.report, false)
+            }
+            if let agent = docked, args["agent"] as? Bool == true { agent.shown = true }
+            if let agent = docked, args["resume"] as? Bool == true, !agent.running {
+                agent.start(continuing: true)
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                return ("接回了 \(agent.place.rawValue) 标签的 agent 上一次的对话。\n" + agent.report, false)
+            }
             if let film = args["film"] as? String, !film.isEmpty {
                 // After the tab has had a moment to exist: a view that is not
                 // on screen yet is not listening yet.
@@ -1026,7 +1064,7 @@ enum PanelTools {
         case "jev_play":
             let arcade = JevArcade.shared
             guard !arcade.running else { return ("Jev 标签里正在玩，先等它停", true) }
-            NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: ["mode": "jev"])
+            NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: ["mode": "jev", "raise": false])
             if let game = args["game"] as? String { arcade.choose(game) }
             if let name = args["player"] as? String, let player = JevArcade.Player(rawValue: name) { arcade.player = player }
             // The first seat is whoever moves first: White at chess, Red at xiangqi, Black at gomoku.
@@ -1060,7 +1098,7 @@ enum PanelTools {
             return (lines.joined(separator: "\n"), arcade.trouble != nil && arcade.moves == 0)
         case "books_scan":
             let shelf = BookShelf.shared
-            NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: ["mode": "jev"])
+            NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: ["mode": "jev", "raise": false])
             let folder = (args["folder"] as? String) ?? BookShelf.folder
             if let given = args["folder"] as? String, !given.isEmpty { UserDefaults.standard.set(given, forKey: BookShelf.folderKey) }
             switch shelf.scan(folder) {
@@ -1072,7 +1110,7 @@ enum PanelTools {
         case "books_sort":
             let shelf = BookShelf.shared
             guard shelf.working == nil else { return ("正在分类：\(shelf.working!)", true) }
-            NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: ["mode": "jev"])
+            NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: ["mode": "jev", "raise": false])
             shelf.sort(again: args["again"] as? Bool ?? false, limit: args["limit"] as? Int)
             if let trouble = shelf.trouble { return (trouble, true) }
             return ("开始分类了。books_status 看进度", false)
@@ -1097,7 +1135,7 @@ enum PanelTools {
             guard let topic = (args["topic"] as? String)?.trimmingCharacters(in: .whitespaces), !topic.isEmpty else { return ("motion_find 需要 topic", true) }
             let finder = MotionFinder.shared
             guard finder.doing == nil else { return ("还在找「\(finder.topic)」，等一下", true) }
-            NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: ["mode": "motion"])
+            NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: ["mode": "motion", "raise": false])
             finder.find(topic)
             for _ in 0..<90 {                       // searches and thumbnails: usually under a minute
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
@@ -1160,7 +1198,7 @@ enum PanelTools {
             let comfy = ComfyStudio.shared
             if let busy = comfy.busyElsewhere { return (busy + "，等它拍完", true) }
             guard !comfy.running else { return ("ComfyUI 正在跑一个，先 comfy_status 看看或 comfy_stop", true) }
-            NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: ["mode": "comfy"])
+            NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: ["mode": "comfy", "raise": false])
             if comfy.templates.isEmpty { await comfy.refresh() }
             if let name = args["template"] as? String, !name.isEmpty {
                 guard let t = comfy.template(named: name) else { return ("没有叫 \(name) 的模板，用 comfy_templates 找", true) }
@@ -1205,7 +1243,7 @@ enum PanelTools {
         case "comfy_import":
             let comfy = ComfyStudio.shared
             guard !comfy.running else { return ("ComfyUI 正在跑，等它跑完", true) }
-            NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: ["mode": "comfy"])
+            NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: ["mode": "comfy", "raise": false])
             if let path = args["path"] as? String, !path.isEmpty {
                 let file = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
                 guard FileManager.default.fileExists(atPath: file.path) else { return ("没有这个文件：\(path)", true) }
@@ -1224,6 +1262,23 @@ enum PanelTools {
             guard ComfyStudio.shared.running else { return ("ComfyUI 没在跑", false) }
             ComfyStudio.shared.stop()
             return ("停了", false)
+        case "montage_ask":
+            guard let words = (args["words"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !words.isEmpty else {
+                return ("要说点什么：想拍什么", true)
+            }
+            NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: ["mode": "montage", "raise": false])
+            let agent = StudioAgent.montage
+            let was = agent.running
+            agent.say(words)
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            return ((was ? "说给 Montage 的 agent 了。" : "开了 Montage 的 agent（\(agent.whereTitle)，\(agent.brainTitle)，经桥操作盒子上的 OpenMontage），第一句就是这个。")
+                    + "它会在终端里问你批不批剧本和计划；过程在 Montage 标签上面的看板上。\n" + MontageStudio.shared.report, false)
+        case "montage_status":
+            return (MontageStudio.shared.report, false)
+        case "montage_stop":
+            guard StudioAgent.montage.running else { return ("Montage 的 agent 没在跑", false) }
+            StudioAgent.montage.stop()
+            return ("停了。项目还在盒子上，看板上能看", false)
         case "film_recut":
             guard let id = args["film"] as? String else { return ("film_recut 需要 film", true) }
             switch FilmStudio.shared.recut(film: id) {

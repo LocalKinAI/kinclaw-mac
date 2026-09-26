@@ -66,6 +66,8 @@ struct SpotlightContentView: View {
     /// Active surface — Chat / Cowork / Code. Loaded from UserDefaults
     /// so the user's last choice survives a relaunch.
     @State private var mode: ChatMode = ChatMode.loadPersisted()
+    /// The panel is full screen: no titlebar row for the mode bar to sit in.
+    @State private var fullScreen = false
     /// A model menu asking for an agent in the Term tab.
     @ObservedObject private var termStore = AgentTerminalStore.shared
     @ObservedObject private var browser = BrowserTabs.shared
@@ -572,21 +574,24 @@ struct SpotlightContentView: View {
     /// of work they're doing; only after that does "with whom" matter.
     private var mainStack: some View {
         VStack(spacing: 0) {
-            // 22pt reservation for the titlebar row. macOS standard
-            // traffic-light height is ~22pt; the previous 28pt left
-            // ~6pt of dead space below the ModeBar pills before the
-            // divider, which read as a noticeable gap on the glass
-            // background. Match the actual visible chrome height.
-            Color.clear.frame(height: 22)
-
-            Divider().opacity(0.15)
+            // No spacer for the titlebar: the hosting view already starts
+            // this stack below it (its top safe-area inset is the 28pt row
+            // the traffic lights sit in), and the 22pt one that used to be
+            // here was a blank band between the mode bar and everything.
+            // In full screen there is no titlebar and no inset, and the mode
+            // bar, which floats in that row, would lie over the page: the
+            // row is kept by hand there.
+            if fullScreen { Color.clear.frame(height: Self.fullScreenTitlebar + 28) }
+            Rectangle().fill(Theme.hairline).frame(height: 0.5)
 
             // Secondary row — agent picker and utility buttons. Code
             // mode has CodePane's own repoBar acting as its secondary
             // row, so we skip ours there to avoid double bars.
-            if mode != .code, mode != .term, mode != .web, mode != .film, mode != .motion, mode != .jev {
+            // Chat and Cowork only: Comfy was missing from the list of
+            // modes to skip, and showed an empty "Choose an agent" row.
+            if mode == .chat || mode == .cowork {
                 agentBar
-                Divider().opacity(0.15)
+                Rectangle().fill(Theme.hairline).frame(height: 0.5)
             }
 
             Group {
@@ -618,8 +623,9 @@ struct SpotlightContentView: View {
                                               onDeleteSession: deleteCoworkSession,
                                               onCollapse: { toggleWorkspaceSidebar() })
                                     .frame(width: 210)
+                                    .background(Theme.sidebar)
                                     .transition(.move(edge: .leading).combined(with: .opacity))
-                                Divider().opacity(0.15)
+                                Rectangle().fill(Theme.hairline).frame(width: 0.5)
                             } else {
                                 WorkspaceSidebarHandle { toggleWorkspaceSidebar() }
                                     .transition(.opacity)
@@ -642,10 +648,17 @@ struct SpotlightContentView: View {
                     JevView()
                 case .comfy:
                     ComfyView()
+                case .montage:
+                    MontageView()
                 }
             }
         }
-        .preferredColorScheme(.dark)
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { note in
+            if note.object is SpotlightWindow { fullScreen = true }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.willExitFullScreenNotification)) { note in
+            if note.object is SpotlightWindow { fullScreen = false }
+        }
         // A model menu asked for an agent in a terminal: show it.
         .onChange(of: termStore.request?.serial) { _, serial in
             if serial != nil, mode != .term {
@@ -671,7 +684,9 @@ struct SpotlightContentView: View {
                 mode.persist()
             }
         }
-        .background(Color.clear) // SpotlightWindow's blur shows through
+        // The canvas: nearly opaque, so the panel looks the same in front
+        // and behind; a little of SpotlightWindow's blur still shows.
+        .background(Theme.canvas)
         // Drag any file in from Finder / desktop / mail — becomes a
         // pending attachment. Local kinclaw souls (Pilot etc.) get
         // the file path baked into the message so the agent can
@@ -961,13 +976,19 @@ struct SpotlightContentView: View {
                 .overlay(
                     RoundedRectangle(cornerRadius: 10)
                         .stroke(isDropTarget
-                                ? Color.green.opacity(0.6)
+                                ? Theme.accent.opacity(0.7)
                                 : Color.clear,
                                 lineWidth: 1.5)
                         .padding(.horizontal, 8)
                 )
+                // Under the column it writes into.
+                .frame(maxWidth: Self.readable + 24)
+                .frame(maxWidth: .infinity)
         }
     }
+
+    /// How wide the conversation runs, messages and composer alike.
+    static let readable: CGFloat = 880
 
     /// Titlebar overlay — sits in the 28pt row alongside the macOS
     /// traffic-light buttons. Hosts the **ModeBar** (Chat / Cowork /
@@ -979,24 +1000,34 @@ struct SpotlightContentView: View {
     /// Pinned via .ignoresSafeArea(.top) — without it SwiftUI inserts
     /// a safe-area inset and the bar drops below the traffic lights.
     private var titlebarHeaderOverlay: some View {
-        HStack(spacing: 10) {
+        ZStack {
+            // Centred in the window, clear of the traffic lights on the
+            // left and kept as clear on the right so it stays centred.
             ModeBar(mode: $mode)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            SettingsLink {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 13))
-                    .foregroundColor(.secondary)
+                .padding(.horizontal, 78)
+            HStack {
+                Spacer()
+                SettingsLink {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 13))
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Settings")
             }
-            .buttonStyle(.plain)
-            .help("Settings")
+            .padding(.trailing, 14)
         }
-        .padding(.leading, 72)   // clear the traffic-light buttons
-        .padding(.trailing, 14)
-        .padding(.vertical, 1)
-        .frame(height: 22)
+        .frame(height: 28)
         .frame(maxWidth: .infinity)
+        // In full screen AppKit lays its own titlebar — hidden until the
+        // pointer reaches the top — over the top 32 points, and it takes the
+        // clicks there: the bar goes below it ("全屏模式下，没有办法点最上面的菜单").
+        .padding(.top, fullScreen ? Self.fullScreenTitlebar : 0)
         .ignoresSafeArea(.container, edges: .top)
     }
+
+    /// The height of that hidden full-screen titlebar, measured: 32.
+    private static let fullScreenTitlebar: CGFloat = 32
 
     /// Everything the top bar used to show as its own icon.
     ///
@@ -1124,7 +1155,7 @@ struct SpotlightContentView: View {
             if mode == .cowork {
                 Circle()
                     .fill(coworkConnectError == nil
-                          ? Color.green.opacity(0.7)
+                          ? Theme.accent.opacity(0.7)
                           : Color.orange.opacity(0.7))
                     .frame(width: 6, height: 6)
                     .help(coworkConnectError ?? "kinclaw :5001 connected")
@@ -1265,7 +1296,7 @@ struct SpotlightContentView: View {
                     }
                 }
 
-            case .code, .term, .web, .film, .motion, .jev, .comfy:
+            case .code, .term, .web, .film, .motion, .jev, .comfy, .montage:
                 // Unreachable — these modes have no agent picker: Code shows a
                 // static "🦞 kincode" label, Term and Web have toolbars of
                 // their own. Defensive empty case.
@@ -1693,6 +1724,10 @@ struct SpotlightContentView: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
+                // A column a person can read: on a wide panel a line of
+                // reply ran 1900pt from one edge to the other.
+                .frame(maxWidth: Self.readable, alignment: .leading)
+                .frame(maxWidth: .infinity)
                 // Soft fade for the welcome → messages transition.
                 // Ties together the welcome-card removal + first
                 // bubble append so they animate as one event.
@@ -2052,13 +2087,13 @@ struct SpotlightContentView: View {
             .background(
                 RoundedRectangle(cornerRadius: 10)
                     .fill(isCurrent
-                          ? Color.green.opacity(0.10)
+                          ? Theme.accent.opacity(0.10)
                           : Color.platformSecondaryBackground.opacity(0.5))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 10)
                     .stroke(isCurrent
-                            ? Color.green.opacity(0.55)
+                            ? Theme.accent.opacity(0.55)
                             : Color.secondary.opacity(0.15),
                             lineWidth: isCurrent ? 1 : 0.5)
             )
@@ -2201,7 +2236,7 @@ struct SpotlightContentView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
-            .tint(.green)
+            .tint(Theme.accent)
         }
         .padding(.vertical, 30)
         .frame(maxWidth: .infinity)
@@ -2248,7 +2283,7 @@ struct SpotlightContentView: View {
                                 .font(.system(size: 13))
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 8)
-                                .background(Color.green.opacity(0.18))
+                                .background(Theme.accent.opacity(0.18))
                                 .foregroundColor(.primary)
                                 .clipShape(RoundedRectangle(cornerRadius: 10))
                                 .textSelection(.enabled)
@@ -2534,7 +2569,7 @@ struct SpotlightContentView: View {
                     .font(.system(size: 22))
                     .foregroundColor(isStreaming
                                      ? .red
-                                     : (canSend ? .green : .secondary.opacity(0.4)))
+                                     : (canSend ? Theme.accent : .secondary.opacity(0.4)))
             }
             .buttonStyle(.plain)
             .disabled(!isStreaming && !canSend)
@@ -3261,7 +3296,7 @@ struct SpotlightContentView: View {
     ///   .code   → no agent (kincode is fixed)
     private func pickDefaultAgent(for mode: ChatMode) -> Agent? {
         switch mode {
-        case .code, .term, .web, .film, .motion, .jev, .comfy:
+        case .code, .term, .web, .film, .motion, .jev, .comfy, .montage:
             return nil
         case .chat:
             if !chatLastAgentSlug.isEmpty,
@@ -3312,7 +3347,7 @@ struct SpotlightContentView: View {
             // localkin repo and carry `domain == "kinclaw-private"`.
             // Both flavours route through the same chatBody surface.
             return agent.name.hasPrefix("KinClaw") || agent.domain == "kinclaw-private"
-        case .code, .term, .web, .film, .motion, .jev, .comfy: return false   // never matches
+        case .code, .term, .web, .film, .motion, .jev, .comfy, .montage: return false   // never matches
         }
     }
 
@@ -3326,7 +3361,7 @@ struct SpotlightContentView: View {
         switch mode {
         case .chat:   chatLastAgentSlug = s
         case .cowork: coworkLastSoulSlug = s
-        case .code, .term, .web, .film, .motion, .jev, .comfy: break
+        case .code, .term, .web, .film, .motion, .jev, .comfy, .montage: break
         }
     }
 
@@ -4107,7 +4142,7 @@ private struct BlinkingCursor: View {
             let on = Int(context.date.timeIntervalSinceReferenceDate * 2) % 2 == 0
             Text("█")
                 .font(.system(size: 13, design: .monospaced))
-                .foregroundColor(.green.opacity(0.7))
+                .foregroundColor(Theme.accent.opacity(0.7))
                 .opacity(on ? 1 : 0)
                 .frame(height: 14, alignment: .leading)
         }
@@ -4159,7 +4194,7 @@ private struct BubbleWithCopy<Content: View>: View {
                               ? "checkmark.circle.fill"
                               : "doc.on.doc")
                             .font(.system(size: 11))
-                            .foregroundColor(copied ? .green : .secondary)
+                            .foregroundColor(copied ? Theme.accent : .secondary)
                             .padding(4)
                             .background(
                                 Circle()

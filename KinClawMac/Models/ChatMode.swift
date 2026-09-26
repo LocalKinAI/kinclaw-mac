@@ -30,6 +30,9 @@ import Foundation
 ///   .film   → one sentence in, a short film out: a storyboard, a still
 ///             and a clip per shot on the user's own image and video
 ///             servers, cut together
+///   .montage → OpenMontage on the box: an agent there makes the video with
+///             OpenMontage's pipelines and the box's own models, and its
+///             Backlot board shows the production as it happens
 ///
 /// This mirrors Claude Code Desktop's three-mode top bar, but plugged
 /// into the LocalKin kernel family (kinclaw + kincode) instead of
@@ -45,6 +48,7 @@ enum ChatMode: String, CaseIterable, Identifiable {
     case motion
     case jev
     case comfy
+    case montage
 
     var id: String { rawValue }
 
@@ -60,6 +64,7 @@ enum ChatMode: String, CaseIterable, Identifiable {
         case .motion: return "Motion"
         case .jev:    return "Jev"
         case .comfy:  return "Comfy"
+        case .montage: return "Montage"
         }
     }
 
@@ -77,6 +82,7 @@ enum ChatMode: String, CaseIterable, Identifiable {
         case .motion: return "figure.taichi"
         case .jev:    return "gamecontroller"
         case .comfy:  return "point.3.connected.trianglepath.dotted"
+        case .montage: return "rectangle.stack.badge.play"
         }
     }
 
@@ -101,6 +107,8 @@ enum ChatMode: String, CaseIterable, Identifiable {
             return "Jev — 游戏：帝国时代和帝国、开车、飞机大战、像素鸟、俄罗斯方块、2048、贪吃蛇、21 点和三种棋。决策模型每一步答一道选择题；你也可以自己上手，和它比同一局，或者看它和电脑打"
         case .comfy:
             return "Comfy — 盒子上 ComfyUI 的现成工作流：挑模板、填表、运行；或者一句话让 agent 挑和改"
+        case .montage:
+            return "Montage — OpenMontage，在盒子上：说想拍什么，agent 在那边写稿、出图、拍片、配乐、剪辑；上面是它的 Backlot 看板，下面是 agent 本身"
         }
     }
 }
@@ -120,5 +128,63 @@ extension ChatMode {
     /// Persist this mode as the user's last-used surface.
     func persist() {
         UserDefaults.standard.set(rawValue, forKey: ChatMode.storageKey)
+        ModeGroup.remember(self)
+    }
+}
+
+/// The modes as the top bar shows them: four groups, not nine tabs.
+///
+/// Nine pills in a row read as nine equal things, and at the panel's usual
+/// width the row ran out before the modes did. Grouped by what a person has
+/// come to do — talk, work, make something, play — the open group shows its
+/// members and the others are one word each. A click on a closed group goes
+/// back to whichever of its members was used last.
+enum ModeGroup: String, CaseIterable, Identifiable {
+    case talk, work, studio, play
+
+    var id: String { rawValue }
+
+    var members: [ChatMode] {
+        switch self {
+        case .talk:   return [.chat, .cowork]
+        case .work:   return [.code, .term, .web]
+        case .studio: return [.film, .motion, .montage, .comfy]
+        case .play:   return [.jev]
+        }
+    }
+
+    /// A group of one is shown by its one member's name.
+    var title: String {
+        switch self {
+        case .talk:   return "Talk"
+        case .work:   return "Work"
+        case .studio: return "Studio"
+        case .play:   return members[0].title
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .talk:   return "bubble.left.and.bubble.right"
+        case .work:   return "hammer"
+        case .studio: return "film.stack"
+        case .play:   return members[0].symbol
+        }
+    }
+
+    static func of(_ mode: ChatMode) -> ModeGroup {
+        allCases.first { $0.members.contains(mode) } ?? .talk
+    }
+
+    private var lastKey: String { "kinclaw.mode.last.\(rawValue)" }
+
+    /// Where a click on this group goes: the member used last, else the first.
+    var last: ChatMode {
+        let raw = UserDefaults.standard.string(forKey: lastKey) ?? ""
+        return ChatMode(rawValue: raw).flatMap { members.contains($0) ? $0 : nil } ?? members[0]
+    }
+
+    static func remember(_ mode: ChatMode) {
+        UserDefaults.standard.set(mode.rawValue, forKey: of(mode).lastKey)
     }
 }

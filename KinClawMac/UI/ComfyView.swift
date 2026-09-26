@@ -10,6 +10,12 @@ import UniformTypeIdentifiers
 struct ComfyView: View {
     @ObservedObject private var studio = ComfyStudio.shared
     @ObservedObject private var box = BoxServices.shared
+    /// An agent with the Comfy tools, docked under the tab. See `StudioAgent`.
+    @ObservedObject private var agent = StudioAgent.comfy
+    /// What the sentence at the top goes to: the agent, which picks, runs,
+    /// looks and tries again; or the writer model, which picks a template
+    /// and fills it in once.
+    @AppStorage("kinclaw.comfy.byAgent") private var byAgent = true
     @State private var search = ""
     @AppStorage("kinclaw.comfy.category") private var category = ""
     @AppStorage("kinclaw.comfy.cloud") private var showCloud = false
@@ -29,21 +35,26 @@ struct ComfyView: View {
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        HStack(spacing: 0) {
-            sidebar.frame(width: 250)
-            Divider().opacity(0.15)
-            VStack(spacing: 0) {
-                askBar
-                Divider().opacity(0.15)
-                if studio.current == nil {
-                    welcome
-                } else {
-                    ScrollView { detail.padding(14) }
-                    Divider().opacity(0.15)
-                    runBar
+        GeometryReader { space in
+            HStack(spacing: 0) {
+                AgentDock(agent: agent, examples: ["一张 9:16 的海报：雨夜的书店，暖光", "把最近出的那张图放大到 4K", "找一个图生视频的工作流，让这张图动起来"],
+                          widest: space.size.width - 250 - 480) { agent.say($0) }
+                sidebar.frame(width: 250).background(Theme.sidebar)
+                Rectangle().fill(Theme.hairline).frame(width: 0.5)
+                VStack(spacing: 0) {
+                    askBar
+                    Rectangle().fill(Theme.hairline).frame(height: 0.5)
+                    if studio.current == nil {
+                        welcome
+                    } else {
+                        ScrollView { detail.padding(.horizontal, 24).padding(.vertical, 18).frame(maxWidth: 1100).frame(maxWidth: .infinity) }
+                        Rectangle().fill(Theme.hairline).frame(height: 0.5)
+                        runBar
+                    }
                 }
             }
         }
+        .tint(Theme.accent)
         .task { if studio.templates.isEmpty { await studio.refresh() } }
         // A workflow .json, or a PNG ComfyUI made, dropped anywhere on the tab.
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
@@ -199,7 +210,7 @@ struct ComfyView: View {
         if let r = studio.readiness[t.name] {
             if r.runs {
                 Label("能跑", systemImage: "checkmark.circle.fill").labelStyle(.titleAndIcon)
-                    .font(.system(size: 9, weight: .semibold)).foregroundColor(.green)
+                    .font(.system(size: 9, weight: .semibold)).foregroundColor(Theme.accent)
             } else if !r.nodes.isEmpty {
                 Text("缺插件").font(.system(size: 9, weight: .semibold)).foregroundColor(.red)
                     .help("要装社区节点：" + r.nodes.joined(separator: "、"))
@@ -272,24 +283,54 @@ struct ComfyView: View {
     // MARK: Words
 
     private var askBar: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Image(systemName: "sparkles").foregroundColor(.purple)
-                TextField(studio.current == nil ? "说你想要什么：一张 9:16 的海报、把这张照片换成夜景、让这张图动起来……"
-                                                : "让 agent 改这个工作流：换成竖屏、提示词改成……、步数多一点", text: $words)
-                    .textFieldStyle(.plain).font(.system(size: 12))
-                    .onSubmit(send)
-                Button { browsingPrompts = true } label: { Image(systemName: "text.book.closed") }
-                    .buttonStyle(.plain).help("提示词库：别人写好的高质量出图提示词，挑一个用，或者让 agent 换成你的主题")
-                Button(studio.current == nil ? "找工作流" : "改", action: send)
-                    .disabled(words.trimmingCharacters(in: .whitespaces).isEmpty || studio.working != nil)
+                HStack(spacing: 8) {
+                    Button { byAgent.toggle() } label: {
+                        ChipLabel(title: "agent", symbol: byAgent ? "checkmark" : "sparkles", on: byAgent)
+                    }
+                    .buttonStyle(.plain)
+                    .help(byAgent ? "开着：这句话交给 agent（这台 Mac 上的 Claude Code，拿着 Comfy 的工具）——它挑工作流、跑、看结果、不对再改。关掉：写提示词的模型挑一个模板、填一次表"
+                          : "关着：写提示词的模型挑一个模板、填一次表。打开：交给 agent，它会挑、跑、看、再改")
+                    if byAgent, agent.running {
+                        // Its own prompt, in the dock below, is where to type
+                        // while it runs — not a second box up here.
+                        Text("agent 在跑：在左边它的终端里说").font(.kinBody).foregroundStyle(.secondary)
+                        Spacer(minLength: 0)
+                    } else {
+                        TextField(byAgent ? "跟 agent 说你想要什么：一张 9:16 的海报、把这张照片换成夜景、让这张图动起来……"
+                                  : studio.current == nil ? "说你想要什么：一张 9:16 的海报、把这张照片换成夜景、让这张图动起来……"
+                                                        : "让 agent 改这个工作流：换成竖屏、提示词改成……、步数多一点", text: $words)
+                            .textFieldStyle(.plain).font(.kinBody)
+                            .onSubmit(send)
+                    }
+                    Button { browsingPrompts = true } label: { Image(systemName: "text.book.closed") }
+                        .buttonStyle(.plain).foregroundStyle(.secondary)
+                        .help("提示词库：别人写好的高质量出图提示词，挑一个用，或者让 agent 换成你的主题")
+                }
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.card))
+                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Theme.hairline, lineWidth: 0.5))
+                if byAgent, agent.running {
+                    Button(agent.shown ? "收起终端" : "展开终端") { agent.shown.toggle() }.buttonStyle(.quietFilled)
+                } else {
+                    Button(byAgent ? "交给 agent" : studio.current == nil ? "找工作流" : "改", action: send)
+                        .buttonStyle(.primary).fixedSize()
+                        .disabled(words.trimmingCharacters(in: .whitespaces).isEmpty || (!byAgent && studio.working != nil))
+                }
                 if studio.current != nil {
-                    Button { studio.close() } label: { Image(systemName: "xmark") }.help("关掉这个工作流，回到按一句话找")
+                    Button { studio.close() } label: { Image(systemName: "xmark") }
+                        .buttonStyle(.quiet).help("关掉这个工作流，回到按一句话找")
                 }
             }
-            if let line = status { Text(line).font(.system(size: 11)).foregroundColor(.secondary).textSelection(.enabled) }
+            if let line = status {
+                HStack(spacing: 6) {
+                    if studio.working != nil { ProgressView().controlSize(.mini) }
+                    Text(line).font(.kinCaption).foregroundStyle(.secondary).textSelection(.enabled)
+                }
+            }
         }
-        .padding(10)
+        .padding(.horizontal, 20).padding(.vertical, 12)
     }
 
     private var status: String? {
@@ -304,18 +345,28 @@ struct ComfyView: View {
     private func send() {
         let text = words
         words = ""
-        Task { await studio.ask(text) }
+        if byAgent { agent.say(text) } else { Task { await studio.ask(text) } }
     }
 
     private var welcome: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 14) {
             Spacer()
-            Image(systemName: "point.3.connected.trianglepath.dotted").font(.system(size: 34)).foregroundColor(.secondary)
-            Text("ComfyUI 的现成工作流").font(.system(size: 15, weight: .semibold))
+            Image(systemName: "point.3.connected.trianglepath.dotted").font(.system(size: 28, weight: .light))
+                .foregroundStyle(Theme.accent)
+                .frame(width: 64, height: 64)
+                .background(Circle().fill(Theme.accentWash))
+            Text("ComfyUI 的现成工作流").font(.kinTitle)
             Text("左边挑一个模板，填表、运行；或者上面直接说想要什么，让 agent 挑模板、写提示词。\n不够用的时候，「编辑器」里就是 ComfyUI 自己的节点图。")
-                .font(.system(size: 12)).foregroundColor(.secondary).multilineTextAlignment(.center)
+                .font(.kinLabel).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            HStack(spacing: 6) {
+                ForEach(["一张 9:16 的海报", "把这张照片换成夜景", "让这张图动起来", "人像放大到 4K"], id: \.self) { example in
+                    Button { words = example } label: { ChipLabel(title: example, symbol: "sparkles") }
+                        .buttonStyle(.plain)
+                }
+            }
             if box.states[.comfy] != .up {
                 Button("启动盒子上的 ComfyUI") { Task { await box.start(.comfy); await studio.refresh() } }
+                    .buttonStyle(.primary)
             }
             Spacer()
         }

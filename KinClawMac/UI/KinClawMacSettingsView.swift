@@ -72,7 +72,6 @@ struct KinClawMacSettingsView: View {
         // at the old width those wrapped into unreadable stacks.
         .frame(minWidth: 820, idealWidth: 860, maxWidth: 1100,
                minHeight: 620, idealHeight: 680, maxHeight: 900)
-        .preferredColorScheme(.dark)
         // `settings_open {tab}`: "打开后端设置" said to her lands on the right page.
         .onReceive(NotificationCenter.default.publisher(for: .kinclawSettingsTab)) { note in
             if let wanted = note.userInfo?["tab"] as? String, let tab = Tab(rawValue: wanted) { selectedTab = tab }
@@ -111,18 +110,18 @@ struct KinClawMacSettingsView: View {
                     .background(
                         RoundedRectangle(cornerRadius: 6)
                             .fill(selectedTab == tab
-                                  ? Color.green.opacity(0.18)
+                                  ? Theme.accentWash
                                   : Color.clear)
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 6)
                             .stroke(selectedTab == tab
-                                    ? Color.green.opacity(0.4)
+                                    ? Theme.accent.opacity(0.35)
                                     : Color.clear,
                                     lineWidth: 0.5)
                     )
                     .foregroundColor(selectedTab == tab
-                                     ? .green
+                                     ? Theme.accent
                                      : .secondary)
                 }
                 .buttonStyle(.plain)
@@ -228,6 +227,7 @@ private struct GeneralSettingsTab: View {
     @AppStorage("kinclaw.startupBehavior") private var startupBehavior =
         StartupBehavior.lastState.rawValue
     @AppStorage("kinclaw.lang") private var lang = "auto"
+    @AppStorage(Appearance.key) private var appearance = Appearance.system.rawValue
 
     enum StartupBehavior: String, CaseIterable, Identifiable {
         case lastState = "last"
@@ -259,6 +259,19 @@ private struct GeneralSettingsTab: View {
                     .labelsHidden()
                     .frame(maxWidth: 280)
                 }
+            }
+
+            SettingsCard("Appearance") {
+                SettingsRow(label: "外观") {
+                    Picker("", selection: $appearance) {
+                        ForEach(Appearance.allCases) { Text($0.title).tag($0.rawValue) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(maxWidth: 280)
+                    .onChange(of: appearance) { _, _ in Appearance.apply() }
+                }
+                SettingsCaption("面板和这个设置窗口一起换。深色是毛玻璃，浅色是暖白。")
             }
 
             SettingsCard("Language") {
@@ -381,7 +394,7 @@ private struct BackendSettingsTab: View {
                     HStack(spacing: 6) {
                         Circle()
                             .fill(localStatus.contains("Running")
-                                  ? Color.green : Color.red)
+                                  ? Theme.good : Color.red)
                             .frame(width: 6, height: 6)
                         Text(localStatus)
                             .font(.system(size: 12))
@@ -466,7 +479,7 @@ private struct BackendSettingsTab: View {
                     HStack(spacing: 6) {
                         Circle()
                             .fill(kincodeStatus.contains("Running")
-                                  ? Color.green : Color.red)
+                                  ? Theme.good : Color.red)
                             .frame(width: 6, height: 6)
                         Text(kincodeStatus)
                             .font(.system(size: 12))
@@ -489,14 +502,14 @@ private struct BackendSettingsTab: View {
                             panel.message = "Pictures for companion mode"
                             if panel.runModal() == .OK, let u = panel.url { companionFolder = u.path }
                         }
-                        .buttonStyle(.plain).font(.system(size: 11)).foregroundColor(.green)
+                        .buttonStyle(.plain).font(.system(size: 11)).foregroundColor(Theme.good)
                         Button("Reveal") {
                             let url = URL(fileURLWithPath: companionFolder.isEmpty
                                 ? NSHomeDirectory() + "/.kinclaw/companion" : companionFolder)
                             try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
                             NSWorkspace.shared.activateFileViewerSelecting([url])
                         }
-                        .buttonStyle(.plain).font(.system(size: 11)).foregroundColor(.green)
+                        .buttonStyle(.plain).font(.system(size: 11)).foregroundColor(Theme.good)
                     }
                 }
                 if let trouble = CompanionArt.folderTrouble {
@@ -1012,7 +1025,7 @@ private final class ObservableSupervisor: ObservableObject {
         switch state {
         case .probing:     return .secondary
         case .unreachable: return .red
-        case .running:     return .green
+        case .running:     return Theme.good
         }
     }
 
@@ -1079,7 +1092,7 @@ private struct MCPSettingsTab: View {
                             .font(.system(size: 12))
                     }
                     .buttonStyle(.plain)
-                    .foregroundColor(.green)
+                    .foregroundColor(Theme.good)
                     SettingsCaption("Uses the standard `mcpServers` format — the same one Claude Desktop uses, so a server's published install snippet can be pasted in as-is. Remote servers aren't configured here; that block only describes local programs.")
                 }
             }
@@ -1095,7 +1108,7 @@ private struct MCPSettingsTab: View {
                         }
                         .buttonStyle(.plain)
                         .font(.system(size: 11))
-                        .foregroundColor(.green)
+                        .foregroundColor(Theme.good)
                     }
                 }
                 SettingsCaption("Tools appear to the agent as mcp_<server>_<tool>. A soul only sees them if its skills.enable list includes them — add \"mcp_*\" to allow every server, or \"mcp_github_*\" for just one.")
@@ -1169,7 +1182,7 @@ private struct MCPSettingsTab: View {
                     }
                     .buttonStyle(.plain)
                     .font(.system(size: 10))
-                    .foregroundColor(.green)
+                    .foregroundColor(Theme.good)
                 }
 
                 Toggle("", isOn: Binding(
@@ -1210,7 +1223,7 @@ private struct MCPSettingsTab: View {
                     }
                     .buttonStyle(.plain)
                     .font(.system(size: 10))
-                    .foregroundColor(.green)
+                    .foregroundColor(Theme.good)
                 }
             }
 
@@ -1289,7 +1302,7 @@ private struct MCPSettingsTab: View {
         if disabled { return .secondary }
         guard let s else { return .secondary }
         if !s.error.isNilOrEmpty { return .red }
-        return s.connected ? .green : .secondary
+        return s.connected ? Theme.good : .secondary
     }
 
     private func statusText(_ s: MCPConfigStore.ServerStatus?, disabled: Bool) -> String {
@@ -1363,7 +1376,7 @@ private struct HarvestSettingsTab: View {
                             }
                             .buttonStyle(.plain)
                             .font(.system(size: 11))
-                            .foregroundColor(.green)
+                            .foregroundColor(Theme.good)
                         }
                     }
                 }
@@ -1379,7 +1392,7 @@ private struct HarvestSettingsTab: View {
         SettingsCard("Schedule") {
             HStack(spacing: 8) {
                 Image(systemName: store.scheduled ? "clock.badge.checkmark" : "clock.badge.xmark")
-                    .foregroundColor(store.scheduled ? .green : .secondary)
+                    .foregroundColor(store.scheduled ? Theme.good : .secondary)
                 Text(store.scheduled
                      ? (store.scheduleSummary.isEmpty ? "scheduled" : store.scheduleSummary)
                      : "Not scheduled")
@@ -1432,7 +1445,7 @@ private struct HarvestSettingsTab: View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
                 Text(c.verdict.lowercased() == "yes" ? "✓" : "?")
-                    .foregroundColor(c.verdict.lowercased() == "yes" ? .green : .orange)
+                    .foregroundColor(c.verdict.lowercased() == "yes" ? Theme.good : .orange)
                     .font(.system(size: 11, weight: .semibold))
                 Text(c.name).font(.system(size: 12, weight: .medium))
                 Text(c.source).font(.system(size: 10)).foregroundColor(.secondary)
@@ -1478,13 +1491,13 @@ private struct HarvestSettingsTab: View {
             // rather than something to try again.
             if job.status == "failed" || job.verdict == "error" {
                 Button("Retry") { pendingAccept = c }
-                    .buttonStyle(.plain).font(.system(size: 10)).foregroundColor(.green)
+                    .buttonStyle(.plain).font(.system(size: 10)).foregroundColor(Theme.good)
             }
         } else {
             Button("Accept") { pendingAccept = c }
                 .buttonStyle(.plain)
                 .font(.system(size: 10, weight: .medium))
-                .foregroundColor(.green)
+                .foregroundColor(Theme.good)
         }
     }
 
@@ -1506,7 +1519,7 @@ private struct HarvestSettingsTab: View {
             case "forged":
                 VStack(alignment: .leading, spacing: 2) {
                     Label("forged as \(job.forgedName ?? "?")", systemImage: "checkmark.circle.fill")
-                        .font(.system(size: 10)).foregroundColor(.green)
+                        .font(.system(size: 10)).foregroundColor(Theme.good)
                     Text("Restart the kernel for the agent to load it.")
                         .font(.system(size: 9)).foregroundColor(.orange)
                 }
@@ -1536,7 +1549,7 @@ private struct HarvestSettingsTab: View {
                 Spacer()
                 Text(src.staged > 0 ? "\(src.staged) staged" : "none")
                     .font(.system(size: 10))
-                    .foregroundColor(src.staged > 0 ? .green : .secondary)
+                    .foregroundColor(src.staged > 0 ? Theme.good : .secondary)
             }
             Text(src.url)
                 .font(.system(size: 10, design: .monospaced))
@@ -1580,12 +1593,12 @@ private struct SkillsSettingsTab: View {
     private var summaryCard: some View {
         SettingsCard("Active soul") {
             HStack(spacing: 10) {
-                Image(systemName: "person.crop.circle").foregroundColor(.green)
+                Image(systemName: "person.crop.circle").foregroundColor(Theme.good)
                 Text(store.soulName).font(.system(size: 13, weight: .medium))
                 Spacer()
                 Text("\(store.exposedCount) exposed")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.green)
+                    .foregroundColor(Theme.good)
                 Text("/ \(store.registeredCount) loaded")
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
@@ -1645,7 +1658,7 @@ private struct SkillsSettingsTab: View {
                     // skill the soul grants can't be revoked from here.
                     if store.grantedBySoul(entry.name) {
                         Image(systemName: "checkmark.circle.fill")
-                            .foregroundColor(.green).font(.system(size: 10))
+                            .foregroundColor(Theme.good).font(.system(size: 10))
                             .padding(.top, 2)
                             .help("Granted by the soul file")
                     } else {
@@ -1667,8 +1680,8 @@ private struct SkillsSettingsTab: View {
                                     .font(.system(size: 8, weight: .semibold))
                                     .padding(.horizontal, 4).padding(.vertical, 1)
                                     .background(RoundedRectangle(cornerRadius: 3)
-                                        .fill(Color.green.opacity(0.2)))
-                                    .foregroundColor(.green)
+                                        .fill(Theme.good.opacity(0.2)))
+                                    .foregroundColor(Theme.good)
                             }
                             if entry.isMCP {
                                 Text("MCP")
@@ -1809,7 +1822,7 @@ private struct RoutinesSettingsTab: View {
                         }
                     }
                     .buttonStyle(.borderedProminent)
-                    .tint(.green)
+                    .tint(Theme.good)
                     .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty
                               || prompt.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
@@ -1841,7 +1854,7 @@ private struct RoutinesSettingsTab: View {
                 Spacer()
                 Text("last: \(r.lastRunText)").font(.system(size: 10)).foregroundColor(.secondary)
                 Button("Run now") { Task { await store.runNow(id: r.id) } }
-                    .buttonStyle(.plain).font(.system(size: 11)).foregroundColor(.green)
+                    .buttonStyle(.plain).font(.system(size: 11)).foregroundColor(Theme.good)
                 Button(expandedLog == r.id ? "Hide log" : "Log") {
                     if expandedLog == r.id { expandedLog = nil } else {
                         expandedLog = r.id
@@ -1897,7 +1910,7 @@ private struct LayaCard: View {
             }
             SettingsRow(label: "服务地址") {
                 HStack(spacing: 8) {
-                    Circle().fill(answers == true ? Color.green : answers == false ? Color.red : Color.gray)
+                    Circle().fill(answers == true ? Theme.good : answers == false ? Color.red : Color.gray)
                         .frame(width: 8, height: 8)
                     TextField(BoxServices.ssh.isEmpty ? FilmStudio.layaDefault : BoxServices.base(.laya), text: $address)
                         .textFieldStyle(.roundedBorder).frame(maxWidth: 240)
@@ -1947,7 +1960,7 @@ private struct JevJudgeCard: View {
             }
             SettingsRow(label: "TypeSafe key") {
                 HStack(spacing: 8) {
-                    Circle().fill(hasKey ? Color.green : Color.red).frame(width: 8, height: 8)
+                    Circle().fill(hasKey ? Theme.good : Color.red).frame(width: 8, height: 8)
                     Text(hasKey ? "在钥匙串里（Jev 标签里填的那个）" : "还没有：到 Jev 标签里填")
                         .font(.system(size: 10)).foregroundColor(.secondary)
                     if studio.jevTokens > 0 {
@@ -2030,7 +2043,7 @@ private struct BoxServicesCard: View {
 
     private func color(_ state: BoxServices.State) -> Color {
         switch state {
-        case .up: return .green
+        case .up: return Theme.good
         case .down: return .secondary.opacity(0.5)
         case .starting, .stopping: return .yellow
         case .unknown: return .secondary.opacity(0.25)

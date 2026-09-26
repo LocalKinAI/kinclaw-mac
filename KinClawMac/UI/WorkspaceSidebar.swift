@@ -90,7 +90,7 @@ struct WorkspaceSidebar: View {
                 HStack(spacing: 6) {
                     Image(systemName: "folder.fill")
                         .font(.system(size: 12))
-                        .foregroundColor(.green.opacity(0.8))
+                        .foregroundColor(Theme.accent.opacity(0.8))
                     VStack(alignment: .leading, spacing: 1) {
                         Text(workspace.isEmpty ? "Choose folder…"
                              : URL(fileURLWithPath: workspace).lastPathComponent)
@@ -144,7 +144,7 @@ struct WorkspaceSidebar: View {
     private func touchedRow(_ f: TouchedFile) -> some View {
         let (icon, color): (String, Color) = {
             switch f.action {
-            case "write": return ("plus.circle.fill", .green)
+            case "write": return ("plus.circle.fill", Theme.accent)
             case "edit":  return ("pencil.circle.fill", .orange)
             default:      return ("eye.circle", .secondary)
             }
@@ -210,7 +210,7 @@ struct WorkspaceSidebar: View {
                 }
                 Image(systemName: e.isDir ? "folder" : "doc")
                     .font(.system(size: 10))
-                    .foregroundColor(e.isDir ? .green.opacity(0.75) : .secondary)
+                    .foregroundColor(e.isDir ? Theme.accent.opacity(0.75) : .secondary)
                 Text(e.name)
                     .font(.system(size: 11, weight: isTouched ? .semibold : .regular))
                     .foregroundColor(isTouched ? .primary : .primary.opacity(0.85))

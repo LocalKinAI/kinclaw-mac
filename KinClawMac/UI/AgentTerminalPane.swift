@@ -205,7 +205,7 @@ final class AgentTerminalSessions: ObservableObject {
         var env = Terminal.getEnvironmentVariables(termName: "xterm-256color")
             .filter { !$0.hasPrefix("PATH=") }
         env.append("PATH=" + AgentLauncher.childPath(for: item.binary))
-        for (key, value) in item.integration.env(host).sorted(by: { $0.key < $1.key }) {
+        for (key, value) in item.integration.env(host, s.model).sorted(by: { $0.key < $1.key }) {
             env.append("\(key)=\(value)")
         }
         // Through the login shell, interactive: agents start children of their
@@ -285,7 +285,7 @@ final class AgentTerminalSessions: ObservableObject {
     /// The buffer as a selection would copy it: scrollback included, wrapped
     /// lines joined, blank runs collapsed. Twice the asked-for lines of rows,
     /// since the blank ones do not survive into the text.
-    private static func selectionLines(_ terminal: Terminal, lines: Int) -> [String] {
+    static func selectionLines(_ terminal: Terminal, lines: Int) -> [String] {
         let bottom = terminal.getTopVisibleRow() + terminal.rows - 1
         let top = max(0, bottom - max(lines, terminal.rows) * 2)
         let text = terminal.getText(start: SwiftTerm.Position(col: 0, row: top),
@@ -294,7 +294,7 @@ final class AgentTerminalSessions: ObservableObject {
     }
 
     /// The rows on screen, one string each.
-    private static func visibleLines(_ terminal: Terminal) -> [String] {
+    static func visibleLines(_ terminal: Terminal) -> [String] {
         (0..<terminal.rows).map { row in
             terminal.getLine(row: row)?.translateToString(trimRight: true) ?? ""
         }
@@ -789,7 +789,7 @@ struct AgentTerminalPane: View {
 /// Shows a terminal the sessions own. The container is SwiftUI's to create
 /// and destroy; the terminal inside it is not, which is what lets an agent
 /// outlive its tab being out of sight.
-private struct TerminalSlot: NSViewRepresentable {
+struct TerminalSlot: NSViewRepresentable {
     let terminal: LocalProcessTerminalView
 
     func makeNSView(context: Context) -> NSView {

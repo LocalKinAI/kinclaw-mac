@@ -40,7 +40,7 @@ struct ToolCallView: View {
         var color: Color {
             switch self {
             case .running: return .yellow
-            case .done:    return .green
+            case .done:    return Theme.good
             case .error:   return .red
             }
         }

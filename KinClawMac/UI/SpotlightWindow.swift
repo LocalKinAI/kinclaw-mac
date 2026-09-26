@@ -21,8 +21,13 @@ private extension NSRect {
 ///     `.floating`, always above every app, which suited a quick question
 ///     and not a Term tab running an agent for an hour beside the editor
 ///     it works on.
-///   - **`.canJoinAllSpaces`** — ⌘⌥K (M3) summons the panel regardless
-///     of which Space the user is on.
+///   - **One Space, and full screen** — ⌘⌥K brings the panel to the Space
+///     the user is on (`.moveToActiveSpace`); otherwise it stays on the one
+///     it was left on, and the green button makes it full screen. It used
+///     to join every Space, stationary, as an auxiliary to other apps' full
+///     screens: on every desktop at once, which read as "always in front",
+///     and an auxiliary window cannot be full screen itself — the green
+///     button did nothing ("不能全屏，点了也不行").
 ///   - **`.nonactivatingPanel`** — opening the panel does NOT pull
 ///     focus away from whatever app the user was operating. This is
 ///     the whole point: KinClaw rides alongside the work, it doesn't
@@ -68,10 +73,9 @@ final class SpotlightWindow: NSPanel {
             defer: false
         )
 
-        // An ordinary window in the stacking order; sticks across Spaces.
+        // An ordinary window in the stacking order, on one Space at a time.
         self.level = .normal
-        self.collectionBehavior = [.canJoinAllSpaces, .stationary,
-                                   .fullScreenAuxiliary]
+        self.collectionBehavior = [.moveToActiveSpace, .fullScreenPrimary]
 
         // Transparent shell so the NSVisualEffectView underneath shows.
         self.isOpaque = false
@@ -120,6 +124,7 @@ final class SpotlightWindow: NSPanel {
         ])
 
         self.contentView = visualEffect
+        self.glass = visualEffect
 
         // Hard floor so the chat doesn't collapse to unreadable.
         // 280×280 lets users tuck the panel into a corner of a small
@@ -133,6 +138,32 @@ final class SpotlightWindow: NSPanel {
                        name: NSWindow.didMoveNotification, object: self)
         nc.addObserver(self, selector: #selector(persistCurrentFrame),
                        name: NSWindow.didResizeNotification, object: self)
+        // Square corners in full screen: a rounded panel filling a display
+        // shows the black behind it at the corners.
+        nc.addObserver(forName: NSWindow.willEnterFullScreenNotification, object: self, queue: .main) { [weak self] _ in
+            self?.glass?.layer?.cornerRadius = 0
+        }
+        nc.addObserver(forName: NSWindow.didExitFullScreenNotification, object: self, queue: .main) { [weak self] _ in
+            self?.glass?.layer?.cornerRadius = 16
+        }
+    }
+
+    /// The blur everything sits on; its corners are squared in full screen.
+    private weak var glass: NSVisualEffectView?
+
+    var isFullScreen: Bool { styleMask.contains(.fullScreen) }
+
+    /// Full screen is a Space of the app's own, which a panel that never
+    /// activates the app cannot take: the app is activated first.
+    override func toggleFullScreen(_ sender: Any?) {
+        NSApp.activate(ignoringOtherApps: true)
+        super.toggleFullScreen(sender)
+    }
+
+    /// For `panel_show {full_screen}`.
+    func setFullScreen(_ on: Bool) {
+        if !isVisible { show() }
+        if on != isFullScreen { toggleFullScreen(nil) }
     }
 
     // NSPanel defaults block becomeKey / becomeMain. We need
@@ -140,7 +171,8 @@ final class SpotlightWindow: NSPanel {
     // app doesn't think the floating panel is its main document
     // window.
     override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { false }
+    // Main as well: a full-screen window is the app's main window.
+    override var canBecomeMain: Bool { true }
 
     /// A click brings the panel forward. A panel that never activates the
     /// app is not raised by activation the way an ordinary window is, so at
@@ -202,6 +234,9 @@ final class SpotlightWindow: NSPanel {
     }
 
     func show() {
+        // Full screen lives on its own Space, which only an active app is
+        // taken to.
+        if isFullScreen { NSApp.activate(ignoringOtherApps: true) }
         // Already up, perhaps under another window: raise it, without the
         // fade from nothing that would blink a panel already on screen.
         if self.isVisible {
@@ -229,6 +264,10 @@ final class SpotlightWindow: NSPanel {
     }
 
     func hide() {
+        // Ordered out, a full-screen window would leave its Space behind,
+        // black and empty: the app is hidden instead, and the Space goes
+        // with it.
+        if isFullScreen { NSApp.hide(nil); return }
         // Mirror the show animation — quick fade-out before
         // orderOut. Skip if already invisible to avoid double-
         // animation when toggle() races itself.
@@ -309,7 +348,8 @@ final class SpotlightWindow: NSPanel {
     // (M5 will gate this behind a Settings toggle in case anyone
     // uses ESC for chat-clear or similar.)
     override func cancelOperation(_ sender: Any?) {
-        hide()
+        // In full screen ESC does what it does in every full-screen window.
+        if isFullScreen { toggleFullScreen(nil) } else { hide() }
     }
 
     /// The red traffic-light close button calls this — we redirect
@@ -325,6 +365,8 @@ final class SpotlightWindow: NSPanel {
     // MARK: - Frame persistence
 
     @objc private func persistCurrentFrame() {
+        // The full-screen frame is the display's, not one to come back to.
+        guard !isFullScreen else { return }
         let r = self.frame
         UserDefaults.standard.set(
             ["x": r.origin.x, "y": r.origin.y,

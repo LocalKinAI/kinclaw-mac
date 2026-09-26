@@ -40,19 +40,19 @@ struct RecentAgentsRow: View {
                                 .background(
                                     Circle()
                                         .fill(currentSlug == agent.slug
-                                              ? Color.green.opacity(0.18)
+                                              ? Theme.accent.opacity(0.18)
                                               : Color.platformSecondaryBackground.opacity(0.5))
                                 )
                                 .overlay(
                                     Circle()
                                         .stroke(currentSlug == agent.slug
-                                                ? Color.green.opacity(0.6)
+                                                ? Theme.accent.opacity(0.6)
                                                 : Color.clear,
                                                 lineWidth: 1)
                                 )
                             if currentSlug == agent.slug {
                                 Circle()
-                                    .fill(Color.green)
+                                    .fill(Theme.accent)
                                     .frame(width: 6, height: 6)
                                     .offset(x: 1, y: 1)
                             }
