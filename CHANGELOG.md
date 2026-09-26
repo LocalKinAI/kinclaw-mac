@@ -8,6 +8,31 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Added — 沙盒搭建: who builds, and a village that grows
+
+"沙盒搭建也要像放逐之城一样可以由不同的角色控制啊". 谁来盖: 我, 电脑, Jev or
+大模型, as in 放逐之城.
+
+- **A village round the square** (`Games/SandboxTown.swift`, Foundation
+  only): thirteen kinds, each a template with some variety — cottages and
+  two-storey townhouses in five styles (wood, stone, brick, sandstone, white
+  plaster), a well, fields with a water channel, a watchtower with
+  battlements, a church with a bell tower and a spire, a market, a windmill,
+  a fountain in the square, lamp posts, a wall with gates, a dock with a
+  boat, a bridge. The program finds each the nearest fairly flat free place
+  round the square, turns it to face the square, levels the ground, runs a
+  path of trodden earth from its door to the square and raises it block by
+  block. The village is saved with the world.
+- **Who chooses**: 电脑 follows a fixed order of needs. Jev and chat models
+  choose each next building from the options that have a site, each saying
+  in measured words whether what it answers is needed, not needed, due or
+  early — a well serves four homes, a field feeds three, a village of three
+  homes usually has a church. Without those words Jev and kimi both built
+  cottages and fields and nothing else; with them both grow a whole village,
+  Jev in 0.1–0.4 s a choice, kimi in about 2 s. You can build by hand at the
+  same time; the village waits for 开始 and pauses when you leave the tab.
+- `sandbox_play` (seat, model, run, a new world) in the panel's tools.
+
 ### Added — 沙盒搭建: a world of blocks, built by hand, by a model, and looked at by Jev
 
 "做沙盒搭建吧". Jev tab → 建造 → 沙盒搭建 — Minecraft-like, in SceneKit.

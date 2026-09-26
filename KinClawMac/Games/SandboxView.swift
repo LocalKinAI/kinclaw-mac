@@ -3,8 +3,9 @@ import SceneKit
 import SwiftUI
 
 /// 沙盒搭建, played with the mouse: a world of blocks to build in, a chat model
-/// that builds what it is asked from a plan, and Jev, who looks at a build —
-/// measured into words — and says what it thinks it is.
+/// that builds what it is asked from a plan, Jev, who looks at a build —
+/// measured into words — and says what it thinks it is; and a seat, as in
+/// 放逐之城: 我 build by hand, or 电脑, Jev or a chat model grow a village.
 @MainActor
 final class SandboxGame: ObservableObject {
     static let shared = SandboxGame()
@@ -19,6 +20,14 @@ final class SandboxGame: ObservableObject {
     @Published private(set) var judging = false
     /// What Jev made of the last build it was shown.
     @Published private(set) var verdict: (title: String, lines: [String])?
+    /// Who builds: the person by hand, or the script, Jev or a chat model growing a village.
+    @Published var seat: SandboxSeat = .me { didSet { seated() } }
+    /// Whether the village is growing — it waits for 开始, as every game does.
+    @Published private(set) var growing = false
+    /// The last few things the village put up, and who chose them.
+    @Published private(set) var townLog: [String] = []
+    private(set) var town: SandboxTown
+    private var growth: Task<Void, Never>?
 
     private(set) var world: SandboxWorld
     let stage = SandboxStage()
@@ -35,10 +44,14 @@ final class SandboxGame: ObservableObject {
     private var placing: Task<Void, Never>?
 
     init() {
-        world = SandboxWorld.load() ?? SandboxWorld(seed: UInt64.random(in: 1...99_999))
+        let kept = SandboxWorld.load()
+        world = kept ?? SandboxWorld(seed: UInt64.random(in: 1...99_999))
+        // The village's record belongs to the world it was built in.
+        town = kept == nil ? SandboxTown() : SandboxTown.load() ?? SandboxTown()
         let x = SandboxWorld.sx / 2, z = SandboxWorld.sz / 2
         spot = BlockPos(x: x, y: world.top(x, z) + 1, z: z)
         model = UserDefaults.standard.string(forKey: "kinclaw.sandbox.model") ?? ""
+        seat = UserDefaults.standard.string(forKey: "kinclaw.sandbox.seat").flatMap(SandboxSeat.init(rawValue:)) ?? .me
         stage.refresh(&world)
     }
 
@@ -87,8 +100,10 @@ final class SandboxGame: ObservableObject {
     }
 
     func newWorld() {
+        setGrowing(false)
         placing?.cancel(); queue = []; building = false
         world = SandboxWorld(seed: UInt64.random(in: 1...99_999))
+        town = SandboxTown(); town.save(); townLog = []
         let x = SandboxWorld.sx / 2, z = SandboxWorld.sz / 2
         spot = BlockPos(x: x, y: world.top(x, z) + 1, z: z)
         verdict = nil; asked = nil; askedAt = nil
@@ -144,7 +159,7 @@ final class SandboxGame: ObservableObject {
     }
 
     /// Put the queued blocks down a handful at a time, so the build can be seen going up.
-    private func raise() {
+    private func raise(finished: String? = nil) {
         placing?.cancel()
         placing = Task { @MainActor in
             var done = 0
@@ -161,17 +176,22 @@ final class SandboxGame: ObservableObject {
             }
             building = false
             changed()
-            say("盖好了：\(done) 块。点「Jev 看看」让它说说这是什么")
+            say(finished ?? "盖好了：\(done) 块。点「Jev 看看」让它说说这是什么")
         }
     }
 
     private func askChat(_ words: String) async throws -> (String, String) {
+        let (text, name) = try await chat(SandboxPlan.grammar + "\n\nBuild this, with care for how it looks: \(words)\nCommands only.")
+        return (text, name)
+    }
+
+    /// One question to the chosen chat model; what it says after any thinking aloud, and its name.
+    private func chat(_ prompt: String) async throws -> (String, String) {
         var chosen: (host: String, model: String)?
         if model.isEmpty { chosen = await FilmStudio.writer() }
         else if let bar = model.firstIndex(of: "|") { chosen = (String(model[..<bar]), String(model[model.index(after: bar)...])) }
         else { for entry in await FilmStudio.candidates() where entry.models.contains(model) { chosen = (entry.host, model); break } }
         guard let writer = chosen, let url = URL(string: writer.host + "/api/chat") else { throw JevArcade.Failure.message("没找到能用的对话模型") }
-        let prompt = SandboxPlan.grammar + "\n\nBuild this, with care for how it looks: \(words)\nCommands only."
         var request = URLRequest(url: url, timeoutInterval: 180)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -181,8 +201,91 @@ final class SandboxGame: ObservableObject {
         guard let reply = (try JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let text = (reply["message"] as? [String: Any])?["content"] as? String else { throw JevArcade.Failure.message("\(writer.model) 没回话") }
         // A model that thinks aloud: only what comes after its thinking.
-        let plan = text.components(separatedBy: "</think>").last ?? text
-        return (plan, writer.model)
+        let said = text.components(separatedBy: "</think>").last ?? text
+        return (said, writer.model)
+    }
+
+    // MARK: A village, grown by whoever has the seat
+
+    private func seated() {
+        UserDefaults.standard.set(seat.rawValue, forKey: "kinclaw.sandbox.seat")
+        if seat == .me { setGrowing(false) }
+        beat += 1
+    }
+
+    /// 开始 / 暂停: one building after another, a breath between them.
+    func setGrowing(_ on: Bool) {
+        growing = on && seat != .me
+        growth?.cancel()
+        guard growing else { beat += 1; return }
+        growth = Task { @MainActor in
+            while !Task.isCancelled, growing {
+                if building || judging { try? await Task.sleep(nanoseconds: 400_000_000); continue }
+                await growOnce()
+                try? await Task.sleep(nanoseconds: 2_500_000_000)
+            }
+        }
+    }
+
+    /// The seat chooses what the village builds next; the program finds it a place and puts it up.
+    private func growOnce() async {
+        let options = town.options(world)
+        guard !options.isEmpty else { setGrowing(false); say("村子没地方再盖了"); return }
+        let who = seat
+        var pick = 0, chance: Double?, name = who.title
+        switch who {
+        case .me: return
+        case .computer: pick = town.scripted(options)
+        case .jev, .llm:
+            let situation = town.situation(world)
+            do {
+                (pick, chance, name) = who == .jev ? try await askJev(options, situation) : try await askChat(options, situation)
+            } catch {
+                say("\(who.title)没答上：\(error.localizedDescription.prefix(60))")
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                return
+            }
+        }
+        guard seat == who, growing, !building else { return }
+        // The world may have changed while it chose — the person builds too: find the place again.
+        guard let option = town.options(world).first(where: { $0.kind == options[pick].kind }) else { return }
+        let blocks = town.build(option, in: &world, by: name)
+        town.save()
+        stage.refresh(&world)
+        let entry = "\(name)：\(option.kind.name)" + (chance.map { " · \(Int(($0 * 100).rounded()))%" } ?? "")
+        townLog.append("第 \(town.projects.count) 座 · " + entry)
+        if townLog.count > 6 { townLog.removeFirst(townLog.count - 6) }
+        if let last = town.projects.last { spot = BlockPos(x: (last.x0 + last.x1) / 2, y: last.base + 1, z: (last.z0 + last.z1) / 2) }
+        queue = blocks.filter { SandboxWorld.inside($0.0) && $0.0.y > 0 }
+        building = true
+        say("第 \(town.projects.count) 座 · " + entry)
+        raise(finished: "盖好了：\(option.kind.name)")
+    }
+
+    private func askJev(_ options: [TownOption], _ situation: String) async throws -> (Int, Double?, String) {
+        let q = JevClient.Question(id: "next", question: SandboxTown.question, howToJudge: SandboxTown.howToJudge,
+                                   options: options.enumerated().map { (String(format: "p%02d", $0.offset + 1), $0.element.words) })
+        let reply = try await JevClient.ask(state: [("game", SandboxTown.rules), ("village", situation)], [q])
+        guard let answer = reply.answers["next"], let n = Int(answer.choice.dropFirst()), options.indices.contains(n - 1) else {
+            throw JevArcade.Failure.message("Jev 的回答读不出来")
+        }
+        return (n - 1, answer.chances[answer.choice], "Jev")
+    }
+
+    private func askChat(_ options: [TownOption], _ situation: String) async throws -> (Int, Double?, String) {
+        let prompt = """
+            \(SandboxTown.rules)
+            The village: \(situation)
+            \(SandboxTown.question) \(SandboxTown.howToJudge)
+            Options:
+            \(options.enumerated().map { String(format: "p%02d", $0.offset + 1) + ": " + $0.element.words }.joined(separator: "\n"))
+            Answer with the option's key only, for example p03. Nothing else.
+            """
+        let (text, name) = try await chat(prompt)
+        guard let range = text.range(of: #"p\d\d"#, options: [.regularExpression, .backwards]), let n = Int(text[range].dropFirst()), options.indices.contains(n - 1) else {
+            throw JevArcade.Failure.message("\(name) 没按要求只答编号")
+        }
+        return (n - 1, nil, name)
     }
 
     // MARK: Jev looks
@@ -231,7 +334,10 @@ final class SandboxGame: ObservableObject {
 
     /// How the sandbox stands, for the panel's tools.
     var report: String {
-        var lines = ["沙盒搭建：世界 \(SandboxWorld.sx)×\(SandboxWorld.sz)、高 \(SandboxWorld.sy)；盖上去的方块 \(world.placed.lazy.filter { $0 }.count) 块；手里拿的是\(selected.name)"]
+        var lines = ["沙盒搭建：世界 \(SandboxWorld.sx)×\(SandboxWorld.sz)、高 \(SandboxWorld.sy)；盖上去的方块 \(world.placed.lazy.filter { $0 }.count) 块；手里拿的是\(selected.name)",
+                     "谁来盖：\(seat.title)" + (seat == .me ? "" : growing ? "，村子正在长" : "，停着（开始了才盖）")]
+        if !town.projects.isEmpty { lines.append("村子：" + town.situation(world)) }
+        lines += townLog
         if building { lines.append("正在盖，还剩 \(queue.count) 块") }
         if judging { lines.append("Jev 正在看") }
         if let status { lines.append("状态：\(status)") }
@@ -271,6 +377,7 @@ struct SandboxView: View {
                         .background(Capsule().fill(Color.black.opacity(0.65)))
                         .padding(.top, 10).allowsHitTesting(false)
                 }
+                townPanel
                 if let verdict = game.verdict {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
@@ -289,14 +396,21 @@ struct SandboxView: View {
             hotbar
         }
         .onAppear { SandboxKeys.install() }
-        .onDisappear { SandboxKeys.remove(); game.saveNow() }
+        .onDisappear { SandboxKeys.remove(); game.setGrowing(false); game.saveNow() }
         .task { if chatModels.isEmpty { chatModels = await FilmStudio.candidates() } }
     }
 
     private var top: some View {
         HStack(spacing: 10) {
             Text("沙盒搭建").font(.system(size: 13, weight: .bold))
-            Text("左键放 · 右键拆 · 拖动转视角 · 滚轮缩放 · WASD 走、QE 升降 · 1–9 选方块").font(.system(size: 11)).foregroundColor(.secondary).lineLimit(1)
+            HStack(spacing: 4) {
+                Text("谁来盖").font(.system(size: 11, weight: .semibold)).foregroundColor(.secondary)
+                Picker("", selection: $game.seat) { ForEach(SandboxSeat.allCases) { Text($0.title).tag($0) } }
+                    .labelsHidden().controlSize(.small).fixedSize()
+                if game.seat != .me {
+                    Button(game.growing ? "暂停" : "开始") { game.setGrowing(!game.growing) }.controlSize(.small)
+                }
+            }
             Spacer()
             TextField("让大模型盖：比如 一座带塔楼的石头小城堡", text: $game.request)
                 .textFieldStyle(.roundedBorder).frame(width: 280)
@@ -315,6 +429,26 @@ struct SandboxView: View {
             Button("新世界") { game.newWorld() }.controlSize(.small)
         }
         .padding(.horizontal, 14).padding(.vertical, 8)
+    }
+
+    /// Lower left over the world: how to build by hand, or what the village has put up and who chose it.
+    private var townPanel: some View {
+        _ = game.beat
+        return VStack(alignment: .leading, spacing: 3) {
+            if game.seat == .me, game.townLog.isEmpty {
+                Text("左键放 · 右键拆 · 拖动转视角 · 滚轮缩放").font(.system(size: 11, weight: .semibold))
+                Text("WASD 或方向键走动 · Q/E 升降 · 1–9、0 选方块").font(.system(size: 11))
+                Text("右上角「谁来盖」换成电脑、Jev 或大模型，看它们盖一座村子").font(.system(size: 11)).opacity(0.75)
+            } else {
+                Text("村子 · \(game.town.projects.count) 座 · \(game.seat == .me ? "我在盖" : game.growing ? "\(game.seat.title)在盖" : "\(game.seat.title) · 按开始")")
+                    .font(.system(size: 12, weight: .bold))
+                ForEach(Array(game.townLog.enumerated()), id: \.offset) { _, line in Text(line).font(.system(size: 11)) }
+            }
+        }
+        .foregroundColor(.white).padding(10)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.black.opacity(0.5)))
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        .padding(12).allowsHitTesting(false)
     }
 
     private var hotbar: some View {

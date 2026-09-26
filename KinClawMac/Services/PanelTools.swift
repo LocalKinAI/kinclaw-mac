@@ -766,6 +766,19 @@ enum PanelTools {
             "inputSchema": ["type": "object", "properties": [String: Any]()],
         ],
         [
+            "name": "sandbox_play",
+            "description": "沙盒搭建's seat, as in 放逐之城 — who builds: me (the user, by hand), computer (the script grows a village round the square: homes, a well, fields, a market, a watchtower, a church, a windmill, lamps, a wall, a dock, a bridge), jev (TypeSafe's Jev chooses each next building from options that say what the village has and lacks) or llm (a chat model chooses from the same options). The program finds each a site, levels it, runs a path to the square and raises it block by block. Start or pause, or a new world. Shows the tab and answers with the village so far. The village waits for run: true.",
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "seat": ["type": "string", "description": "me | computer | jev | llm. Omit to keep."],
+                    "model": ["type": "string", "description": "For llm: \"host|model\" or a model name; empty for the app's own pick. Omit to keep."],
+                    "run": ["type": "boolean", "description": "true: start growing; false: pause. Omit to keep."],
+                    "new_world": ["type": "boolean", "description": "true: a fresh world and an empty village first — the old one is gone."],
+                ],
+            ],
+        ],
+        [
             "name": "comfy_templates",
             "description": "ComfyUI's ready-made workflows on the user's box (about 300 that run locally: text-to-image, image editing, video, audio, 3D…), plus the ones the user saved. Search by words in the title, model or tags — e.g. \"qwen\", \"视频\", \"H3\", \"背景\". Returns name, title, category, models and download size. Pass a name to comfy_run.",
             "inputSchema": [
@@ -1408,6 +1421,21 @@ enum PanelTools {
             return (game.report, false)
         case "sandbox_status":
             return (SandboxGame.shared.report, false)
+        case "sandbox_play":
+            let game = SandboxGame.shared
+            UserDefaults.standard.set("sandbox", forKey: "kinclaw.jev.doing")
+            NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: ["mode": "jev", "raise": false])
+            if args["new_world"] as? Bool == true { game.newWorld() }
+            if let raw = args["seat"] as? String {
+                guard let seat = SandboxSeat(rawValue: raw) else { return ("seat 只能是 me、computer、jev 或 llm", true) }
+                game.seat = seat
+            }
+            if let model = args["model"] as? String { game.model = model }
+            // After the tab has had a moment to show: its view pauses the village when it goes away.
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            if let run = args["run"] as? Bool { game.setGrowing(run) }
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            return (game.report, false)
         case "motion_find":
             guard let topic = (args["topic"] as? String)?.trimmingCharacters(in: .whitespaces), !topic.isEmpty else { return ("motion_find 需要 topic", true) }
             let finder = MotionFinder.shared
