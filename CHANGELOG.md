@@ -45,6 +45,33 @@ agent is allowed to do.
   the app writes ("改个好名字"). The bundle id and the folders stay as they
   were, so nothing already set up — permissions, settings, sessions — is lost.
 
+### Added — five more Jev games: 植物守卫战, 跑酷, 吃豆人, 消消乐, 德州扑克
+
+"可以再加一些有意思的游戏吗", and "有个一直跑左右闪那个". Each is one new file,
+drawn like the others, played by Jev from words the program measured, by
+the evaluator, by dice — or by you:
+
+- **植物守卫战** (`JevGarden`): a lawn of 5 × 9, sunflowers, peashooters,
+  wall-nuts, cherry bombs and snow peas against ten waves of zombies — cones,
+  buckets, runners — with a mower a lane. Each option says whether it saves
+  a lane, measured by playing the lane forward 40 s. Evaluator 17 wins in 20,
+  dice none; Jev won both its games. Keys 1–5, arrows and space.
+- **跑酷** (`JevRunner`): three tracks seen from behind the runner, low and
+  high barriers, parked and oncoming trains, coins; every stretch passable
+  from any way of arriving. ←→ ↑ ↓. Evaluator and Jev ran every stretch
+  without a crash.
+- **吃豆人** (`JevPacman`): a 21 × 21 maze with the four ghosts' own targets,
+  scatter and chase, blue ghosts, levels. Evaluator 21 662 points on
+  average, dice 284; Jev never died needlessly. Arrow keys, turns remembered.
+- **消消乐** (`JevMatch3`): 8 × 8 gems, striped, wrapped and colour-bomb gems,
+  cascades, 30 moves. Click a gem and its neighbour. Jev agreed with the
+  evaluator on 89% of moves and scored 6308 to its 6829.
+- **德州扑克** (`JevPoker`): no-limit hold'em against a rock, a calling station
+  and a maniac, side pots, an exact hand evaluator, equity by Monte Carlo
+  against each player's likely hands. F C R A or click.
+
+`jev_play` knows all five.
+
 ### Changed — every Jev game drawn properly, and Tetris falls
 
 "游戏画面都优化一下". The eleven painted games redrawn, light from the top
