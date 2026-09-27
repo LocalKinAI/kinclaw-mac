@@ -8,6 +8,44 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Changed — every Jev game drawn properly, and Tetris falls
+
+"游戏画面都优化一下". The eleven painted games redrawn, light from the top
+left, soft shadows, a little life in each:
+
+- **开车**: worn asphalt with patches and cracks, kerbs, gravel shoulders,
+  trees, bushes and lamp posts rolling by; four kinds of car with windows,
+  lights and mirrors, trucks on three axles, brake lights and indicators; a
+  glowing fuel can; wind streaks at speed; skid marks and debris after a
+  crash; a smoked-glass speed, distance and fuel panel.
+- **飞机大战**: nebulae, a ringed planet and three layers of stars; a silver
+  fighter that banks, with engine flames; three kinds of enemy drawn apart;
+  lasers with white cores; explosions with debris and a shockwave.
+- **像素鸟**: an afternoon sky with the sun, two skylines with lit windows,
+  round pipes, a bird with a beating wing, feathers and dust on a crash.
+- **俄罗斯方块**: gem blocks in a lit well; cleared rows burn white and burst
+  from the middle out; the next piece floats in a glass side panel.
+- **2048**: the classic look raised — tiles with depth, a pop on each merge,
+  big tiles that glow.
+- **贪吃蛇**: a garden with a hedge and a stone wall; a scaled snake whose
+  eyes look where it goes, with a flicking tongue; an apple with a leaf.
+- **21 点**: a half-moon casino table with a leather rail and printed felt;
+  real cards — pips for every rank, crowned faces, patterned backs — dealt
+  from a shoe; chips that stack and fly.
+- **五子棋 · 国际象棋 · 中国象棋**: wooden boards with grain; glossy slate and
+  shell stones; chess pieces in ivory and ebony on maple and walnut; carved
+  wooden xiangqi discs; last move, check and legal moves marked. Clicks
+  still land on the right point.
+- **帝国**: a stream with a stone bridge between the two towns, a meadow of
+  flowers and stones, cloud shadows, glass cards for each side; and the
+  ground of 帝国时代 and 放逐之城 keeps its tufts and flowers when zoomed out.
+
+Each draws a frame in about 0.3–7 ms. And 俄罗斯方块 played by a person now
+falls by itself, faster every ten lines: ←→ move it on the way down, ↑ turns
+it (stepping off a wall), ↓ drops it faster, space drops it at once, and
+half a second on the stack is left to slide it — before, the piece waited at
+the top for ↓.
+
 ### Added — 沙盒搭建: who builds, and a village that grows
 
 "沙盒搭建也要像放逐之城一样可以由不同的角色控制啊". 谁来盖: 我, 电脑, Jev or

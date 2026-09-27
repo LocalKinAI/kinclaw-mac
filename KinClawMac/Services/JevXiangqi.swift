@@ -1,4 +1,5 @@
 import SwiftUI
+import CoreText
 
 /// Xiangqi for two players who read words.
 ///
@@ -319,22 +320,6 @@ final class JevXiangqi: JevGame {
     }
 }
 
-/// Wood, with a little grain.
-fileprivate func xiangqiWood(_ g: GraphicsContext, _ rect: CGRect, light: (Double, Double, Double), seed: Int) {
-    g.fill(Path(roundedRect: rect, cornerRadius: 8),
-           with: .linearGradient(Gradient(colors: [JevDraw.shade(light, 1.06), JevDraw.shade(light, 0.9), JevDraw.shade(light, 1.02)]),
-                                 startPoint: rect.origin, endPoint: CGPoint(x: rect.maxX, y: rect.maxY)))
-    for grain in 0..<26 {
-        let y = rect.minY + rect.height * CGFloat(JevDraw.hash(grain, seed) % 1000) / 1000
-        let wave = CGFloat(JevDraw.hash(grain, seed + 1) % 7) - 3
-        g.stroke(Path { p in
-            p.move(to: CGPoint(x: rect.minX, y: y))
-            p.addCurve(to: CGPoint(x: rect.maxX, y: y + wave), control1: CGPoint(x: rect.minX + rect.width * 0.3, y: y - wave * 2),
-                       control2: CGPoint(x: rect.minX + rect.width * 0.7, y: y + wave * 3))
-        }, with: .color(JevDraw.shade(light, 0.7).opacity(0.18)), lineWidth: 1)
-    }
-}
-
 // MARK: - The picture
 
 extension JevXiangqi: JevPainted {
@@ -358,79 +343,336 @@ extension JevXiangqi: JevPainted {
     }
 }
 
+/// A wooden board with its lines cut in and inked, the river written in a running hand, and the men as turned
+/// wooden discs with their names carved in red or black.
 fileprivate struct XiangqiScene {
     let board: [Int8], previous: [Int8], last: (from: Int, to: Int)?, picked: Int?, targets: Set<Int>, check: Int?, movable: Set<Int>
     let t: Double, over: Bool, result: String, redNames: [String], blackNames: [String]
 
+    /// The board's face, where the lines start on it and the step between them, and how thick the board shows below the face.
+    static func layout(_ size: CGSize) -> (face: CGRect, origin: CGPoint, step: CGFloat, thick: CGFloat) {
+        let side = min(size.width, size.height), pad = side * 0.016, thick = side * 0.014, margin: CGFloat = 0.72
+        let step = min((size.width - 2 * pad) / (8 + 2 * margin), (size.height - 2 * pad - thick) / (9 + 2 * margin))
+        let width = step * (8 + 2 * margin), height = step * (9 + 2 * margin)
+        let face = CGRect(x: (size.width - width) / 2, y: (size.height - thick - height) / 2, width: width, height: height)
+        return (face, CGPoint(x: face.minX + margin * step, y: face.minY + margin * step), step, thick)
+    }
+
     static func geometry(_ size: CGSize) -> (origin: CGPoint, step: CGFloat) {
-        let step = min(size.width / 9.4, size.height / 10.4)
-        return (CGPoint(x: (size.width - 8 * step) / 2, y: (size.height - 9 * step) / 2), step)
+        let layout = layout(size)
+        return (layout.origin, layout.step)
     }
 
     func paint(_ g: inout GraphicsContext, _ size: CGSize) {
-        let (origin, step) = Self.geometry(size)
+        let (face, origin, step, thick) = Self.layout(size)
         func at(_ index: Int) -> CGPoint { CGPoint(x: origin.x + CGFloat(index % 9) * step, y: origin.y + CGFloat(index / 9) * step) }
-        func point(_ col: Int, _ row: Int) -> CGPoint { CGPoint(x: origin.x + CGFloat(col) * step, y: origin.y + CGFloat(row) * step) }
-        g.fill(Path(CGRect(origin: .zero, size: size)), with: .color(Color(red: 0.33, green: 0.2, blue: 0.1)))
-        xiangqiWood(g, CGRect(origin: .zero, size: size).insetBy(dx: 6, dy: 6), light: (0.9, 0.74, 0.5), seed: 23)
-        let ink = Color(red: 0.35, green: 0.18, blue: 0.08)
-        func line(_ a: CGPoint, _ b: CGPoint, _ width: CGFloat = 1.2) { g.stroke(Path { p in p.move(to: a); p.addLine(to: b) }, with: .color(ink), lineWidth: width) }
-        for row in 0..<10 { line(point(0, row), point(8, row)) }
-        for col in 0..<9 {
-            if col == 0 || col == 8 { line(point(col, 0), point(col, 9)) }
-            else { line(point(col, 0), point(col, 4)); line(point(col, 5), point(col, 9)) }
-        }
-        g.stroke(Path(CGRect(x: origin.x - 5, y: origin.y - 5, width: 8 * step + 10, height: 9 * step + 10)), with: .color(ink), lineWidth: 2.5)
-        for (a, b) in [((3, 0), (5, 2)), ((5, 0), (3, 2)), ((3, 7), (5, 9)), ((5, 7), (3, 9))] { line(point(a.0, a.1), point(b.0, b.1)) }
-        let river = (point(0, 4).y + point(0, 5).y) / 2
-        JevDraw.text(g, "楚 河", at: CGPoint(x: point(2, 0).x, y: river), size: step * 0.5, weight: .bold, colour: ink.opacity(0.7), shadow: false)
-        JevDraw.text(g, "漢 界", at: CGPoint(x: point(6, 0).x, y: river), size: step * 0.5, weight: .bold, colour: ink.opacity(0.7), shadow: false)
-
-        if let last {
-            for index in [last.from, last.to] {
-                let p = at(index)
-                g.stroke(Path(ellipseIn: CGRect(x: p.x - step * 0.5, y: p.y - step * 0.5, width: step, height: step)), with: .color(Color(red: 0.95, green: 0.75, blue: 0.1).opacity(0.8)), lineWidth: 2)
-            }
-        }
+        XiangqiArt.table(g, size: size, face: face, thick: thick)
+        XiangqiArt.board(g, face: face, thick: thick)
+        XiangqiArt.lines(g, origin: origin, step: step)
+        let r = step * 0.45
+        // Where the last move came from.
+        if let last { XiangqiArt.from(g, at: at(last.from), radius: r) }
         let moving = last != nil && t < 1
         let shown = moving ? previous : board
+        var standing: [Int] = []
         for index in 0..<90 where shown[index] != 0 {
-            if moving, let last {
-                if index == last.from { continue }
-                if index == last.to { piece(g, shown[index], at: at(index), step: step, alpha: 1 - t); continue }
-            }
-            piece(g, shown[index], at: at(index), step: step, glow: index == check && !moving, picked: index == picked)
+            if moving, let last, index == last.from || index == last.to { continue }
+            standing.append(index)
+        }
+        for index in standing { XiangqiArt.shadow(g, at: at(index), radius: r) }
+        for index in standing {
+            let p = at(index)
+            if index == check && !moving { XiangqiArt.halo(g, at: p, radius: r, colour: Color(red: 1, green: 0.15, blue: 0.08), strength: 0.95) }
+            if index == picked { XiangqiArt.halo(g, at: p, radius: r, colour: XiangqiArt.sky, strength: index == check ? 0 : 0.55) }
+            if !moving, let last, index == last.to { XiangqiArt.halo(g, at: p, radius: r, colour: XiangqiArt.amber, strength: 0.75) }
+            XiangqiArt.piece(g, shown[index], at: p, radius: r, name: name(shown[index]))
+            if !moving, let last, index == last.to { XiangqiArt.ring(g, at: p, radius: r * 1.06, colour: XiangqiArt.amber, width: max(1.5, r * 0.07)) }
+            if index == picked { XiangqiArt.ring(g, at: p, radius: r * 1.1, colour: XiangqiArt.sky, width: max(2, r * 0.1)) }
         }
         if moving, let last {
+            // The man taken fades as the other arrives.
+            if shown[last.to] != 0 {
+                let p = at(last.to), taken = shown[last.to]
+                g.drawLayer { layer in
+                    layer.opacity = 1 - t
+                    XiangqiArt.shadow(layer, at: p, radius: r)
+                    XiangqiArt.piece(layer, taken, at: p, radius: r, name: name(taken))
+                }
+            }
             let from = at(last.from), to = at(last.to), e = JevDraw.smooth(t)
-            piece(g, previous[last.from], at: CGPoint(x: JevDraw.mix(Double(from.x), Double(to.x), e), y: JevDraw.mix(Double(from.y), Double(to.y), e)), step: step, lifted: true)
+            let p = CGPoint(x: JevDraw.mix(Double(from.x), Double(to.x), e), y: JevDraw.mix(Double(from.y), Double(to.y), e))
+            let lift = CGFloat(sin(Double.pi * e))
+            XiangqiArt.shadow(g, at: p, radius: r, lift: lift)
+            XiangqiArt.piece(g, previous[last.from], at: CGPoint(x: p.x, y: p.y - r * 0.12 * lift), radius: r * (1 + 0.06 * lift), name: name(previous[last.from]))
         }
         for target in targets {
             let p = at(target)
-            g.fill(Path(ellipseIn: CGRect(x: p.x - step * 0.14, y: p.y - step * 0.14, width: step * 0.28, height: step * 0.28)), with: .color(Color(red: 0.1, green: 0.55, blue: 0.25).opacity(0.85)))
+            if board[target] != 0 { XiangqiArt.ring(g, at: p, radius: r * 1.08, colour: XiangqiArt.jade, width: max(2, r * 0.1)) }
+            else {
+                let d = step * 0.13
+                g.fill(Path(ellipseIn: CGRect(x: p.x - d, y: p.y - d, width: 2 * d, height: 2 * d)),
+                       with: .radialGradient(Gradient(colors: [XiangqiArt.jade.opacity(0.95), XiangqiArt.jade.opacity(0.75)]), center: p, startRadius: 0, endRadius: d))
+                g.stroke(Path(ellipseIn: CGRect(x: p.x - d, y: p.y - d, width: 2 * d, height: 2 * d)), with: .color(Color.white.opacity(0.55)), lineWidth: 1)
+            }
         }
-        for index in movable where index != picked {
-            let p = at(index)
-            g.stroke(Path(ellipseIn: CGRect(x: p.x - step * 0.52, y: p.y - step * 0.52, width: step * 1.04, height: step * 1.04)), with: .color(Color(red: 0.1, green: 0.7, blue: 0.3)), lineWidth: 3)
-        }
+        for index in movable where index != picked { XiangqiArt.ring(g, at: at(index), radius: r * 1.12, colour: XiangqiArt.jade, width: max(2, r * 0.1)) }
         if over { JevDraw.curtain(g, size, title: result.components(separatedBy: " · ").first ?? result, detail: result.components(separatedBy: " · ").dropFirst().joined(separator: " · ")) }
     }
 
-    /// A man: a wooden disc, a ring, and his name in his side's colour.
-    private func piece(_ g: GraphicsContext, _ piece: Int8, at p: CGPoint, step: CGFloat, alpha: Double = 1, glow: Bool = false,
-                       picked: Bool = false, lifted: Bool = false) {
-        let r = step * 0.44, red = piece > 0
-        let name = (red ? redNames : blackNames)[Int(abs(piece))]
-        let colour = red ? Color(red: 0.75, green: 0.1, blue: 0.08) : Color(white: 0.1)
-        if glow { g.fill(Path(ellipseIn: CGRect(x: p.x - r * 1.5, y: p.y - r * 1.5, width: r * 3, height: r * 3)), with: .radialGradient(Gradient(colors: [Color.red.opacity(0.8), .clear]), center: p, startRadius: r * 0.8, endRadius: r * 1.5)) }
-        if picked { g.fill(Path(ellipseIn: CGRect(x: p.x - r * 1.25, y: p.y - r * 1.25, width: r * 2.5, height: r * 2.5)), with: .color(Color(red: 0.25, green: 0.5, blue: 0.95).opacity(0.55))) }
-        let shadow = lifted ? r * 0.3 : r * 0.12
-        g.fill(Path(ellipseIn: CGRect(x: p.x - r + shadow, y: p.y - r + shadow * 1.4, width: 2 * r, height: 2 * r)), with: .color(.black.opacity(0.35 * alpha)))
-        g.fill(Path(ellipseIn: CGRect(x: p.x - r, y: p.y - r, width: 2 * r, height: 2 * r)),
-               with: .radialGradient(Gradient(colors: [Color(red: 0.99, green: 0.92, blue: 0.76).opacity(alpha), Color(red: 0.86, green: 0.7, blue: 0.47).opacity(alpha)]),
-                                     center: CGPoint(x: p.x - r * 0.3, y: p.y - r * 0.3), startRadius: 0, endRadius: r * 1.3))
-        g.stroke(Path(ellipseIn: CGRect(x: p.x - r, y: p.y - r, width: 2 * r, height: 2 * r)), with: .color(Color(red: 0.45, green: 0.3, blue: 0.15).opacity(alpha)), lineWidth: 1.2)
-        g.stroke(Path(ellipseIn: CGRect(x: p.x - r * 0.8, y: p.y - r * 0.8, width: r * 1.6, height: r * 1.6)), with: .color(colour.opacity(0.8 * alpha)), lineWidth: 1.4)
-        g.draw(Text(name).font(.system(size: r * 1.05, weight: .heavy)).foregroundColor(colour.opacity(alpha)), at: p)
+    private func name(_ piece: Int8) -> String { (piece > 0 ? redNames : blackNames)[Int(abs(piece))] }
+}
+
+/// The board's wood, its lines, the men's shapes, worked out once.
+fileprivate enum XiangqiArt {
+    static let wood: (Double, Double, Double) = (0.88, 0.69, 0.43)
+    static let ink = Color(red: 0.24, green: 0.12, blue: 0.05)
+    static let amber = Color(red: 1, green: 0.76, blue: 0.2)
+    static let jade = Color(red: 0.1, green: 0.6, blue: 0.36)
+    static let sky = Color(red: 0.22, green: 0.52, blue: 1)
+
+    /// Wood lit more (k > 1) or less, without going grey.
+    static func tone(_ rgb: (Double, Double, Double), _ k: Double) -> Color { Color(red: min(1, rgb.0 * k), green: min(1, rgb.1 * k), blue: min(1, rgb.2 * k)) }
+
+    // MARK: Glyphs
+
+    /// A character's outline in the first of these fonts that has it, centred on (0, 0), one point of type to the unit.
+    static func glyph(_ character: String, fonts: [String]) -> Path? {
+        guard let unit = character.utf16.first else { return nil }
+        for name in fonts {
+            let font = CTFontCreateWithName(name as CFString, 100, nil)
+            guard CTFontCopyPostScriptName(font) as String == name else { continue }
+            var character = unit, glyph: CGGlyph = 0
+            guard CTFontGetGlyphsForCharacters(font, &character, &glyph, 1), glyph != 0, let outline = CTFontCreatePathForGlyph(font, glyph, nil) else { continue }
+            let box = outline.boundingBox
+            return Path(outline).applying(CGAffineTransform(a: 0.01, b: 0, c: 0, d: -0.01, tx: -box.midX * 0.01, ty: box.midY * 0.01))
+        }
+        return nil
+    }
+
+    /// The men's names, cut in a heavy regular hand.
+    static let names: [String: Path] = {
+        var names: [String: Path] = [:]
+        for character in "兵仕相马炮车帅卒士象将" {
+            names[String(character)] = glyph(String(character), fonts: ["STKaitiSC-Black", "STKaitiSC-Bold", "STSongti-SC-Black", "STSongti-SC-Bold", "PingFangSC-Semibold"])
+        }
+        return names
+    }()
+
+    /// The river's four characters, in a running hand.
+    static let river: [Path] = "楚河漢界".compactMap { glyph(String($0), fonts: ["STXingkaiSC-Bold", "STKaitiSC-Black", "STSongti-SC-Bold", "PingFangSC-Semibold"]) }
+
+    /// Every line on the board, one step to the unit from the top left point: the grid, the palaces' diagonals, and the
+    /// small corner marks where the soldiers and the cannons start.
+    static let grid: Path = {
+        var p = Path()
+        func line(_ a: (CGFloat, CGFloat), _ b: (CGFloat, CGFloat)) { p.move(to: CGPoint(x: a.0, y: a.1)); p.addLine(to: CGPoint(x: b.0, y: b.1)) }
+        for row in 0..<10 { line((0, CGFloat(row)), (8, CGFloat(row))) }
+        for col in 0..<9 {
+            if col == 0 || col == 8 { line((CGFloat(col), 0), (CGFloat(col), 9)) }
+            else { line((CGFloat(col), 0), (CGFloat(col), 4)); line((CGFloat(col), 5), (CGFloat(col), 9)) }
+        }
+        line((3, 0), (5, 2)); line((5, 0), (3, 2)); line((3, 7), (5, 9)); line((5, 7), (3, 9))
+        return p
+    }()
+
+    static let marks: Path = {
+        var p = Path()
+        let gap: CGFloat = 0.08, arm: CGFloat = 0.19
+        for (col, row) in [(1, 2), (7, 2), (1, 7), (7, 7), (0, 3), (2, 3), (4, 3), (6, 3), (8, 3), (0, 6), (2, 6), (4, 6), (6, 6), (8, 6)] {
+            for sx: CGFloat in [-1, 1] where !(col == 0 && sx < 0) && !(col == 8 && sx > 0) {
+                for sy: CGFloat in [-1, 1] {
+                    let x = CGFloat(col) + sx * gap, y = CGFloat(row) + sy * gap
+                    p.move(to: CGPoint(x: x + sx * arm, y: y))
+                    p.addLine(to: CGPoint(x: x, y: y))
+                    p.addLine(to: CGPoint(x: x, y: y + sy * arm))
+                }
+            }
+        }
+        return p
+    }()
+
+    /// A strand of grain: where it runs (0…1 across and down the face), its colour, and how wide (a fraction of the face's width).
+    struct Strand { let path: Path, colour: Color, width: CGFloat }
+
+    /// The board's grain, running across it: soft bands and fine lines in families, gently waving.
+    static let grain: [Strand] = {
+        func streak(_ y: CGFloat, sway: CGFloat, seed: Int) -> Path {
+            let phase = Double(seed % 628) / 100, phase2 = Double(seed / 628 % 628) / 100
+            var points: [CGPoint] = []
+            for k in 0...14 {
+                let x = -0.02 + 1.04 * CGFloat(k) / 14
+                let wave = sin(Double(x) * 2 * .pi * 0.7 + phase) + 0.45 * sin(Double(x) * 2 * .pi * 1.9 + phase2)
+                points.append(CGPoint(x: x, y: y + sway * CGFloat(wave)))
+            }
+            var p = Path()
+            p.move(to: points[0])
+            for k in 1..<points.count - 1 {
+                p.addQuadCurve(to: CGPoint(x: (points[k].x + points[k + 1].x) / 2, y: (points[k].y + points[k + 1].y) / 2), control: points[k])
+            }
+            p.addLine(to: points[points.count - 1])
+            return p
+        }
+        let dark = Color(red: 0.5, green: 0.28, blue: 0.1), light = Color(red: 1, green: 0.92, blue: 0.72)
+        var strands: [Strand] = []
+        for k in 0..<16 {
+            let h = JevDraw.hash(k, 501)
+            strands.append(Strand(path: streak(CGFloat(h % 1000) / 1000, sway: 0.01, seed: h / 1000),
+                                  colour: (h % 2 == 0 ? dark : light).opacity(0.05 + Double(h % 4) * 0.015), width: 0.014 + CGFloat(h / 7 % 30) / 1000))
+        }
+        for family in 0..<15 {
+            let h = JevDraw.hash(family, 502)
+            var y = CGFloat(h % 1000) / 1000
+            for k in 0..<(3 + h % 5) {
+                let hk = JevDraw.hash(family * 16 + k, 503)
+                strands.append(Strand(path: streak(y, sway: 0.008, seed: h / 1000), colour: dark.opacity(0.1 + Double(hk % 9) / 100), width: 0.0012 + CGFloat(hk % 3) * 0.0006))
+                y += 0.0035 + CGFloat(hk / 3 % 6) / 1000
+            }
+        }
+        return strands
+    }()
+
+    /// A turned disc's grain: a few faint arcs across a unit disc.
+    static let discGrain: Path = {
+        var p = Path()
+        for k in 0..<7 {
+            let y = -0.78 + 1.56 * CGFloat(k) / 6 + CGFloat(JevDraw.hash(k, 31) % 9) / 100 - 0.04
+            let half = sqrt(max(0, 1 - y * y)) * 0.97
+            p.move(to: CGPoint(x: -half, y: y))
+            p.addQuadCurve(to: CGPoint(x: half, y: y + 0.03), control: CGPoint(x: 0, y: y - 0.12))
+        }
+        return p
+    }()
+
+    // MARK: Painting
+
+    /// A dark table, and the board's shadow on it.
+    static func table(_ g: GraphicsContext, size: CGSize, face: CGRect, thick: CGFloat) {
+        g.fill(Path(CGRect(origin: .zero, size: size)), with: .radialGradient(Gradient(colors: [Color(red: 0.2, green: 0.13, blue: 0.09), Color(red: 0.07, green: 0.045, blue: 0.035)]),
+                                                                          center: CGPoint(x: size.width * 0.35, y: size.height * 0.3), startRadius: 0, endRadius: max(size.width, size.height)))
+        for k in 0..<6 {
+            let grow = CGFloat(k) * 1.6
+            let rect = CGRect(x: face.minX - grow + 2, y: face.minY - grow + 5, width: face.width + 2 * grow, height: face.height + thick + 2 * grow)
+            g.fill(Path(roundedRect: rect, cornerRadius: 6 + grow), with: .color(Color.black.opacity(0.09)))
+        }
+    }
+
+    /// The board: its edge below, its face, the grain, the light on it.
+    static func board(_ g: GraphicsContext, face: CGRect, thick: CGFloat) {
+        let corner = face.width * 0.012
+        let side = CGRect(x: face.minX, y: face.midY, width: face.width, height: face.height / 2 + thick)
+        g.fill(Path(roundedRect: side, cornerRadius: corner * 1.5), with: .linearGradient(Gradient(colors: [tone(wood, 0.72), tone(wood, 0.6), tone(wood, 0.42)]),
+                                                                                         startPoint: CGPoint(x: 0, y: face.maxY), endPoint: CGPoint(x: 0, y: side.maxY)))
+        let shape = Path(roundedRect: face, cornerRadius: corner)
+        g.fill(shape, with: .linearGradient(Gradient(colors: [tone(wood, 1.02), tone(wood, 0.97), tone(wood, 1.05), tone(wood, 0.98)]),
+                                            startPoint: CGPoint(x: face.minX, y: face.minY), endPoint: CGPoint(x: face.minX, y: face.maxY)))
+        var c = g
+        c.clip(to: shape)
+        let place = CGAffineTransform(a: face.width, b: 0, c: 0, d: face.height, tx: face.minX, ty: face.minY)
+        for strand in grain { c.stroke(strand.path.applying(place), with: .color(strand.colour), lineWidth: strand.width * face.width) }
+        c.fill(shape, with: .radialGradient(Gradient(colors: [Color(red: 0.4, green: 0.2, blue: 0).opacity(0), Color(red: 0.34, green: 0.16, blue: 0.02).opacity(0.3)]),
+                                            center: CGPoint(x: face.midX, y: face.midY), startRadius: face.width * 0.32, endRadius: face.height * 0.72))
+        c.fill(shape, with: .linearGradient(Gradient(colors: [Color.white.opacity(0.14), Color.white.opacity(0)]), startPoint: face.origin, endPoint: CGPoint(x: face.midX, y: face.midY)))
+        c.stroke(Path(roundedRect: face.insetBy(dx: 0.8, dy: 0.8), cornerRadius: corner),
+                 with: .linearGradient(Gradient(colors: [Color.white.opacity(0.5), Color.white.opacity(0.12), Color.black.opacity(0.22)]),
+                                       startPoint: face.origin, endPoint: CGPoint(x: face.maxX, y: face.maxY)), lineWidth: 1.6)
+    }
+
+    /// The lines, cut into the wood and inked: each groove has a lit lower edge. Then the river, written.
+    static func lines(_ g: GraphicsContext, origin: CGPoint, step: CGFloat) {
+        let place = CGAffineTransform(a: step, b: 0, c: 0, d: step, tx: origin.x, ty: origin.y)
+        let lit = Color(red: 1, green: 0.95, blue: 0.82).opacity(0.55), width = max(1.1, step * 0.022)
+        let drawn = grid.applying(place), small = marks.applying(place)
+        let frame = Path(CGRect(x: origin.x - step * 0.12, y: origin.y - step * 0.12, width: step * 8.24, height: step * 9.24))
+        let border = Path(CGRect(x: origin.x, y: origin.y, width: step * 8, height: step * 9))
+        let down = CGAffineTransform(translationX: 0.8, y: 0.9)
+        for (path, w) in [(drawn, width), (small, width), (border, width * 1.5), (frame, width * 2.4)] {
+            g.stroke(path.applying(down), with: .color(lit), lineWidth: w)
+        }
+        for (path, w) in [(drawn, width), (small, width), (border, width * 1.5), (frame, width * 2.4)] {
+            g.stroke(path, with: .color(ink.opacity(0.88)), style: StrokeStyle(lineWidth: w, lineCap: .square))
+        }
+        // 楚河 on the left bank of the river, 漢界 on the right, written into the wood.
+        guard river.count == 4 else { return }
+        let type = step * 0.74, y = origin.y + step * 4.5
+        for (k, x) in [1.52, 2.48, 5.52, 6.48].enumerated() {
+            let mark = river[k].applying(CGAffineTransform(a: type, b: 0, c: 0, d: type, tx: origin.x + step * CGFloat(x), ty: y))
+            g.fill(mark.applying(CGAffineTransform(translationX: 0.9, y: 1.1)), with: .color(lit))
+            g.fill(mark, with: .color(ink.opacity(0.8)))
+        }
+    }
+
+    /// The soft shadow a man throws on the board.
+    static func shadow(_ g: GraphicsContext, at p: CGPoint, radius r: CGFloat, lift: CGFloat = 0) {
+        let centre = CGPoint(x: p.x + r * (0.08 + 0.3 * lift), y: p.y + r * (0.2 + 0.45 * lift)), reach = r * (1.16 + 0.25 * lift)
+        let dark = 0.5 * Double(1 - 0.5 * lift)
+        g.fill(Path(ellipseIn: CGRect(x: centre.x - reach, y: centre.y - reach, width: 2 * reach, height: 2 * reach)),
+               with: .radialGradient(Gradient(stops: [.init(color: Color.black.opacity(dark), location: 0), .init(color: Color.black.opacity(dark * 0.7), location: 0.72),
+                                                      .init(color: Color.black.opacity(0), location: 1)]), center: centre, startRadius: 0, endRadius: reach))
+    }
+
+    /// A soft coloured light round a man: in check, picked up, just moved.
+    static func halo(_ g: GraphicsContext, at p: CGPoint, radius r: CGFloat, colour: Color, strength: Double) {
+        let reach = r * 1.5
+        g.fill(Path(ellipseIn: CGRect(x: p.x - reach, y: p.y - reach, width: 2 * reach, height: 2 * reach)),
+               with: .radialGradient(Gradient(stops: [.init(color: colour.opacity(strength), location: 0.55), .init(color: colour.opacity(0), location: 1)]),
+                                     center: p, startRadius: 0, endRadius: reach))
+    }
+
+    static func ring(_ g: GraphicsContext, at p: CGPoint, radius r: CGFloat, colour: Color, width: CGFloat) {
+        g.stroke(Path(ellipseIn: CGRect(x: p.x - r, y: p.y - r, width: 2 * r, height: 2 * r)), with: .color(colour.opacity(0.95)), lineWidth: width)
+    }
+
+    /// Where the last move started: four small amber corners.
+    static func from(_ g: GraphicsContext, at p: CGPoint, radius r: CGFloat) {
+        var corners = Path()
+        let d = r * 0.62, arm = r * 0.3
+        for sx: CGFloat in [-1, 1] {
+            for sy: CGFloat in [-1, 1] {
+                corners.move(to: CGPoint(x: p.x + sx * d, y: p.y + sy * (d - arm)))
+                corners.addLine(to: CGPoint(x: p.x + sx * d, y: p.y + sy * d))
+                corners.addLine(to: CGPoint(x: p.x + sx * (d - arm), y: p.y + sy * d))
+            }
+        }
+        g.stroke(corners, with: .color(Color.black.opacity(0.25)), style: StrokeStyle(lineWidth: max(2.5, r * 0.11), lineCap: .round, lineJoin: .round))
+        g.stroke(corners, with: .color(amber), style: StrokeStyle(lineWidth: max(1.8, r * 0.075), lineCap: .round, lineJoin: .round))
+    }
+
+    /// A man: a turned wooden disc with a bevelled rim, a ring cut round the face, and his name carved in and inked.
+    static func piece(_ g: GraphicsContext, _ piece: Int8, at p: CGPoint, radius r: CGFloat, name: String) {
+        let red = piece > 0
+        func disc(_ k: CGFloat, dy: CGFloat = 0) -> Path { Path(ellipseIn: CGRect(x: p.x - r * k, y: p.y - r * k + dy, width: 2 * r * k, height: 2 * r * k)) }
+        // The disc's side, showing below its face.
+        g.fill(disc(1, dy: r * 0.1), with: .linearGradient(Gradient(colors: [Color(red: 0.72, green: 0.5, blue: 0.27), Color(red: 0.48, green: 0.3, blue: 0.14)]),
+                                                         startPoint: CGPoint(x: p.x, y: p.y), endPoint: CGPoint(x: p.x, y: p.y + r * 1.1)))
+        // The face, lit from the top left.
+        g.fill(disc(1), with: .radialGradient(Gradient(stops: [.init(color: Color(red: 0.99, green: 0.93, blue: 0.8), location: 0),
+                                                              .init(color: Color(red: 0.95, green: 0.83, blue: 0.62), location: 0.5),
+                                                              .init(color: Color(red: 0.86, green: 0.68, blue: 0.44), location: 0.9),
+                                                              .init(color: Color(red: 0.78, green: 0.58, blue: 0.35), location: 1)]),
+                                              center: CGPoint(x: p.x - r * 0.35, y: p.y - r * 0.4), startRadius: 0, endRadius: r * 1.55))
+        let turn = Double(JevDraw.hash(Int(piece) + 20, Int(p.x * 3 + p.y)) % 628) / 100
+        g.stroke(discGrain.applying(CGAffineTransform(a: r * CGFloat(cos(turn)), b: r * CGFloat(sin(turn)), c: -r * CGFloat(sin(turn)), d: r * CGFloat(cos(turn)), tx: p.x, ty: p.y)),
+                 with: .color(Color(red: 0.6, green: 0.4, blue: 0.2).opacity(0.14)), lineWidth: max(0.5, r * 0.025))
+        // The bevel: the rim rounds over, lit on the upper left, in shade on the lower right.
+        g.stroke(disc(0.915), with: .linearGradient(Gradient(colors: [Color.white.opacity(0.7), Color.white.opacity(0.1), Color(red: 0.4, green: 0.22, blue: 0.08).opacity(0.35)]),
+                                                    startPoint: CGPoint(x: p.x - r * 0.7, y: p.y - r * 0.7), endPoint: CGPoint(x: p.x + r * 0.7, y: p.y + r * 0.7)),
+                 lineWidth: r * 0.14)
+        g.stroke(disc(1), with: .color(Color(red: 0.36, green: 0.2, blue: 0.08).opacity(0.55)), lineWidth: max(0.8, r * 0.03))
+        // A ring cut round the face, and the name, carved: a lit lower edge to each groove, then the colour in it.
+        let colour = red ? Color(red: 0.72, green: 0.1, blue: 0.07) : Color(red: 0.1, green: 0.085, blue: 0.075)
+        let lit = Color(red: 1, green: 0.97, blue: 0.88).opacity(0.85), shade = Color(red: 0.3, green: 0.15, blue: 0.04).opacity(0.35)
+        let groove = disc(0.74), w = max(1, r * 0.055)
+        g.stroke(groove.applying(CGAffineTransform(translationX: r * 0.03, y: r * 0.04)), with: .color(lit), lineWidth: w)
+        g.stroke(groove, with: .color(colour.opacity(0.9)), lineWidth: w)
+        guard let glyph = names[name] else {
+            g.draw(Text(name).font(.system(size: r * 1.05, weight: .heavy)).foregroundColor(colour), at: p)
+            return
+        }
+        let type = r * 1.14, cut = glyph.applying(CGAffineTransform(a: type, b: 0, c: 0, d: type, tx: p.x, ty: p.y))
+        g.fill(cut.applying(CGAffineTransform(translationX: r * 0.035, y: r * 0.045)), with: .color(lit))
+        g.fill(cut.applying(CGAffineTransform(translationX: -r * 0.02, y: -r * 0.025)), with: .color(shade))
+        g.fill(cut, with: .linearGradient(Gradient(colors: red ? [Color(red: 0.84, green: 0.16, blue: 0.1), Color(red: 0.6, green: 0.06, blue: 0.04)]
+                                                                : [Color(red: 0.24, green: 0.21, blue: 0.19), Color(red: 0.03, green: 0.025, blue: 0.02)]),
+                                          startPoint: CGPoint(x: p.x, y: p.y - r * 0.5), endPoint: CGPoint(x: p.x, y: p.y + r * 0.5)))
     }
 }

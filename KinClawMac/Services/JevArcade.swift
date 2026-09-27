@@ -242,12 +242,21 @@ final class JevArcade: ObservableObject {
     /// then the next key, click on the board or option in the list.
     private func person(_ options: [JevOption]) async -> JevOption? {
         if let clock = game.clock {
-            try? await Task.sleep(nanoseconds: UInt64(clock / max(tempo, 0.25) * 1_000_000_000))
-            guard !Task.isCancelled else { return nil }
-            let keys = pressed
-            pressed = []
-            if case .choose(let option) = game.react(keys, held: held, among: options) { return option }
-            return nil
+            // Tick after tick until the keys make a move: most games move every tick (the car
+            // drives on), a falling piece only when it comes to rest.
+            while true {
+                try? await Task.sleep(nanoseconds: UInt64(clock / max(tempo, 0.25) * 1_000_000_000))
+                guard !Task.isCancelled else { return nil }
+                let keys = pressed
+                pressed = []
+                switch game.react(keys, held: held, among: options) {
+                case .choose(let option): return option
+                case .redraw: show(now: true)
+                case .explain(let why): say(why)
+                case .nothing: break
+                }
+                if game.over { return nil }
+            }
         }
         while !pressed.isEmpty {
             switch game.react([pressed.removeFirst()], held: held, among: options) {

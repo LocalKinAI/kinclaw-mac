@@ -248,19 +248,150 @@ fileprivate struct EmpireScene {
         let width = size.width, height = size.height
         let S = tile(height / 400)
         Art.ground(&g, size: size, S: S, season: Self.season, visible: CGRect(x: 0, y: 0, width: width / S, height: height / S), tiles: CGSize(width: width / S, height: height / S))
+        meadow(g, size)
+        stream(g, size)
         // The road between the towns: a trodden path.
         let road = roadPath(width, height)
         g.stroke(road, with: .color(Art.c((0.62, 0.52, 0.38))), style: StrokeStyle(lineWidth: height * 0.07, lineCap: .round, lineJoin: .round))
         g.stroke(road, with: .color(Art.c((0.78, 0.67, 0.5))), style: StrokeStyle(lineWidth: height * 0.054, lineCap: .round, lineJoin: .round))
         g.stroke(road, with: .color(Art.c((0.84, 0.74, 0.58), 0.6)), style: StrokeStyle(lineWidth: height * 0.016, lineCap: .round, lineJoin: .round))
+        bridge(g, size)
         for s in 0..<2 { town(g, s, size) }
         for s in 0..<2 { marching(g, s, size) }
         fights(g, size)
+        weather(g, size)
         hud(g, size)
         if let result {
             let parts = result.components(separatedBy: " · ")
             JevDraw.curtain(g, size, title: parts.last ?? result, detail: parts.dropLast().joined(separator: " · "))
         }
+    }
+
+    // MARK: The land between the towns
+
+    /// Where the stream runs: a fraction of the width at each height.
+    private func streamX(_ y: Double) -> Double { 0.5 + 0.028 * sin(y * 7.3 + 0.6) + 0.012 * sin(y * 17) }
+
+    /// Flowers, stones, tufts and bushes on the open meadow, the same every time.
+    private static let meadowThings: [(x: Double, y: Double, kind: Int, v: Int)] = {
+        var out: [(Double, Double, Int, Int)] = []
+        for k in 0..<150 {
+            let x = 0.3 + 0.4 * Double(JevDraw.hash(k, 401) % 1000) / 1000, y = 0.13 + 0.85 * Double(JevDraw.hash(k, 409) % 1000) / 1000
+            // Not on the road, not in the stream.
+            if abs(y - (0.63 + 0.04 * sin((x - 0.2) / 0.6 * .pi * 2))) < 0.06 { continue }
+            if abs(x - (0.5 + 0.028 * sin(y * 7.3 + 0.6) + 0.012 * sin(y * 17))) < 0.035 { continue }
+            out.append((x, y, JevDraw.hash(k, 419) % 10, JevDraw.hash(k, 421)))
+        }
+        return out.sorted { $0.1 < $1.1 }
+    }()
+
+    private func meadow(_ g: GraphicsContext, _ size: CGSize) {
+        let unit = size.height / 400
+        // Soft rises and hollows in the grass.
+        for k in 0..<7 {
+            let x = size.width * CGFloat(0.28 + 0.44 * Double(JevDraw.hash(k, 431) % 1000) / 1000), y = size.height * CGFloat(0.18 + 0.75 * Double(JevDraw.hash(k, 433) % 1000) / 1000)
+            let r = unit * CGFloat(40 + JevDraw.hash(k, 437) % 50)
+            let light = k % 2 == 0
+            g.fill(Path(ellipseIn: CGRect(x: x - r * 1.5, y: y - r, width: r * 3, height: r * 2)),
+                   with: .radialGradient(Gradient(colors: [(light ? Color(red: 0.62, green: 0.78, blue: 0.36) : Color(red: 0.3, green: 0.5, blue: 0.22)).opacity(0.22), .clear]),
+                                         center: CGPoint(x: x, y: y), startRadius: 0, endRadius: r * 1.5))
+        }
+        for thing in Self.meadowThings {
+            let p = CGPoint(x: size.width * CGFloat(thing.x), y: size.height * CGFloat(thing.y))
+            switch thing.kind {
+            case 0, 1, 2:   // tufts
+                for blade in -2...2 {
+                    let lean = CGFloat(blade) * 1.3 * unit
+                    g.stroke(Path { path in path.move(to: p); path.addLine(to: CGPoint(x: p.x + lean, y: p.y - unit * CGFloat(4 + abs(blade) % 2 * 2))) },
+                             with: .color(Color(red: 0.26, green: 0.48, blue: 0.2).opacity(0.75)), lineWidth: max(0.8, unit * 0.8))
+                }
+            case 3, 4, 5:   // flowers
+                let petals: [Color] = [Color(red: 0.98, green: 0.9, blue: 0.4), .white, Color(red: 0.95, green: 0.55, blue: 0.7), Color(red: 0.7, green: 0.6, blue: 0.95)]
+                let colour = petals[thing.v % petals.count]
+                for f in 0..<3 {
+                    let q = CGPoint(x: p.x + CGFloat(f - 1) * 4 * unit, y: p.y + CGFloat(f % 2) * 2.5 * unit)
+                    g.fill(Path(ellipseIn: CGRect(x: q.x - 1.6 * unit, y: q.y - 1.6 * unit, width: 3.2 * unit, height: 3.2 * unit)), with: .color(colour))
+                    g.fill(Path(ellipseIn: CGRect(x: q.x - 0.6 * unit, y: q.y - 0.6 * unit, width: 1.2 * unit, height: 1.2 * unit)), with: .color(Color(red: 0.95, green: 0.7, blue: 0.2)))
+                }
+            case 6, 7:      // stones
+                let w = unit * CGFloat(5 + thing.v % 4)
+                g.fill(Path(ellipseIn: CGRect(x: p.x - w * 0.55, y: p.y - w * 0.05, width: w * 1.3, height: w * 0.5)), with: .color(.black.opacity(0.14)))
+                g.fill(Path(ellipseIn: CGRect(x: p.x - w * 0.6, y: p.y - w * 0.55, width: w * 1.2, height: w * 0.8)),
+                       with: .linearGradient(Gradient(colors: [Color(white: 0.78), Color(white: 0.5)]), startPoint: CGPoint(x: p.x - w * 0.4, y: p.y - w * 0.5), endPoint: CGPoint(x: p.x + w * 0.4, y: p.y + w * 0.2)))
+            default:        // a bush
+                let r = unit * CGFloat(6 + thing.v % 4)
+                g.fill(Path(ellipseIn: CGRect(x: p.x - r * 0.9, y: p.y - r * 0.2, width: r * 2.1, height: r * 0.8)), with: .color(.black.opacity(0.16)))
+                for (dx, dy, k) in [(-0.45, -0.3, 0.9), (0.45, -0.25, 0.85), (0.0, -0.6, 1.0)] {
+                    let c = CGPoint(x: p.x + r * CGFloat(dx), y: p.y + r * CGFloat(dy))
+                    g.fill(Path(ellipseIn: CGRect(x: c.x - r * 0.6, y: c.y - r * 0.6, width: r * 1.2, height: r * 1.2)),
+                           with: .radialGradient(Gradient(colors: [Color(red: 0.42 * k, green: 0.68 * k, blue: 0.3 * k), Color(red: 0.2, green: 0.4, blue: 0.16)]),
+                                                 center: CGPoint(x: c.x - r * 0.2, y: c.y - r * 0.25), startRadius: 0, endRadius: r * 0.7))
+                }
+            }
+        }
+    }
+
+    /// A stream down the middle of the map, between the two lands: banks, shallows, and light moving on the water.
+    private func stream(_ g: GraphicsContext, _ size: CGSize) {
+        let unit = size.height / 400, top = 40 * unit
+        let course = Path { p in
+            for k in 0...60 {
+                let y = Double(top / size.height) + (1 - Double(top / size.height)) * Double(k) / 60
+                let point = CGPoint(x: size.width * CGFloat(streamX(y)), y: size.height * CGFloat(y) + (k == 60 ? 4 * unit : 0))
+                if k == 0 { p.move(to: point) } else { p.addLine(to: point) }
+            }
+        }
+        let width = size.width * 0.034
+        g.stroke(course, with: .color(Color(red: 0.36, green: 0.44, blue: 0.22)), style: StrokeStyle(lineWidth: width + 7 * unit, lineCap: .butt, lineJoin: .round))
+        g.stroke(course, with: .color(Color(red: 0.82, green: 0.74, blue: 0.52)), style: StrokeStyle(lineWidth: width + 3 * unit, lineCap: .butt, lineJoin: .round))
+        g.stroke(course, with: .color(Color(red: 0.24, green: 0.52, blue: 0.72)), style: StrokeStyle(lineWidth: width, lineCap: .butt, lineJoin: .round))
+        g.stroke(course, with: .color(Color(red: 0.2, green: 0.42, blue: 0.64)), style: StrokeStyle(lineWidth: width * 0.45, lineCap: .butt, lineJoin: .round))
+        // Glints drifting downstream.
+        for k in 0..<26 {
+            let phase = (Double(k) / 26 + now * 0.02).truncatingRemainder(dividingBy: 1)
+            let y = Double(top / size.height) + (1 - Double(top / size.height)) * phase
+            let x = streamX(y) + (Double(JevDraw.hash(k, 443) % 100) / 100 - 0.5) * 0.02
+            let p = CGPoint(x: size.width * CGFloat(x), y: size.height * CGFloat(y))
+            g.stroke(Path { path in path.move(to: CGPoint(x: p.x - 3 * unit, y: p.y)); path.addLine(to: CGPoint(x: p.x + 3 * unit, y: p.y + unit)) },
+                     with: .color(.white.opacity(0.35 + 0.25 * sin(now * 2 + Double(k)))), lineWidth: max(0.8, unit * 0.9))
+        }
+    }
+
+    /// A stone bridge where the road crosses the stream.
+    private func bridge(_ g: GraphicsContext, _ size: CGSize) {
+        let unit = size.height / 400
+        let crossing = roadPoint(0.5, size)
+        let x = size.width * CGFloat(streamX(Double(crossing.y / size.height)))
+        let deck = CGRect(x: x - size.width * 0.034, y: crossing.y - size.height * 0.036, width: size.width * 0.068, height: size.height * 0.072)
+        g.fill(Path(roundedRect: deck.offsetBy(dx: 2 * unit, dy: 3 * unit), cornerRadius: 3 * unit), with: .color(.black.opacity(0.25)))
+        g.fill(Path(roundedRect: deck, cornerRadius: 3 * unit),
+               with: .linearGradient(Gradient(colors: [Color(white: 0.74), Color(white: 0.58)]), startPoint: CGPoint(x: deck.minX, y: deck.minY), endPoint: CGPoint(x: deck.maxX, y: deck.maxY)))
+        // Paving stones across the deck, and a parapet each side.
+        for row in 1..<4 {
+            let y = deck.minY + deck.height * CGFloat(row) / 4
+            g.stroke(Path { p in p.move(to: CGPoint(x: deck.minX + 2 * unit, y: y)); p.addLine(to: CGPoint(x: deck.maxX - 2 * unit, y: y)) }, with: .color(Color(white: 0.5).opacity(0.6)), lineWidth: max(0.6, unit * 0.6))
+        }
+        for edge in [deck.minY, deck.maxY - 4 * unit] {
+            let wall = CGRect(x: deck.minX - 2 * unit, y: edge, width: deck.width + 4 * unit, height: 4 * unit)
+            g.fill(Path(roundedRect: wall, cornerRadius: 1.5 * unit), with: .color(Color(white: 0.82)))
+            g.stroke(Path(roundedRect: wall, cornerRadius: 1.5 * unit), with: .color(Color(white: 0.45)), lineWidth: max(0.6, unit * 0.7))
+        }
+    }
+
+    /// Clouds' shadows drifting over the land, and the corners a little darker.
+    private func weather(_ g: GraphicsContext, _ size: CGSize) {
+        for k in 0..<3 {
+            let speed = 0.006 + 0.002 * Double(k)
+            let x = ((Double(JevDraw.hash(k, 449) % 1000) / 1000 + now * speed).truncatingRemainder(dividingBy: 1.4)) - 0.2
+            let y = 0.25 + 0.25 * Double(k)
+            let c = CGPoint(x: size.width * CGFloat(x), y: size.height * CGFloat(y))
+            let r = size.height * CGFloat(0.16 + 0.04 * Double(k))
+            g.fill(Path(ellipseIn: CGRect(x: c.x - r * 1.6, y: c.y - r * 0.7, width: r * 3.2, height: r * 1.4)),
+                   with: .radialGradient(Gradient(colors: [.black.opacity(0.1), .clear]), center: c, startRadius: 0, endRadius: r * 1.6))
+        }
+        let middle = CGPoint(x: size.width / 2, y: size.height / 2)
+        g.fill(Path(CGRect(origin: .zero, size: size)),
+               with: .radialGradient(Gradient(colors: [.clear, .clear, .black.opacity(0.22)]), center: middle, startRadius: 0, endRadius: hypot(size.width, size.height) * 0.56))
     }
 
     // MARK: Where things are
@@ -289,7 +420,7 @@ fileprivate struct EmpireScene {
     // MARK: A town
 
     private func town(_ g: GraphicsContext, _ s: Int, _ size: CGSize) {
-        let side = after.sides[s], unit = size.height / 400, colour = Self.team[s], team = Self.teamRGB[s]
+        let side = after.sides[s], unit = size.height / 400, team = Self.teamRGB[s]
         var g = g
         let S = tile(unit)
         let (wall, roof, roofColour, marble) = style(side.age)
@@ -454,15 +585,21 @@ fileprivate struct EmpireScene {
 
     private func hud(_ g: GraphicsContext, _ size: CGSize) {
         let unit = size.height / 400
-        g.fill(Path(CGRect(x: 0, y: 0, width: size.width, height: 40 * unit)), with: .color(.black.opacity(0.45)))
+        g.fill(Path(CGRect(x: 0, y: 0, width: size.width, height: 44 * unit)),
+               with: .linearGradient(Gradient(colors: [.black.opacity(0.55), .black.opacity(0.25)]), startPoint: .zero, endPoint: CGPoint(x: 0, y: 44 * unit)))
+        let counter = CGRect(x: size.width / 2 - 62 * unit, y: 9 * unit, width: 124 * unit, height: 22 * unit)
+        g.fill(Path(roundedRect: counter, cornerRadius: 11 * unit), with: .color(.white.opacity(0.14)))
+        g.stroke(Path(roundedRect: counter, cornerRadius: 11 * unit), with: .color(.white.opacity(0.28)), lineWidth: max(0.8, unit * 0.8))
         JevDraw.text(g, "第 \(min(after.round + 1, EmpireWorld.limit)) / \(EmpireWorld.limit) 回合", at: CGPoint(x: size.width / 2, y: 20 * unit), size: 12 * unit, weight: .bold, shadow: false)
         for s in 0..<2 {
             let side = after.sides[s]
-            let edge: CGFloat = s == 0 ? 10 * unit : size.width - 10 * unit, anchor: UnitPoint = s == 0 ? .leading : .trailing
-            if after.mover == s, after.winner == nil {
-                g.fill(Path(roundedRect: CGRect(x: s == 0 ? 2 * unit : size.width * 0.58, y: 2 * unit, width: size.width * 0.4, height: 36 * unit), cornerRadius: 6 * unit),
-                       with: .color(Self.team[s].opacity(0.35)))
-            }
+            let edge: CGFloat = s == 0 ? 12 * unit : size.width - 12 * unit, anchor: UnitPoint = s == 0 ? .leading : .trailing
+            let card = CGRect(x: s == 0 ? 4 * unit : size.width * 0.62 - 4 * unit, y: 3 * unit, width: size.width * 0.38, height: 36 * unit)
+            let moving = after.mover == s && after.winner == nil
+            g.fill(Path(roundedRect: card, cornerRadius: 8 * unit),
+                   with: .linearGradient(Gradient(colors: [Self.team[s].opacity(moving ? 0.55 : 0.22), Self.team[s].opacity(moving ? 0.3 : 0.1)]),
+                                         startPoint: CGPoint(x: card.minX, y: card.minY), endPoint: CGPoint(x: card.minX, y: card.maxY)))
+            g.stroke(Path(roundedRect: card, cornerRadius: 8 * unit), with: .color(.white.opacity(moving ? 0.45 : 0.15)), lineWidth: max(0.8, unit * (moving ? 1.2 : 0.8)))
             JevDraw.text(g, "\(EmpireWorld.names[s]) · \(EmpireWorld.ageNames[side.age])" + (side.advancing > 0 ? " ↑\(side.advancing)" : ""),
                          at: CGPoint(x: edge, y: 12 * unit), size: 11 * unit, weight: .heavy, colour: .white, anchor: anchor, shadow: false)
             let line = "🍖\(Int(side.food))  🪵\(Int(side.wood))  🪙\(Int(side.gold))  👥\(side.population)/\(side.room)  ⚔️\(Int((side.atHome + side.onRoad).rounded()))"

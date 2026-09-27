@@ -68,7 +68,32 @@ enum Art {
             let tone = k % 3 == 0 ? lit(base, 0.9) : k % 3 == 1 ? lit(base, 1.07) : mix(base, (0.62, 0.66, 0.3), 0.3)
             g.fill(Path(ellipseIn: CGRect(x: CGFloat(x) * S - r, y: CGFloat(y) * S - r * 0.7, width: 2 * r, height: 1.4 * r)), with: .color(c(tone, 0.28)))
         }
-        guard S >= 30 else { return }
+        guard S >= 30 else {
+            // Farther out: a tuft here and there, a pebble, a flower in spring — so the grass is not one flat colour.
+            guard S >= 10 else { return }
+            let tuft = lit(base, season.snow > 0.5 ? 0.93 : 0.74)
+            var tufts = Path(), pebbles = Path(), flowers: [(CGPoint, Int)] = []
+            let len = max(2.5, S * 0.14)
+            for y in Int(visible.minY)...Int(visible.maxY) {
+                for x in Int(visible.minX)...Int(visible.maxX) {
+                    let h = hash(x * 5 + 1, y * 11 + 3)
+                    guard h % 3 == 0 else { continue }
+                    let p = CGPoint(x: (CGFloat(x) + CGFloat(h % 89) / 89) * S, y: (CGFloat(y) + CGFloat(h / 89 % 83) / 83) * S)
+                    tufts.move(to: p); tufts.addLine(to: CGPoint(x: p.x - len * 0.35, y: p.y - len))
+                    tufts.move(to: p); tufts.addLine(to: CGPoint(x: p.x + len * 0.3, y: p.y - len * 1.1))
+                    if h % 29 == 0 { pebbles.addEllipse(in: CGRect(x: p.x + len, y: p.y - len * 0.3, width: len * 0.9, height: len * 0.6)) }
+                    if season.snow < 0.2, season.month < 7, h % 17 == 0 { flowers.append((CGPoint(x: p.x - len, y: p.y - len * 0.2), h)) }
+                }
+            }
+            g.stroke(tufts, with: .color(c(tuft, 0.55)), lineWidth: max(0.6, S * 0.03))
+            g.fill(pebbles, with: .color(c((0.64, 0.63, 0.6), 0.85)))
+            let colours: [RGB] = [(1, 0.95, 0.5), (1, 1, 1), (0.95, 0.55, 0.7), (0.65, 0.6, 0.95)]
+            for (p, h) in flowers {
+                let r = max(1.2, S * 0.06)
+                g.fill(Path(ellipseIn: CGRect(x: p.x - r, y: p.y - r, width: 2 * r, height: 2 * r)), with: .color(c(colours[h % 4])))
+            }
+            return
+        }
         // Tufts, and flowers from spring into summer — close up only.
         let tuft = lit(base, season.snow > 0.5 ? 0.93 : 0.78)
         for y in Int(visible.minY)...Int(visible.maxY) {
