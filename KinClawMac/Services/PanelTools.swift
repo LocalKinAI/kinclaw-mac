@@ -18,7 +18,8 @@ enum PanelTools {
         [
             "name": "browser_open",
             "description": """
-                Open a URL in the Web tab of the KinClaw panel — the user's own \
+                Open a URL in the LocalKin panel's browser — the drawer on the \
+                panel's right, which comes out by itself; the user's own \
                 browser, with their cookies and sign-ins — wait for it to load, \
                 and return the page's title and text. Use this rather than a \
                 fetch when the page needs a session the fetch would not have, \
@@ -38,7 +39,7 @@ enum PanelTools {
         [
             "name": "browser_read",
             "description": """
-                Read the page the KinClaw panel's Web tab is showing right now: \
+                Read the page the LocalKin panel's browser is showing right now: \
                 its title, URL and visible text, after the page's JavaScript \
                 has run. Use it to see what the user is looking at.
                 """,
@@ -54,15 +55,16 @@ enum PanelTools {
         ],
         [
             "name": "browser_tabs",
-            "description": "List the tabs open in the KinClaw panel's Web tab, and which one is in front.",
+            "description": "List the pages open in the LocalKin panel's browser, and which one is in front.",
             "inputSchema": ["type": "object", "properties": [String: Any]()],
         ],
         [
             "name": "terminal_tabs",
             "description": """
-                List the tabs in the KinClaw panel's Term tab: which agent or \
-                shell each one is running, in which folder, and whether its \
-                process is still alive.
+                List the terminals in the LocalKin panel — the Code tab's agent \
+                sessions (Claude Code or Codex) and the shells in the drawer \
+                along its bottom: which agent or shell each one is running, in \
+                which folder, and whether its process is still alive.
                 """,
             "inputSchema": ["type": "object", "properties": [String: Any]()],
         ],
@@ -358,11 +360,11 @@ enum PanelTools {
         ],
         [
             "name": "panel_show",
-            "description": "Show the KinClaw panel, optionally on one of its tabs: chat, cowork, code, term, web, film, motion, montage, comfy, jev; or make it full screen. With film, motion, comfy or montage, `ask` hands a request to the agent on that tab's left. Use it when the user asks to see the panel or to go to a tab (\"打开片场\" → film). With mode film, `film` selects a film and `shot` opens that shot's words for rewriting (\"我想改第三个镜头\").",
+            "description": "Show the LocalKin panel, optionally on one of its tabs: chat, cowork, code (Claude Code and Codex sessions), film, motion, montage, comfy, jev — or web / shell, which open the browser (on the right) or the shell (along the bottom) beside whichever tab is up; or make it full screen. With film, motion, comfy or montage, `ask` hands a request to the agent on that tab's left. Use it when the user asks to see the panel or to go to a tab (\"打开片场\" → film). With mode film, `film` selects a film and `shot` opens that shot's words for rewriting (\"我想改第三个镜头\").",
             "inputSchema": [
                 "type": "object",
                 "properties": [
-                    "mode": ["type": "string", "description": "chat | cowork | code | term | web | film | motion | montage | comfy | jev. Omit to leave the tab as it is."],
+                    "mode": ["type": "string", "description": "chat | cowork | code | film | motion | montage | comfy | jev, or web | shell for the browser or shell drawer. Omit to leave the tab as it is."],
                     "film": ["type": "string", "description": "With mode film: the film to show, by id or title."],
                     "shot": ["type": "integer", "description": "With film: open this shot's prompt editor."],
                     "full_screen": ["type": "boolean", "description": "true: the panel goes full screen; false: back to a window. Omit to leave it."],
@@ -374,7 +376,7 @@ enum PanelTools {
         ],
         [
             "name": "settings_open",
-            "description": "Open KinClaw Mac's Settings window, optionally on one of its tabs. Use it when the user asks for the settings, or has to fill something in there (the box's services and Laya are under backend).",
+            "description": "Open LocalKin's Settings window, optionally on one of its tabs. Use it when the user asks for the settings, or has to fill something in there (the box's services and Laya are under backend).",
             "inputSchema": [
                 "type": "object",
                 "properties": ["tab": ["type": "string", "description": "general | hotkey | backend | agents | skills | voice | mcp | harvest | routines | data | about. Omit to leave it where it is."]],
@@ -1244,7 +1246,14 @@ enum PanelTools {
                 if let shot = args["shot"] as? Int { which["shot"] = shot }
                 NotificationCenter.default.post(name: .kinclawFilmShow, object: nil, userInfo: which)
             }
-            return ("面板打开了" + ((info["mode"] as? String).map { "，在 \($0) 标签" } ?? ""), false)
+            let place = (info["mode"] as? String).map { mode -> String in
+                switch mode.lowercased() {
+                case "web", "browser": return "，右边的浏览器开着"
+                case "shell": return "，底部的 shell 开着"
+                default: return "，在 \(mode) 标签"
+                }
+            }
+            return ("面板打开了" + (place ?? ""), false)
         case "settings_open":
             NSApp.activate(ignoringOtherApps: true)
             NotificationCenter.default.post(name: .kinclawOpenSettings, object: nil)
@@ -1774,6 +1783,8 @@ enum PanelTools {
         }
         browser.ensureView(id)
         browser.load(id, text: url)
+        // The page is for the person to see too: the drawer comes out.
+        Drawers.shared.openBrowser()
         let settled = await browser.waitForLoad(id, seconds: 30)
         let state = browser.liveState(id)
         if let error = state.error {
@@ -1792,7 +1803,7 @@ enum PanelTools {
         let limit = min(max(args["chars"] as? Int ?? 20_000, 200), 200_000)
         guard let tab = pick(args["tab"] as? Int, from: browser.tabs.map(\.id),
                              current: browser.selected?.id) else {
-            return ("面板的 Web 标签里现在没有打开的页面", true)
+            return ("面板的浏览器里现在没有打开的页面", true)
         }
         browser.ensureView(tab)
         let state = browser.liveState(tab)
@@ -1810,7 +1821,7 @@ enum PanelTools {
         let lines = min(max(args["lines"] as? Int ?? 200, 5), 2000)
         guard let id = pick(args["tab"] as? Int, from: sessions.sessions.map(\.id),
                             current: sessions.selected?.id) else {
-            return ("面板的 Term 标签里现在没有打开的终端", true)
+            return ("面板里现在没有打开的终端（Code 标签的会话和底部的 shell）", true)
         }
         guard let text = sessions.screenText(id, lines: lines) else {
             return ("这个标签还没有启动终端（它的进程要等标签第一次显示才开）", true)

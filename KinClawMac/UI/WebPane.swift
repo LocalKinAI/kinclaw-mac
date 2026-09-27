@@ -318,7 +318,7 @@ final class BrowserTabs: ObservableObject {
 
     /// The open tabs, numbered the way the tools take them.
     func summary() -> String {
-        guard !tabs.isEmpty else { return "面板的 Web 标签里没有打开的页面" }
+        guard !tabs.isEmpty else { return "面板的浏览器里没有打开的页面" }
         return tabs.enumerated().map { i, tab in
             let state = liveState(tab.id)
             let mark = tab.id == selected?.id ? "→" : " "
@@ -451,18 +451,18 @@ struct WebPane: View {
     var body: some View {
         VStack(spacing: 0) {
             tabStrip
-            Divider().opacity(0.15)
+            Rectangle().fill(Theme.hairline).frame(height: 0.5)
             if let tab = browser.selected {
                 toolbar(tab)
                 progress(tab)
-                Divider().opacity(0.15)
+                Rectangle().fill(Theme.hairline).frame(height: 0.5)
                 WebViewSlot(view: browser.view(for: tab))
                     .id(tab.id)
             } else {
                 noTabs
             }
         }
-        .background(Color.black.opacity(0.28))
+        .background(Theme.sidebar)
         .task {
             // A browser opens with a tab, the way a browser does.
             if browser.tabs.isEmpty {
@@ -533,7 +533,7 @@ struct WebPane: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
-            .fill(active ? Color.white.opacity(0.10) : Color.clear))
+            .fill(active ? Theme.card : Color.clear))
         .contentShape(Rectangle())
         .onTapGesture { browser.selectedID = tab.id }
         .help(state.url.isEmpty ? tab.url : state.url)
@@ -567,7 +567,7 @@ struct WebPane: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
                 .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color.white.opacity(0.08)))
+                    .fill(Theme.well))
                 .focused($addressFocused)
                 .onSubmit {
                     browser.load(tab.id, text: address)

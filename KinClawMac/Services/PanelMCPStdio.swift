@@ -86,7 +86,7 @@ enum PanelMCPStdio {
             return id.map { error(id: $0, "\(name) 不在这个 agent 能用的工具里") }
         }
         guard let handshake = Handshake.read() else {
-            return id.map { error(id: $0, "KinClaw Mac 没在运行 —— 面板的浏览器和终端工具要等它起来") }
+            return id.map { error(id: $0, "LocalKin 没在运行 —— 面板的浏览器和终端工具要等它起来") }
         }
         guard let url = URL(string: "http://127.0.0.1:\(handshake.port)/mcp") else { return nil }
         var request = URLRequest(url: url)
@@ -113,7 +113,7 @@ enum PanelMCPStdio {
         _ = done.wait(timeout: .now() + timeout + 3)
 
         if let failure {
-            return id.map { error(id: $0, "连不上 KinClaw Mac 的面板：\(failure)") }
+            return id.map { error(id: $0, "连不上 LocalKin 的面板：\(failure)") }
         }
         if status == 204 { return nil }
         guard status == 200, let body, !body.isEmpty else {

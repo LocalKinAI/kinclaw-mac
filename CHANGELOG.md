@@ -8,6 +8,43 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Changed — the menu is Talk · Code · Studio · Jev, and the app is LocalKin
+
+"想整理一下菜单……chat 是我的蜂群，cowork 是用来操控电脑的……term 标签改名为 code".
+
+- **Talk** holds Chat (the swarm) and Cowork (the one that works the computer).
+- **Code** is the Term tab made into the place for the general agents,
+  Claude Code and Codex. Down the left, every conversation the two keep on
+  this Mac — the Claude desktop app's too, under the names they have there —
+  by folder, as the desktop app's sidebar has them ("像你现在的一样按 folder
+  分类"): a worktree's under its repo, the folders with something open first,
+  each showing its latest five and folding shut, a ＋ on each for a new session
+  there, and a search across all of them. One clicked is gone back into in a
+  terminal beside the list, and carries on as it would there. One touched in
+  the last ten minutes, which may still be open in the desktop app, is gone
+  back into as a copy (`--fork-session`), so two programs never write one
+  conversation.
+  New sessions think with Claude Code's own sign-in, the Claude subscription;
+  a session's brain can be changed while it runs — to a model on this Mac's
+  Ollama, the box's Ollama or kinfer — and it restarts into the same
+  conversation (Claude Code is handed its conversation's id from the start,
+  `--session-id`, so it is always known). Open sessions come back, resumed,
+  when the app is opened again. A session that ends says its exit code, not
+  waitpid's raw status (256 was exit 1).
+- **KinCode** is off the bar ("kincode 和 claude code 和 codex 比他差了"); a panel
+  saved on it, or on Term, opens on Code.
+- **The browser and the shell are drawers**, not tabs ("用时自动打开，或者手动
+  打开"): the globe and the terminal in the title bar open the browser down the
+  right and your shells along the bottom, beside whatever tab is up. The
+  browser also comes out by itself when an agent opens a page (`browser_open`),
+  widening a panel too narrow for it and narrowing it back when it closes;
+  `panel_show` takes `web` and `shell` for them. Closing one only hides it:
+  its pages and shells go on. The browser's bar is drawn in the app's own
+  colours now; in light mode it had come up a muddy grey.
+- **The name**: LocalKin, in the menu bar, the Dock, About and every message
+  the app writes ("改个好名字"). The bundle id and the folders stay as they
+  were, so nothing already set up — permissions, settings, sessions — is lost.
+
 ### Changed — every Jev game drawn properly, and Tetris falls
 
 "游戏画面都优化一下". The eleven painted games redrawn, light from the top

@@ -70,6 +70,8 @@ struct SpotlightContentView: View {
     @State private var fullScreen = false
     /// A model menu asking for an agent in the Term tab.
     @ObservedObject private var termStore = AgentTerminalStore.shared
+    /// The browser and the shell, beside whichever tab is up.
+    @ObservedObject private var drawers = Drawers.shared
     @ObservedObject private var browser = BrowserTabs.shared
 
     /// Per-mode last-used agent slug. Each tab has its OWN active
@@ -420,10 +422,21 @@ struct SpotlightContentView: View {
             NSApp.activate(ignoringOtherApps: true)
             openSettingsScene()
         }
-        // A tool asked for a tab by name: Film, Web, Chat…
+        // A tool asked for a tab by name: Film, Code, Chat… The browser and
+        // the shell are drawers now: asked for, they open beside the tab.
         .onReceive(NotificationCenter.default.publisher(for: .kinclawShowPanel)) { note in
-            guard let wanted = note.userInfo?["mode"] as? String,
-                  let target = ChatMode(rawValue: wanted.lowercased()) else { return }
+            guard let wanted = (note.userInfo?["mode"] as? String)?.lowercased() else { return }
+            if wanted == "web" || wanted == "browser" {
+                if companionMode { exitCompanionMode() }
+                drawers.openBrowser()
+                return
+            }
+            if wanted == "shell" {
+                if companionMode { exitCompanionMode() }
+                if !drawers.shell { drawers.toggleShell() }
+                return
+            }
+            guard let target = ChatMode(rawValue: wanted)?.shown else { return }
             if companionMode { exitCompanionMode() }
             mode = target
             target.persist()
@@ -594,6 +607,8 @@ struct SpotlightContentView: View {
                 Rectangle().fill(Theme.hairline).frame(height: 0.5)
             }
 
+            HStack(spacing: 0) {
+            VStack(spacing: 0) {
             Group {
                 switch mode {
                 case .chat, .cowork:
@@ -634,12 +649,10 @@ struct SpotlightContentView: View {
                         chatBody
                     }
                     .animation(.easeOut(duration: 0.18), value: showWorkspaceSidebar)
-                case .code:
-                    CodePane()
-                case .term:
-                    AgentTerminalPane()
-                case .web:
-                    WebPane()
+                case .code, .term, .web:
+                    // KinCode and the Web tab are gone from the bar; a mode
+                    // saved as either comes back as Code.
+                    CodeTab()
                 case .film:
                     FilmStudioView()
                 case .motion:
@@ -651,6 +664,17 @@ struct SpotlightContentView: View {
                 case .montage:
                     MontageView()
                 }
+            }
+            .frame(maxHeight: .infinity)
+            if drawers.shell {
+                ShellDrawer()
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+            }
+            if drawers.browser {
+                BrowserDrawer()
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { note in
@@ -1004,9 +1028,23 @@ struct SpotlightContentView: View {
             // Centred in the window, clear of the traffic lights on the
             // left and kept as clear on the right so it stays centred.
             ModeBar(mode: $mode)
-                .padding(.horizontal, 78)
-            HStack {
+                .padding(.horizontal, 92)
+            HStack(spacing: 12) {
                 Spacer()
+                Button { drawers.toggleShell() } label: {
+                    Image(systemName: "apple.terminal")
+                        .font(.system(size: 12))
+                        .foregroundColor(drawers.shell ? Theme.accent : .secondary)
+                }
+                .buttonStyle(.plain)
+                .help(drawers.shell ? "收起 shell（它还在跑）" : "打开 shell：在底部，就是你的登录 shell")
+                Button { drawers.toggleBrowser() } label: {
+                    Image(systemName: "globe")
+                        .font(.system(size: 12))
+                        .foregroundColor(drawers.browser ? Theme.accent : .secondary)
+                }
+                .buttonStyle(.plain)
+                .help(drawers.browser ? "收起浏览器（页面都还开着）" : "打开浏览器：在右边，带着你的登录。agent 打开网页时它自己会出来")
                 SettingsLink {
                     Image(systemName: "gearshape")
                         .font(.system(size: 13))
@@ -1474,10 +1512,10 @@ struct SpotlightContentView: View {
     /// outcome than no row at all.
     @ViewBuilder
     private func agentLaunchRows(model: String, provider: String) -> some View {
-        if provider == "ollama", !model.isEmpty, !AgentLauncher.available.isEmpty {
+        if provider == "ollama", !model.isEmpty, !AgentLauncher.availableAgents.isEmpty {
             Divider()
-            ForEach(AgentLauncher.available) { item in
-                Button("在 Term 里用这个模型开 \(item.integration.label)") {
+            ForEach(AgentLauncher.availableAgents) { item in
+                Button("在 Code 里用这个模型开 \(item.integration.label)") {
                     AgentTerminalStore.shared.run(item, host: OllamaCatalog.baseURL, model: model)
                 }
             }

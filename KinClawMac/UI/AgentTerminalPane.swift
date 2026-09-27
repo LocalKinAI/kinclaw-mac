@@ -6,7 +6,7 @@ import SwiftUI
 
 /// How the model menus in Cowork and Code ask for an agent. The session is
 /// opened straight away; the request is what SpotlightContentView watches to
-/// switch the panel to the Term tab.
+/// switch the panel to the Code tab.
 @MainActor
 final class AgentTerminalStore: ObservableObject {
     static let shared = AgentTerminalStore()
@@ -35,7 +35,7 @@ final class AgentTerminalStore: ObservableObject {
 
 // MARK: - Sessions
 
-/// The Term tab's sessions, and the terminals running them.
+/// The Code tab's sessions and the shell drawer's, and the terminals running them.
 ///
 /// The terminals live here rather than in the view tree, on purpose. SwiftUI
 /// tears a view down whenever it leaves the hierarchy — another tab selected,
@@ -55,10 +55,34 @@ final class AgentTerminalSessions: ObservableObject {
         var model: String
         /// "" = the folder Code is pointed at, else home.
         var folder: String
+        /// The Code tab's sessions think with a brain — the harness's own
+        /// sign-in by default, the Claude subscription — rather than with an
+        /// Ollama host and model; nil is a session from before, or from a
+        /// model menu. Optional, all of these: a field the saved sessions do
+        /// not have would lose every one of them.
+        var brain: AgentBrain? = nil
+        /// Its conversation, by id — what a restart, a new brain or a relaunch
+        /// of the app goes back into. Claude Code is told the id it is to use
+        /// (--session-id), so it is known from the start; Codex's is looked up
+        /// in its rollouts once there is one.
+        var conversation: String? = nil
+        /// The conversation it begins as a copy of: one that may be open
+        /// somewhere else right now, in the desktop app, which two writers
+        /// would tangle.
+        var forkOf: String? = nil
+        /// What the list calls it.
+        var title: String? = nil
+        /// When it first started: Codex's rollout is found by it.
+        var started: Date? = nil
+
+        var isShell: Bool { agent == AgentLauncher.shell.id }
+        var harness: AgentHarness? { AgentHarness(rawValue: agent) }
     }
 
     @Published private(set) var sessions: [Session] = []
     @Published var selectedID: UUID? { didSet { save() } }
+    /// The shell drawer's own selection, apart from the Code tab's.
+    @Published var selectedShellID: UUID?
     @Published private(set) var running: Set<UUID> = []
     @Published private(set) var notes: [UUID: String] = [:]
 
@@ -92,6 +116,62 @@ final class AgentTerminalSessions: ObservableObject {
         AgentLauncher.available.first { $0.integration.id == s.agent } ?? AgentLauncher.available.first
     }
 
+    // MARK: The Code tab
+
+    var codeSessions: [Session] { sessions.filter { !$0.isShell } }
+    var shells: [Session] { sessions.filter(\.isShell) }
+    var selectedCode: Session? {
+        sessions.first { $0.id == selectedID && !$0.isShell } ?? codeSessions.last
+    }
+    var selectedShell: Session? { shells.first { $0.id == selectedShellID } ?? shells.last }
+
+    /// A new conversation: Claude Code on the subscription unless told
+    /// otherwise, in `folder`.
+    @discardableResult
+    func newCode(_ harness: AgentHarness = .claude, brain: AgentBrain = .account, folder: String) -> Session {
+        let s = Session(agent: harness.rawValue, host: "", model: "", folder: folder, brain: brain,
+                        conversation: harness == .claude ? Self.newConversationID() : nil)
+        sessions.append(s)
+        selectedID = s.id
+        save()
+        return s
+    }
+
+    /// Back into a conversation from the list — the session already holding
+    /// it if there is one, else a new session resuming it. One touched in the
+    /// last ten minutes may be open somewhere else right now (the desktop
+    /// app): Claude Code's is gone back into as a copy, so that two programs
+    /// do not write one conversation.
+    @discardableResult
+    func resume(_ item: CodeHistory.Item, brain: AgentBrain = .account) -> Session {
+        if let open = sessions.first(where: { $0.conversation == item.id || $0.forkOf == item.id }) {
+            selectedID = open.id
+            if terminals[open.id] != nil, !running.contains(open.id) { restart(open.id) }
+            return open
+        }
+        let live = item.harness == .claude && Date().timeIntervalSince(item.modified) < 600
+        let s = Session(agent: item.harness.rawValue, host: "", model: "", folder: item.folder, brain: brain,
+                        conversation: live ? Self.newConversationID() : item.id,
+                        forkOf: live ? item.id : nil, title: item.title)
+        sessions.append(s)
+        selectedID = s.id
+        save()
+        return s
+    }
+
+    /// Claude Code wants a UUID for --session-id, and writes it lower-case.
+    static func newConversationID() -> String { UUID().uuidString.lowercased() }
+
+    /// A change that needs no restart: what the session found out about itself.
+    func record(_ id: UUID, _ change: (inout Session) -> Void) {
+        guard let i = sessions.firstIndex(where: { $0.id == id }) else { return }
+        var s = sessions[i]
+        change(&s)
+        guard s != sessions[i] else { return }
+        sessions[i] = s
+        save()
+    }
+
     // MARK: Tabs
 
     /// A new tab set up like `template` — the tab you were on — so "+" gives
@@ -113,7 +193,21 @@ final class AgentTerminalSessions: ObservableObject {
     /// What a model menu asked for: the tab already set up exactly that way if
     /// there is one, a new tab otherwise — never by replacing an agent that is
     /// mid-conversation in whichever tab happened to be selected.
+    ///
+    /// A host that is one of the Code tab's brains opens a Code session
+    /// thinking with it; any other machine keeps its host and model.
     func open(agent: String, host: String, model: String, folder: String?) {
+        if let harness = AgentHarness(rawValue: agent), let brain = AgentBrain.at(host, model: model) {
+            if let existing = sessions.first(where: {
+                $0.agent == agent && $0.brain == brain && (folder == nil || Self.folder(of: $0) == folder)
+            }) {
+                selectedID = existing.id
+                if terminals[existing.id] != nil, !running.contains(existing.id) { restart(existing.id) }
+                return
+            }
+            newCode(harness, brain: brain, folder: folder ?? "")
+            return
+        }
         if let existing = sessions.first(where: {
             $0.agent == agent && Self.host(of: $0) == host && $0.model == model
                 && (folder == nil || Self.folder(of: $0) == folder)
@@ -133,11 +227,11 @@ final class AgentTerminalSessions: ObservableObject {
     /// A tab running your own shell, in the folder the selected tab is in —
     /// which is the folder you were just looking at.
     @discardableResult
-    func newShell() -> Session {
+    func newShell(in folder: String? = nil) -> Session {
         let s = Session(agent: AgentLauncher.shell.id, host: "", model: "",
-                        folder: selected?.folder ?? "")
+                        folder: folder ?? selectedCode?.folder ?? "")
         sessions.append(s)
-        selectedID = s.id
+        selectedShellID = s.id
         save()
         return s
     }
@@ -147,9 +241,15 @@ final class AgentTerminalSessions: ObservableObject {
         terminals[id] = nil
         notes[id] = nil
         guard let i = sessions.firstIndex(where: { $0.id == id }) else { return }
+        let shell = sessions[i].isShell
         sessions.remove(at: i)
-        if selectedID == id {
-            selectedID = sessions.isEmpty ? nil : sessions[min(i, sessions.count - 1)].id
+        // The next one of its own kind: a shell's place goes to a shell.
+        let kin = sessions.enumerated().filter { $0.element.isShell == shell }
+        let next = (kin.first { $0.offset >= i } ?? kin.last)?.element.id
+        if shell {
+            if selectedShellID == id { selectedShellID = next }
+        } else if selectedID == id {
+            selectedID = next
         }
         save()
     }
@@ -185,7 +285,7 @@ final class AgentTerminalSessions: ObservableObject {
     func terminal(for s: Session) -> LocalProcessTerminalView? {
         if let view = terminals[s.id] { return view }
         guard let item = Self.installed(s),
-              !item.integration.needsModel || !s.model.isEmpty else { return nil }
+              !item.integration.needsModel || !s.model.isEmpty || s.brain != nil else { return nil }
 
         let view = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 720, height: 420))
         view.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
@@ -205,6 +305,29 @@ final class AgentTerminalSessions: ObservableObject {
         var env = Terminal.getEnvironmentVariables(termName: "xterm-256color")
             .filter { !$0.hasPrefix("PATH=") }
         env.append("PATH=" + AgentLauncher.childPath(for: item.binary))
+        // A Code session: its brain, not an Ollama host — nothing for the
+        // subscription, the endpoint and its model for a server's brain.
+        if let brain = s.brain, let harness = s.harness {
+            if harness == .claude, let endpoint = brain.endpoint {
+                for (key, value) in AgentLauncher.claudeCode.env(endpoint, brain.model).sorted(by: { $0.key < $1.key }) {
+                    env.append("\(key)=\(value)")
+                }
+            }
+            let s = Self.settled(s)
+            let command = Self.codeCommand(item.binary, harness: harness, brain: brain, session: s)
+                .map(AgentLauncher.shellQuoted).joined(separator: " ")
+            view.startProcess(executable: AgentLauncher.loginShell, args: ["-l", "-i", "-c", "exec " + command],
+                              environment: env, currentDirectory: Self.folder(of: s))
+            // Not while the view asking for the terminal is being drawn.
+            DispatchQueue.main.async {
+                self.running.insert(id)
+                self.record(id) {
+                    $0.conversation = s.conversation
+                    if $0.started == nil { $0.started = Date() }
+                }
+            }
+            return view
+        }
         for (key, value) in item.integration.env(host, s.model).sorted(by: { $0.key < $1.key }) {
             env.append("\(key)=\(value)")
         }
@@ -229,6 +352,58 @@ final class AgentTerminalSessions: ObservableObject {
         return view
     }
 
+    /// A Code session as it is to start this time. Claude Code's conversation
+    /// file may exist with nothing said in it — a session opened and left —
+    /// and neither resumed ("No conversation found") nor started again under
+    /// its id (in use): such a session starts over under a new one. Codex's
+    /// conversation is looked for, if not known yet, among the rollouts begun
+    /// since the session first started in its folder.
+    static func settled(_ s: Session) -> Session {
+        var s = s
+        switch s.harness {
+        case .claude:
+            let place = folder(of: s)
+            if let id = s.conversation, CodeHistory.claudeFile(id, in: place) != nil,
+               !CodeHistory.claudeSaidAnything(id, in: place) {
+                s.conversation = newConversationID()
+            }
+            if s.conversation == nil { s.conversation = newConversationID() }
+        case .codex:
+            if s.conversation == nil, let started = s.started {
+                s.conversation = CodeHistory.codexConversation(in: folder(of: s), since: started)
+            }
+        case nil:
+            break
+        }
+        return s
+    }
+
+    /// Claude Code or Codex for a Code session: its brain, its conversation —
+    /// gone back into if it has been said anything, else begun under its id.
+    static func codeCommand(_ binary: String, harness: AgentHarness, brain: AgentBrain, session s: Session) -> [String] {
+        var args = [binary]
+        switch harness {
+        case .claude:
+            if brain.source != .account, !brain.model.isEmpty { args += ["--model", brain.model] }
+            if let id = s.conversation {
+                if CodeHistory.claudeFile(id, in: folder(of: s)) != nil {
+                    args += ["--resume", id]
+                } else if let original = s.forkOf {
+                    args += ["--resume", original, "--fork-session", "--session-id", id]
+                } else {
+                    args += ["--session-id", id]
+                }
+            }
+        case .codex:
+            if let id = s.conversation { args += ["resume", id] }
+            args += ["-C", folder(of: s)]
+            if let endpoint = brain.endpoint, !brain.model.isEmpty {
+                args += AgentLauncher.codex.args(endpoint, brain.model)
+            }
+        }
+        return args
+    }
+
     private func stop(_ id: UUID) {
         if let view = terminals[id] {
             view.processDelegate = nil // an exit we caused is not news
@@ -238,22 +413,26 @@ final class AgentTerminalSessions: ObservableObject {
         running.remove(id)
     }
 
+    /// `code` is waitpid's status, as SwiftTerm hands it on: the exit code
+    /// in its second byte, or the signal in its first.
     private func exited(_ id: UUID, code: Int32?) {
         running.remove(id)
-        notes[id] = code.map { "进程结束（退出码 \($0)）" } ?? "进程结束了"
+        notes[id] = code.map { $0 & 0x7f == 0 ? "进程结束（退出码 \(($0 >> 8) & 0xff)）" : "进程被信号 \($0 & 0x7f) 结束" } ?? "进程结束了"
     }
 
     // MARK: What the agent's tools need
 
     /// The tabs, numbered the way the tools take them.
     func summary() -> String {
-        guard !sessions.isEmpty else { return "面板的 Term 标签里没有打开的终端" }
+        guard !sessions.isEmpty else { return "面板里没有打开的终端（Code 标签的会话和底部的 shell）" }
         return sessions.enumerated().map { i, s in
-            let label = Self.installed(s)?.integration.label ?? s.agent
+            let label = (s.isShell ? "Shell（底部）" : Self.installed(s)?.integration.label) ?? s.agent
             let mark = s.id == selected?.id ? "→" : " "
             let state = running.contains(s.id) ? "运行中" : (terminals[s.id] == nil ? "未启动" : "已结束")
-            let model = s.model.isEmpty ? "" : " · \(s.model)"
-            return "\(mark) \(i + 1). \(label)\(model) · \(Self.folder(of: s)) · \(state)"
+            var model = s.model.isEmpty ? "" : " · \(s.model)"
+            if let brain = s.brain, let harness = s.harness { model = " · " + brain.title(for: harness) }
+            let name = s.title.map { " · 「\($0)」" } ?? ""
+            return "\(mark) \(i + 1). \(label)\(model)\(name) · \(Self.folder(of: s)) · \(state)"
         }.joined(separator: "\n")
     }
 
@@ -319,6 +498,14 @@ final class AgentTerminalSessions: ObservableObject {
                                 host: defaults.string(forKey: "kinclaw.term.host") ?? "",
                                 model: model,
                                 folder: defaults.string(forKey: "kinclaw.term.folder") ?? "")]
+        }
+        // The Term tab's agents, from before there was a Code tab: one on a
+        // host that is one of the brains becomes a Code session thinking with
+        // it (with no model picked yet, the subscription); any other machine
+        // keeps its host and model.
+        for i in sessions.indices where sessions[i].brain == nil && sessions[i].harness != nil {
+            sessions[i].brain = AgentBrain.at(Self.host(of: sessions[i]), model: sessions[i].model)
+            if sessions[i].brain != nil { sessions[i].host = ""; sessions[i].model = "" }
         }
         if let raw = defaults.string(forKey: Self.selectedKey), let id = UUID(uuidString: raw),
            sessions.contains(where: { $0.id == id }) {

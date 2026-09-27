@@ -57,8 +57,8 @@ enum ChatMode: String, CaseIterable, Identifiable {
         switch self {
         case .chat:   return "Chat"
         case .cowork: return "Cowork"
-        case .code:   return "Code"
-        case .term:   return "Term"
+        case .code:   return "KinCode"
+        case .term:   return "Code"
         case .web:    return "Web"
         case .film:   return "Film"
         case .motion: return "Motion"
@@ -75,8 +75,8 @@ enum ChatMode: String, CaseIterable, Identifiable {
         switch self {
         case .chat:   return "bubble.left.and.bubble.right"
         case .cowork: return "eye"
-        case .code:   return "chevron.left.forwardslash.chevron.right"
-        case .term:   return "terminal"
+        case .code:   return "hammer"
+        case .term:   return "chevron.left.forwardslash.chevron.right"
         case .web:    return "globe"
         case .film:   return "film"
         case .motion: return "figure.taichi"
@@ -96,7 +96,7 @@ enum ChatMode: String, CaseIterable, Identifiable {
         case .code:
             return "Code — repo-aware coding agent (kincode on :5002)"
         case .term:
-            return "Term — another agent in a terminal, on the model you picked, or your own shell"
+            return "Code — Claude Code 和 Codex：通用的 agent，默认用这台 Mac 的 Claude 订阅；左边是你所有的会话，点一个接着聊，或者开新的"
         case .web:
             return "Web — a browser in the panel; 给 agent 看这页 hands the page over"
         case .film:
@@ -122,7 +122,18 @@ extension ChatMode {
     /// builds reading a future mode string just default to chat).
     static func loadPersisted() -> ChatMode {
         let raw = UserDefaults.standard.string(forKey: storageKey) ?? ""
-        return ChatMode(rawValue: raw) ?? .chat
+        return (ChatMode(rawValue: raw) ?? .chat).shown
+    }
+
+    /// Where a mode that is no longer a tab lands: KinCode's place went to
+    /// Claude Code and Codex ("kincode 和 claude code 和 codex 比他差了"),
+    /// and the browser is a drawer now, beside whatever tab is open.
+    var shown: ChatMode {
+        switch self {
+        case .code: return .term
+        case .web: return .chat
+        default: return self
+        }
     }
 
     /// Persist this mode as the user's last-used surface.
@@ -132,7 +143,9 @@ extension ChatMode {
     }
 }
 
-/// The modes as the top bar shows them: four groups, not nine tabs.
+/// The modes as the top bar shows them: four groups — Talk · Code · Studio ·
+/// Jev ("chat 是我的蜂群，cowork 是用来操控电脑的"; KinCode dropped, Term
+/// renamed Code; the browser and the shell are drawers, not tabs).
 ///
 /// Nine pills in a row read as nine equal things, and at the panel's usual
 /// width the row ran out before the modes did. Grouped by what a person has
@@ -147,7 +160,7 @@ enum ModeGroup: String, CaseIterable, Identifiable {
     var members: [ChatMode] {
         switch self {
         case .talk:   return [.chat, .cowork]
-        case .work:   return [.code, .term, .web]
+        case .work:   return [.term]
         case .studio: return [.film, .motion, .montage, .comfy]
         case .play:   return [.jev]
         }
@@ -155,20 +168,20 @@ enum ModeGroup: String, CaseIterable, Identifiable {
 
     /// A group of one is shown by its one member's name.
     var title: String {
+        if members.count == 1 { return members[0].title }
         switch self {
         case .talk:   return "Talk"
-        case .work:   return "Work"
         case .studio: return "Studio"
-        case .play:   return members[0].title
+        default:      return members[0].title
         }
     }
 
     var symbol: String {
+        if members.count == 1 { return members[0].symbol }
         switch self {
         case .talk:   return "bubble.left.and.bubble.right"
-        case .work:   return "hammer"
         case .studio: return "film.stack"
-        case .play:   return members[0].symbol
+        default:      return members[0].symbol
         }
     }
 

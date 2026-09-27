@@ -942,7 +942,7 @@ private struct AboutSettingsTab: View {
                 Text("🦞")
                     .font(.system(size: 42))
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("KinClaw Mac")
+                    Text("LocalKin")
                         .font(.system(size: 18, weight: .semibold))
                     Text(version)
                         .font(.system(size: 11, design: .monospaced))

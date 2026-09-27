@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>KinClaw Mac</string>
+	<string>LocalKin</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -13,7 +13,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>KinClawMac</string>
+	<string>LocalKin</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -25,12 +25,12 @@
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>KinClaw needs Apple Events access to coordinate with the local kinclaw daemon for computer-use tasks.</string>
+	<string>LocalKin needs Apple Events access to coordinate with the local kinclaw daemon for computer-use tasks.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026 LocalKinAI. Apache-2.0 licensed.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>KinClaw uses your microphone for voice mode — push-to-talk to any agent.</string>
+	<string>LocalKin uses your microphone for voice mode — push-to-talk to any agent.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>KinClaw uses on-device speech recognition as a local fallback when remote STT is unavailable.</string>
+	<string>LocalKin uses on-device speech recognition as a local fallback when remote STT is unavailable.</string>
 </dict>
 </plist>

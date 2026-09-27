@@ -214,7 +214,7 @@ enum AgentLauncher {
         let dir = directory ?? defaultDirectory
         var lines = [
             "#!/bin/sh",
-            "# Written by KinClaw Mac: \(item.integration.label) against the Ollama",
+            "# Written by LocalKin: \(item.integration.label) against the Ollama",
             "# picked in the model menu. Safe to delete.",
             "#",
             "# If this model's window is smaller than Claude Code assumes:",

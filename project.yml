@@ -63,17 +63,20 @@ targets:
     info:
       path: KinClawMac/Info.plist
       properties:
-        CFBundleDisplayName: KinClaw Mac
-        CFBundleName: KinClawMac
+        # The name people see — Dock, menu bar, permission lists, About. The
+        # bundle id, the executable and the paths stay KinClawMac: the
+        # permissions already granted and every setting are keyed to them.
+        CFBundleDisplayName: LocalKin
+        CFBundleName: LocalKin
         CFBundleShortVersionString: "0.3.0"
         CFBundleVersion: "3"
         # Run as menubar-only app (no Dock icon)
         LSUIElement: true
         # Microphone permission (voice mode)
-        NSMicrophoneUsageDescription: "KinClaw uses your microphone for voice mode — push-to-talk to any agent."
+        NSMicrophoneUsageDescription: "LocalKin uses your microphone for voice mode — push-to-talk to any agent."
         # Speech recognition (local STT fallback when server unreachable)
-        NSSpeechRecognitionUsageDescription: "KinClaw uses on-device speech recognition as a local fallback when remote STT is unavailable."
+        NSSpeechRecognitionUsageDescription: "LocalKin uses on-device speech recognition as a local fallback when remote STT is unavailable."
         # Accessibility permission (when invoking local KinClaw computer-use)
-        NSAppleEventsUsageDescription: "KinClaw needs Apple Events access to coordinate with the local kinclaw daemon for computer-use tasks."
+        NSAppleEventsUsageDescription: "LocalKin needs Apple Events access to coordinate with the local kinclaw daemon for computer-use tasks."
         ITSAppUsesNonExemptEncryption: false
         NSHumanReadableCopyright: "Copyright © 2026 LocalKinAI. Apache-2.0 licensed."

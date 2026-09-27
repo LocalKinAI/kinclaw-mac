@@ -44,7 +44,7 @@ final class MenuBarController: NSObject {
         // image (M5 / icon design pass) this becomes
         // `button.image = NSImage(named: "MenubarIcon")`.
         button.title = "🦞"
-        button.toolTip = "KinClaw Mac — ⌘⌥K to summon"
+        button.toolTip = "LocalKin — ⌘⌥K to summon"
         // Slight font tweak so the lobster doesn't look cramped on
         // the system menubar.
         button.font = NSFont.systemFont(ofSize: 14)
@@ -85,7 +85,7 @@ final class MenuBarController: NSObject {
         menu.addItem(.separator())
 
         let quit = NSMenuItem(
-            title: "Quit KinClaw Mac",
+            title: "Quit LocalKin",
             action: #selector(quitTapped),
             keyEquivalent: "q"
         )
