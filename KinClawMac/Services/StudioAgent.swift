@@ -361,7 +361,10 @@ final class StudioAgent: ObservableObject {
             return
         }
         note = nil
-        terminal.send(txt: text)
+        // Lines go in as one paste: typed bare, every newline is a return, and
+        // a prompt of several lines was sent off at its first.
+        let paste = text.contains("\n") && terminal.getTerminal().bracketedPasteMode
+        terminal.send(txt: paste ? "\u{1b}[200~" + text + "\u{1b}[201~" : text)
         // The TUI takes a pasted line and a separate return as "send it".
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { terminal.send([13]) }
     }

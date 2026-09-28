@@ -8,6 +8,29 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Added — Montage: a library of other people's Opus 5.5 video prompts
+
+"把那26条完整的挑出来分类，加到我的kinclaw-mac里面".
+
+- **提示词库** in the Montage header opens the prompts people published whole
+  with their Opus 5.5 videos, from LeaddeOpenLab/awesome-opus-5-5-video-prompts:
+  26 on 2026-09-28, among 341 posts that are mostly a line quoted out of a
+  tweet. The same showreel prompt posted by five people is one entry with
+  five credits, so 22. Sorted and named by hand into 动效展示 · 产品宣传 ·
+  讲解 · 动画短片 · 互动网页; later ones are sorted by what they are called.
+  Each shows its cover, who posted it (the finished video is in the post),
+  what it was made with, and what to change before using it (a reference
+  video on the author's own disk, a paid image API). Changed or not, it is
+  handed to the Montage agent; a page to play with, not a video, is copied
+  for a Code session instead.
+- Fetched and kept, not shipped: the repository has no licence. One JSON a
+  post; the first look reads them all (about 9 s), later ones only the new.
+
+### Fixed — several lines said to a running studio agent were sent at the first
+
+`StudioAgent.say` typed text into the agent's terminal as it was, so each
+newline was a return. Several lines now go in as one bracketed paste.
+
 ### Changed — the menu is Talk · Code · Studio · Jev, and the app is LocalKin
 
 "想整理一下菜单……chat 是我的蜂群，cowork 是用来操控电脑的……term 标签改名为 code".

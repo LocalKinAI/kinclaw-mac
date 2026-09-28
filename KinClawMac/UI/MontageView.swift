@@ -17,6 +17,8 @@ struct MontageView: View {
     /// The board shows the library of every project instead of following the
     /// one the agent is working in.
     @State private var library = false
+    /// Other people's Opus 5.5 video prompts, to start from.
+    @State private var browsing = false
 
     var body: some View {
         GeometryReader { space in
@@ -38,6 +40,7 @@ struct MontageView: View {
         // The agent is how this tab is used: its column is out when the tab is.
         .onAppear { if !agent.running { agent.shown = true } }
         .task { await studio.openBoard() }
+        .sheet(isPresented: $browsing) { VideoPromptSheet(agent: agent) }
     }
 
     // MARK: Header: where the board is, and the way home
@@ -55,6 +58,9 @@ struct MontageView: View {
                     .font(.kinCaption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 12)
+            Button { browsing = true } label: { Label("提示词库", systemImage: "text.book.closed") }
+                .buttonStyle(.quiet)
+                .help("别人用 Opus 5.5 做视频的完整提示词：挑一条，改一改，交给 agent")
             if studio.board == .up {
                 HStack(spacing: 2) {
                     Button { studio.web?.goBack() } label: { Image(systemName: "chevron.left") }
@@ -186,5 +192,145 @@ private struct BoardWeb: NSViewRepresentable {
         guard context.coordinator.loaded != url else { return }
         context.coordinator.loaded = url
         view.load(URLRequest(url: url))
+    }
+}
+
+/// Other people's whole prompts for Opus 5.5 videos (`VideoPromptLibrary`):
+/// browsed by kind, read with who made it and with what, changed, and handed
+/// to the agent — or, for a page to play with rather than a video, copied for
+/// a Code session.
+private struct VideoPromptSheet: View {
+    @ObservedObject var agent: StudioAgent
+    @ObservedObject private var library = VideoPromptLibrary.shared
+    @Environment(\.dismiss) private var dismiss
+    @State private var search = ""
+    @State private var kind: VideoPromptLibrary.Kind?
+    @State private var chosen: VideoPromptLibrary.Entry?
+    @State private var text = ""
+    @State private var copied = false
+
+    private var shown: [VideoPromptLibrary.Entry] {
+        let q = search.trimmingCharacters(in: .whitespaces).lowercased()
+        return library.entries.filter { e in
+            (kind == nil || e.kind == kind)
+                && (q.isEmpty || e.title.lowercased().contains(q) || e.prompt.lowercased().contains(q)
+                    || e.credits.contains { $0.name.lowercased().contains(q) })
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Text("Opus 5.5 视频提示词").font(.system(size: 14, weight: .semibold))
+                Link("awesome-opus-5-5-video-prompts", destination: VideoPromptLibrary.home).font(.system(size: 10))
+                if library.looked > 0 {
+                    Text("\(library.looked) 条帖子里提示词完整的").font(.system(size: 10)).foregroundColor(.secondary)
+                }
+                Spacer()
+                if library.loading { ProgressView().controlSize(.small) }
+                Button { Task { await library.load(fresh: true) } } label: { Image(systemName: "arrow.clockwise") }
+                    .buttonStyle(.plain).disabled(library.loading)
+                    .help("去 GitHub 看有没有新的（只读新加的帖子）")
+                Button("关") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+            .padding(10)
+            Divider()
+            HStack(spacing: 0) {
+                VStack(spacing: 6) {
+                    TextField("搜：showreel、three.js、作者…", text: $search).textFieldStyle(.roundedBorder)
+                    Picker("", selection: $kind) {
+                        Text("全部 \(library.entries.count)").tag(VideoPromptLibrary.Kind?.none)
+                        ForEach(VideoPromptLibrary.Kind.allCases, id: \.self) { k in
+                            Text("\(k.rawValue) \(library.entries(of: k).count)").tag(Optional(k))
+                        }
+                    }
+                    .labelsHidden()
+                    List(shown, selection: Binding(get: { chosen?.id }, set: { id in pick(library.entries.first { $0.id == id }) })) { e in
+                        HStack(spacing: 6) {
+                            AsyncImage(url: e.cover) { $0.resizable().scaledToFill() } placeholder: { Color.primary.opacity(0.06) }
+                                .frame(width: 56, height: 32).clipShape(RoundedRectangle(cornerRadius: 4))
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(e.title).font(.system(size: 11)).lineLimit(2)
+                                Text(e.kind.rawValue + (e.credits.count > 1 ? " · \(e.credits.count) 人发过" : ""))
+                                    .font(.system(size: 9)).foregroundColor(.secondary)
+                            }
+                        }
+                        .tag(e.id)
+                    }
+                    .listStyle(.plain)
+                }
+                .frame(width: 300)
+                .padding(8)
+                Divider()
+                detail.padding(10)
+            }
+        }
+        .frame(minWidth: 920, minHeight: 640)
+        .task { await library.load() }
+    }
+
+    private func pick(_ entry: VideoPromptLibrary.Entry?) {
+        chosen = entry
+        text = entry?.prompt ?? ""
+        copied = false
+    }
+
+    @ViewBuilder private var detail: some View {
+        if let e = chosen {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .top, spacing: 10) {
+                    AsyncImage(url: e.cover) { $0.resizable().scaledToFit() } placeholder: { Color.primary.opacity(0.06) }
+                        .frame(width: 240, height: 135).clipShape(RoundedRectangle(cornerRadius: 6))
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(e.title).font(.system(size: 13, weight: .semibold))
+                        HStack(spacing: 4) {
+                            Text(e.kind.rawValue).font(.system(size: 10)).foregroundColor(.secondary)
+                            ForEach(e.credits, id: \.self) { c in
+                                Link("@" + c.name, destination: c.post).font(.system(size: 10))
+                            }
+                        }
+                        .help("原帖：成片在那里")
+                        if !e.tools.isEmpty {
+                            Text("用的：" + e.tools.joined(separator: "、")).font(.system(size: 10)).foregroundColor(.secondary)
+                        }
+                        if let note = e.note {
+                            Text(note).font(.system(size: 10)).foregroundColor(.orange).fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                TextEditor(text: $text).font(.system(size: 11, design: .monospaced))
+                    .scrollContentBackground(.hidden).padding(4)
+                    .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(0.05)))
+                HStack {
+                    Button(copied ? "已复制" : "复制") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(text, forType: .string)
+                        copied = true
+                    }
+                    if text != e.prompt { Button("还原") { text = e.prompt } }
+                    Spacer()
+                    if e.interactive {
+                        Text("这条做出来是网页，不是视频：复制了去 Code 里开个会话").font(.system(size: 10)).foregroundColor(.secondary)
+                    } else {
+                        Button(agent.running ? "说给正在跑的 agent" : "交给 agent") {
+                            agent.say(text)
+                            dismiss()
+                        }
+                        .buttonStyle(.primary)
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .help("原样交给 Montage 的 agent（\(agent.brainTitle)）：它按 OpenMontage 的流程先给你方案再做")
+                    }
+                }
+            }
+        } else {
+            VStack {
+                Spacer()
+                Text(library.trouble ?? (library.entries.isEmpty && library.loading ? "第一次要把几百条帖子读一遍，半分钟左右…" : "左边挑一条"))
+                    .foregroundColor(.secondary)
+                Spacer()
+            }
+            .frame(maxWidth: .infinity)
+        }
     }
 }
