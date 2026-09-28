@@ -75,6 +75,13 @@ final class MotionStudio: ObservableObject {
         /// The words the video model films from, as written; nil for the
         /// studio's own ("… slowly and continuously … Static camera …").
         var words: String?
+        /// The third route (提示词白模, `MotionBuild`): no reference video — a set and a
+        /// camera path an agent wrote as `spec.json`, built by Blender on the box and filmed
+        /// by H3 over its depth. `looks` says what the plain shapes become, for the first
+        /// frame; `quality` is "draft" (H3's 4-step LoRA, minutes) or "full" (20 steps).
+        var built: Bool?
+        var looks: String?
+        var quality: String?
         var created = Date()
 
         enum State: String, Codable { case waiting, tracking, drawing, filming, joining, done, failed }
@@ -158,6 +165,63 @@ final class MotionStudio: ObservableObject {
         return .success(take)
     }
 
+    /// Start a take by the third route: a set and a camera path from a spec an agent wrote
+    /// (`MotionBuild`). The spec is checked here, its length set on H3's frame grid, and it is
+    /// kept in the take's folder as `spec.json`.
+    func makeBuilt(spec input: [String: Any], title: String, seconds: Double, looks: String, words: String,
+                   quality: String? = nil, hold: String? = nil) -> Result<Take, FilmStudio.Failure> {
+        guard working == nil else { return .failure(.message("正在拍「\(working!)」，等它拍完")) }
+        guard FilmStudio.shared.shooting == nil else { return .failure(.message("片场正在拍片，等它拍完")) }
+        if let trouble = CompanionArt.unreachableVolume(Self.root) { return .failure(.message(trouble)) }
+        if BoxServices.ssh.isEmpty { return .failure(.message(MotionStage.Failure.noBox.localizedDescription)) }
+        var spec = input
+        guard let objects = spec["objects"] as? [[String: Any]], !objects.isEmpty else {
+            return .failure(.message("spec.objects 是空的：白模至少要有几块形状（box / cyl / ball）"))
+        }
+        guard objects.count <= 3000 else { return .failure(.message("spec.objects 有 \(objects.count) 个，太多了（上限 3000）：白模越粗越稳")) }
+        for (i, object) in objects.enumerated() {
+            let shape = object["shape"] as? String ?? ""
+            guard ["box", "cyl", "ball"].contains(shape), (object["at"] as? [Any])?.count == 3 else {
+                return .failure(.message("spec.objects[\(i)] 要有 shape（box / cyl / ball）和 at [x, y, z]"))
+            }
+            if shape == "box", (object["size"] as? [Any])?.count != 3 { return .failure(.message("spec.objects[\(i)] 是 box，要 size [x, y, z]")) }
+            if shape == "cyl", object["r"] == nil || object["h"] == nil { return .failure(.message("spec.objects[\(i)] 是 cyl，要 r 和 h")) }
+            if shape == "ball", object["r"] == nil { return .failure(.message("spec.objects[\(i)] 是 ball，要 r")) }
+        }
+        guard let camera = spec["camera"] as? [String: Any], let keys = camera["keys"] as? [[String: Any]], keys.count >= 1,
+              keys.allSatisfy({ ($0["at"] as? [Any])?.count == 3 && ($0["look"] as? [Any])?.count == 3 }) else {
+            return .failure(.message("spec.camera.keys 要有至少一个 {t, at: [x,y,z], look: [x,y,z]}"))
+        }
+        let words = words.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !words.isEmpty else { return .failure(.message("白模路线要 words：给 H3 的英文，写场景、光、镜头怎么动、声音")) }
+        // H3 films 5–15 s on its 17k+5 grid at 24 a second; the depth has exactly that many frames.
+        let frames = min(FilmStudio.h3Frames(min(max(seconds, 5), 15)), 365)
+        spec["frames"] = frames
+        spec["fps"] = 24
+        var size = (spec["size"] as? [Any])?.compactMap { ($0 as? NSNumber)?.intValue } ?? []
+        if size.count != 2 || size[0] < 256 || size[1] < 256 { size = [864, 480] }
+        size = size.map { max(256, min(1344, ($0 / 32) * 32)) }
+        spec["size"] = size
+        spec["keyframes"] = [0]
+        let stamp = Int(Date().timeIntervalSince1970)
+        let name = title.trimmingCharacters(in: .whitespaces).isEmpty ? "白模" : title
+        var take = Take(id: "\(Self.slug(name))-\(stamp)", title: name, source: "spec.json", credit: nil, start: 0,
+                        seconds: Double(frames) / 24, scene: looks, stretch: Double(frames) / 24, segments: [Segment(id: 1)])
+        take.built = true
+        take.looks = looks
+        take.words = words
+        take.quality = quality == "full" ? "full" : "draft"
+        take.hold = hold
+        do {
+            try FileManager.default.createDirectory(at: take.folder, withIntermediateDirectories: true)
+            try JSONSerialization.data(withJSONObject: spec, options: [.prettyPrinted, .sortedKeys]).write(to: take.reference)
+        } catch { return .failure(.message("存不下 spec.json：\(error.localizedDescription)")) }
+        take.state = .tracking
+        save(take)
+        produce(take.id)
+        return .success(take)
+    }
+
     /// Carry on with a take that stopped.
     func resume(_ id: String, hold: String? = nil) -> Result<Take, FilmStudio.Failure> {
         guard working == nil else { return .failure(.message("正在拍「\(working!)」，等它拍完")) }
@@ -192,7 +256,12 @@ final class MotionStudio: ObservableObject {
         var lines = ["「\(take.title)」\(take.id)：\(take.state.rawValue)" + (take.note.map { " —— \($0)" } ?? "")]
         lines.append("参考：\(take.reference.path)，从第 \(String(format: "%g", take.start)) 秒起 \(Int(take.seconds)) 秒，"
                      + "分 \(take.segments.count) 段（每段 \(String(format: "%g", take.stretch)) 秒）" + (take.credit.map { "；出处：\($0)" } ?? ""))
-        lines.append("路线：" + (take.camera.map { "3D，\($0.title)，布景 \((take.place ?? .park).title)" } ?? "骨架（按参考视频的机位拍）"))
+        if take.built == true {
+            lines[1] = "白模：\(take.reference.path)（agent 写的场景清单），\(String(format: "%.1f", take.seconds)) 秒，H3 \(take.quality == "full" ? "20 步" : "4 步草稿")"
+        }
+        lines.append("路线：" + (take.built == true ? "提示词白模（Blender 搭景 + 深度 → H3 Fun ControlNet）"
+                                 : take.camera.map { "3D，\($0.title)，布景 \((take.place ?? .park).title)" } ?? "骨架（按参考视频的机位拍）"))
+        if let looks = take.looks { lines.append("白模各块变成什么：\(looks)") }
         lines.append("场景：\(take.scene)")
         if let english = take.sceneEnglish { lines.append("场景（给模型的英文）：\(english)") }
         if let words = take.words { lines.append("拍视频的原话（你给的，照原样）：\(words)") }
@@ -201,7 +270,8 @@ final class MotionStudio: ObservableObject {
                          + (fm.fileExists(atPath: take.clip(segment.id).path) ? " → \(take.clip(segment.id).path)" : ""))
         }
         var pictures: [URL] = []
-        for (label, url) in [("她的起始画面", take.still), ("参考第一帧的姿势", take.sourceFirst), ("3D 布景的第一帧", take.blockout)]
+        for (label, url) in [("她的起始画面", take.still), ("参考第一帧的姿势", take.sourceFirst), ("3D 布景的第一帧", take.blockout),
+                             ("白模俯视图（镜头轨迹：白点起、琥珀色点止）", take.folder.appendingPathComponent("stage/out/plan.png"))]
         where fm.fileExists(atPath: url.path) {
             lines.append("\(label)：\(url.path)")
             if let words = try? String(contentsOf: url.appendingPathExtension("txt"), encoding: .utf8), !words.isEmpty {
@@ -249,6 +319,11 @@ final class MotionStudio: ObservableObject {
             let client = DiffuserClient.shared
             await ComfyStudio.yieldMemory()    // the room ComfyUI's last models are sitting in
             do {
+                if take.built == true {
+                    try await produceBuilt(&take)
+                    save(take)
+                    return
+                }
                 if let camera = take.camera {
                     try await produce3D(&take, camera: camera)
                     save(take)
@@ -455,6 +530,81 @@ final class MotionStudio: ObservableObject {
             try? fm.moveItem(at: take.file, to: take.folder.appendingPathComponent("take.cut-\(Int(Date().timeIntervalSince1970)).mp4"))
         }
         try await Self.join(take.segments.map { take.clip($0.id) }, to: take.file)
+        take.state = .done
+        take.note = nil
+    }
+
+    /// The third route: the set from the spec, built and rendered on the box; stop at the
+    /// plan if asked; the first frame re-rendered as a photograph; then H3 over the depth
+    /// with that frame pinned. A carried-on take skips what is already made.
+    private func produceBuilt(_ take: inout Take) async throws {
+        let fm = FileManager.default
+        let frames = FilmStudio.h3Frames(take.seconds)
+        let plan = take.folder.appendingPathComponent("stage/out/plan.png")
+
+        // 1. The set and the camera's path, built and rendered on the box.
+        let depthThere = await MotionBuild.depthOnBox(for: take.id)
+        if !fm.fileExists(atPath: take.blockout.path) || !fm.fileExists(atPath: plan.path) || !depthThere {
+            take.state = .tracking; save(take)
+            progress = "盒子上的 Blender 在搭白模"
+            since = Date()
+            try await MotionBuild.build(spec: take.reference, id: take.id, into: take.folder, frames: frames) { done in
+                Task { @MainActor in
+                    if MotionStudio.shared.working != nil { MotionStudio.shared.progress = "盒子上的 Blender 在渲染深度 \(done)/\(frames)" }
+                }
+            }
+            since = nil
+        }
+        if take.hold == "plan" {
+            take.hold = nil
+            take.state = .waiting
+            take.note = "停在白模：motion_status(take) 看俯视图（白模 + 镜头轨迹）和白模第一帧，没问题就 motion_continue"
+            save(take)
+            return
+        }
+
+        // 2. The first frame: the blockout re-rendered as a photograph, nothing moved.
+        if !fm.fileExists(atPath: take.still.path) {
+            take.state = .drawing; save(take)
+            progress = "在画第一帧"
+            since = Date()
+            // The words that kept the layout on the first try: told that nothing moves, and what
+            // each plain shape becomes (「the glowing pink balls are red paper lanterns…」).
+            let prompt = """
+                Re-render this exact picture as a photograph. Do not move, add or remove anything: the camera, the horizon and \
+                every shape stay exactly where they are, at the same size. \(take.looks ?? take.scene) Photorealistic, cinematic.
+                """
+            let made = try await DiffuserClient.shared.edit(prompt: prompt, from: take.blockout, into: take.folder,
+                                                            seed: CompanionCharacter.seed(for: take.id))
+            try? fm.moveItem(at: URL(fileURLWithPath: made.path + ".txt"), to: URL(fileURLWithPath: take.still.path + ".txt"))
+            try fm.moveItem(at: made, to: take.still)
+            since = nil
+        }
+        if heldAtStill(&take) { return }
+
+        // 3. Filmed by H3 over the depth, starting from that frame. The editor's model is let go
+        //    first: after a big edit it once held 73 GB of the box and left H3 no room.
+        take.state = .filming; save(take)
+        progress = "H3 在按白模拍（\(take.quality == "full" ? "20 步" : "4 步草稿")）"
+        since = Date()
+        take.segments[0].state = .filming; save(take)
+        await BoxServices.shared.stop(.edit)
+        try await MotionBuild.ensurePatch()
+        if !(await MotionBuild.depthOnBox(for: take.id)) {
+            try await MotionBuild.build(spec: take.reference, id: take.id, into: take.folder, frames: frames) { _ in }
+        }
+        let size = ((try? JSONSerialization.jsonObject(with: Data(contentsOf: take.reference))) as? [String: Any])?["size"] as? [Int] ?? [864, 480]
+        if fm.fileExists(atPath: take.file.path) {
+            try? fm.moveItem(at: take.file, to: take.folder.appendingPathComponent("take.cut-\(Int(Date().timeIntervalSince1970)).mp4"))
+        }
+        try? (take.words ?? "").write(to: take.clip(1).appendingPathExtension("txt"), atomically: true, encoding: .utf8)
+        try await FilmStudio.renderH3(prompt: take.words ?? take.scene, references: [], seconds: take.seconds,
+                                  size: CGSize(width: size[0], height: size[1]), seed: CompanionCharacter.seed(for: take.id),
+                                  full: take.quality == "full", pins: [(picture: take.still, frame: 0)], to: take.file,
+                                  film: "motion-\(take.id)", shot: 1, control: MotionBuild.depthName(for: take.id),
+                                  exact: (width: size[0], height: size[1]))
+        if let began = since { usual = Date().timeIntervalSince(began) }
+        take.segments[0].state = .done
         take.state = .done
         take.note = nil
     }

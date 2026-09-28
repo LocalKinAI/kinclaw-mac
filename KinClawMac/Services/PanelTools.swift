@@ -649,6 +649,33 @@ enum PanelTools {
                 Mac that the user may use — their own, or one whose licence \
                 allows it (Creative Commons, a stock library); pass where it \
                 came from in `credit`, because a published result has to say.
+
+                THIRD ROUTE — 提示词白模, no reference video: give `spec` instead \
+                of `video`. From the person's words YOU write a blockout set and \
+                a camera path; the box's Blender builds it and renders its depth \
+                on every frame, the first frame is re-rendered as a photograph \
+                (say in `looks` what each plain shape becomes), and MiniMax H3 \
+                films over the depth with that frame pinned — sound included. \
+                5–15 s, one shot; about 1 min Blender + 20 s picture + ~9 min \
+                H3 draft (quality "full" is 20 steps, roughly four times longer). \
+                People do not move by words (text-to-choreography does not \
+                work): keep figures still, or film a movement by the reference \
+                routes. spec (metres; street or room along +y, ground z=0): \
+                {"objects": [{"shape":"box","at":[x,y,z],"size":[sx,sy,sz],"look":"wall"}, \
+                {"shape":"cyl","at":[x,y,z],"r":0.06,"h":4.2,"look":"metal"}, \
+                {"shape":"ball","at":[x,y,z],"r":0.2,"look":"lantern"}, …], \
+                "ground":{"look":"wet_stone"}, "sky":"night"|"day", \
+                "depth":{"near":2.5,"far":70} (near = the closest thing the camera \
+                sees, far = the farthest; too small a near makes the depth dark and \
+                weak), "size":[864,480], "camera":{"lens":28,"ease":"in_out", \
+                "keys":[{"t":0,"at":[0,-2,1.6],"look":[0,30,1.9]},{"t":1,"at":[0,9,1.6],"look":[0,41,1.9]}]}}. \
+                `at` is a shape's centre. Looks: ground, wet_stone, wall, wall2, \
+                roof, wood, awning, sign, sign_lit, lantern, lamp, window, \
+                window_lit, metal, puddle, leaf, stone, glass (the glowing ones light \
+                a night scene). Coarse shapes are enough — a few hundred boxes make \
+                a street. Use until: "plan" to look at the set from above (the \
+                camera's path drawn on it) and its first frame before anything is \
+                filmed; then until: "still"; then motion_continue.
                 """,
             "inputSchema": [
                 "type": "object",
@@ -663,11 +690,14 @@ enum PanelTools {
                     "seconds": ["type": "number", "description": "How long, 4–120. Default 10."],
                     "title": ["type": "string", "description": "A short title."],
                     "credit": ["type": "string", "description": "Where the movement came from: title, author, address, licence."],
-                    "until": ["type": "string", "description": "\"still\": stop once her first picture is drawn — look at it with motion_status(take), then motion_continue. Worth it before minutes of filming."],
+                    "until": ["type": "string", "description": "\"still\": stop once her first picture is drawn — look at it with motion_status(take), then motion_continue. Worth it before minutes of filming. For the white-model route also \"plan\": stop once the set is built (plan from above + its first frame)."],
+                    "spec": ["type": "object", "description": "The third route's blockout set and camera path (see the description). Given, no reference video is used."],
+                    "looks": ["type": "string", "description": "Third route: what the plain shapes become and the light, in English, for re-rendering the first frame as a photograph — e.g. \"the glowing pink balls are red paper lanterns, the long dark-red strips are fabric awnings … A rainy night: the stone paving is wet and mirrors the warm light, no people.\""],
+                    "quality": ["type": "string", "description": "Third route: draft (default, H3's 4-step LoRA) | full (20 steps, about four times longer)."],
                     "scene_as_written": ["type": "boolean", "description": "`scene` is already the English the models should read: used as written, not rewritten."],
                     "words": ["type": "string", "description": "The words the video model films from, as written (English), instead of the studio's own (\"… follows the reference movement exactly, slowly … Static camera. Ambient sound only …\")."],
                 ] as [String: Any],
-                "required": ["scene"],
+                "required": [],
             ],
         ],
         [
@@ -717,7 +747,7 @@ enum PanelTools {
             "description": "Carry on with a take that stopped — at until: \"still\", after motion_stop, or after an error: what is done stays, the rest is made. `until: \"still\"` stops again once her first picture is drawn.",
             "inputSchema": ["type": "object", "properties": [
                 "take": ["type": "string", "description": "The take's id or title."],
-                "until": ["type": "string", "description": "\"still\" to stop once her first picture is drawn."],
+                "until": ["type": "string", "description": "\"still\" to stop once her first picture is drawn; \"plan\" (white-model route) to stop once the set is built."],
             ] as [String: Any], "required": ["take"]],
         ],
         [
@@ -1322,6 +1352,26 @@ enum PanelTools {
         case "film_reshoot": return filmReshoot(args)
         case "motion_make":
             var args = args
+            if let spec = args["spec"] as? [String: Any] {
+                let seconds = (args["seconds"] as? Double) ?? Double((args["seconds"] as? Int) ?? 5)
+                let until = (args["until"] as? String) ?? ""
+                switch MotionStudio.shared.makeBuilt(spec: spec, title: (args["title"] as? String) ?? "",
+                                                     seconds: seconds, looks: (args["looks"] as? String) ?? (args["scene"] as? String) ?? "",
+                                                     words: (args["words"] as? String) ?? "", quality: args["quality"] as? String,
+                                                     hold: ["plan", "still"].contains(until) ? until : nil) {
+                case .success(let take):
+                    return ("开始搭白模：「\(take.title)」\(String(format: "%.1f", take.seconds)) 秒（\(FilmStudio.h3Frames(take.seconds)) 帧），"
+                            + (take.hold == "plan" ? "搭好就停，motion_status(take) 看俯视图和白模第一帧，再 motion_continue"
+                               : take.hold == "still" ? "画好第一帧就停，motion_status(take) 看过再 motion_continue"
+                               : "搭景、画第一帧、H3 拍，一路到底，大约 \(take.quality == "full" ? 40 : 12) 分钟")
+                            + "。成片会在 \(take.file.path)", false)
+                case .failure(let failure): return (failure.localizedDescription, true)
+                }
+            }
+            // The reference routes: where she is and what she wears is not optional.
+            guard !((args["scene"] as? String) ?? "").trimmingCharacters(in: .whitespaces).isEmpty else {
+                return ("motion_make 需要 scene（她在哪、穿什么）；或者走白模路线，给 spec", true)
+            }
             // Named wrong, a camera or a place became the default without a
             // word: it is said, before a download.
             let cameraName = ((args["camera"] as? String) ?? "").trimmingCharacters(in: .whitespaces).lowercased()
@@ -1509,7 +1559,8 @@ enum PanelTools {
             guard let wanted = (args["take"] as? String)?.trimmingCharacters(in: .whitespaces), !wanted.isEmpty else {
                 return ("motion_continue 需要 take（id 或标题）", true)
             }
-            switch MotionStudio.shared.resume(wanted, hold: (args["until"] as? String) == "still" ? "still" : nil) {
+            let until = (args["until"] as? String) ?? ""
+            switch MotionStudio.shared.resume(wanted, hold: ["still", "plan"].contains(until) ? until : nil) {
             case .success(let take): return ("接着拍「\(take.title)」了。motion_status(wait: true) 跟着", false)
             case .failure(let failure): return (failure.localizedDescription, true)
             }

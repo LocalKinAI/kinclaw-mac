@@ -21,7 +21,8 @@ struct MotionStudioView: View {
     @State private var seconds = 10.0
     @State private var credit = ""
     /// "" is the skeleton route, filmed from where the reference was; the
-    /// others are `MotionStage.Camera`s — her body in 3D, on a set, walked round.
+    /// others are `MotionStage.Camera`s — her body in 3D, on a set, walked round —
+    /// and "prompt", the third route: no reference, a set the agent writes from words.
     @AppStorage("kinclaw.motion.camera") private var camera = ""
     @AppStorage("kinclaw.motion.place") private var place = MotionStage.Place.park.rawValue
     @State private var trouble: String?
@@ -280,15 +281,23 @@ struct MotionStudioView: View {
             }
             if let found { licence(found) }
             HStack(alignment: .bottom, spacing: 10) {
-                TextField("她在哪、穿什么？比如：清晨起雾的公园，圆形砖地，穿蓝色棉袄、灰色长裤、白布鞋", text: $scene, axis: .vertical)
+                TextField(camera == "prompt" ? "拍什么地方、镜头怎么走？比如：雨夜的老街，红灯笼，镜头沿街慢慢往前推"
+                          : "她在哪、穿什么？比如：清晨起雾的公园，圆形砖地，穿蓝色棉袄、灰色长裤、白布鞋", text: $scene, axis: .vertical)
                     .textFieldStyle(.plain).font(.kinBody).lineLimit(1...3)
                     .padding(.horizontal, 12).padding(.vertical, 8)
                     .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.card))
                     .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Theme.hairline, lineWidth: 0.5))
+                if camera == "prompt" {
+                    Button(studio.working != nil ? "在拍…" : "交给 agent 搭白模", action: build)
+                        .buttonStyle(.primary).fixedSize()
+                        .disabled(studio.working != nil || scene.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .help("agent 按这句话写白模清单，先搭好给你看俯视图，再拍")
+                } else {
                 Button(studio.working != nil ? "在拍…" : "开拍", action: go)
                     .buttonStyle(.primary).fixedSize()
                     .disabled(studio.working != nil || video == nil || character.anchorURL == nil)
                     .help(video == nil ? "先选一段参考视频" : "取动作骨架，再照着拍")
+                }
             }
             HStack(spacing: 14) {
                 Stepper("从第 \(Int(start)) 秒", value: $start, in: 0...3600, step: 5).font(.kinLabel).fixedSize()
@@ -298,13 +307,15 @@ struct MotionStudioView: View {
                     ForEach(MotionStage.Camera.allCases, id: \.rawValue) { item in
                         Button { camera = item.rawValue } label: { Label(item.title, systemImage: camera == item.rawValue ? "checkmark" : "") }
                     }
+                    Divider()
+                    Button { camera = "prompt" } label: { Label("提示词白模 · 不用参考视频", systemImage: camera == "prompt" ? "checkmark" : "") }
                 } label: {
-                    ChipLabel(title: camera.isEmpty ? "骨架 · 原视频的机位" : MotionStage.Camera(rawValue: camera)?.title ?? camera,
+                    ChipLabel(title: camera.isEmpty ? "骨架 · 原视频的机位" : camera == "prompt" ? "提示词白模" : MotionStage.Camera(rawValue: camera)?.title ?? camera,
                               symbol: "video", menu: true)
                 }
                 .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
                 .help("机位")
-                if !camera.isEmpty {
+                if !camera.isEmpty, camera != "prompt" {
                     Menu {
                         ForEach(MotionStage.Place.allCases, id: \.rawValue) { item in
                             Button { place = item.rawValue } label: { Label(item.title, systemImage: place == item.rawValue ? "checkmark" : "") }
@@ -315,9 +326,12 @@ struct MotionStudioView: View {
                     .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
                     .help("布景")
                 }
-                box(TextField("动作来源（标题 / 作者 / 链接 / 许可），发布时要署名", text: $credit))
+                if camera != "prompt" {
+                    box(TextField("动作来源（标题 / 作者 / 链接 / 许可），发布时要署名", text: $credit))
+                }
             }
-            Text(camera.isEmpty ? "照参考视频的机位拍，动作可以走动、转身"
+            Text(camera == "prompt" ? "不用参考视频：agent 按你这句话写白模清单 → 盒子上的 Blender 搭景、走镜头、渲深度 → 第一帧改画成照片 → H3 照着深度拍（5–15 秒，一个镜头，带声音；画面里的人不动）"
+                 : camera.isEmpty ? "照参考视频的机位拍，动作可以走动、转身"
                  : "三维骨架 → 盒子上的 Blender 搭景、走机位、渲染深度 → 照着深度拍。她可以走动、转身；侧身时单个镜头估不准的几帧会被补上，实在估不稳的会直说")
                 .font(.kinCaption).foregroundStyle(.secondary).lineLimit(2)
         }
@@ -451,6 +465,14 @@ struct MotionStudioView: View {
     private func ask(_ words: String) {
         let open = take.map { "（动作页里开着的：「\($0.title)」，id \($0.id)）\n" } ?? ""
         agent.say(open + words)
+    }
+
+    /// The third route starts with the agent: it writes the set from these words.
+    private func build() {
+        let words = scene.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !words.isEmpty else { return }
+        let length = min(max(Int(seconds), 5), 15)
+        ask("用「提示词白模」路线拍一条：\(words)。长度 \(length) 秒。先写白模清单，motion_make 带 until: \"plan\"，搭好给我看俯视图和第一帧。")
     }
 
     private func pick() {

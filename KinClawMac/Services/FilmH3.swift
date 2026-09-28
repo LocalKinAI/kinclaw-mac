@@ -229,9 +229,13 @@ extension FilmStudio {
     /// and the mp4 brought back to `out`. The graph is the one ComfyUI's own
     /// template turns into (reference-to-video with its 4-step LoRA), written
     /// here directly so a film does not wait on ComfyUI's web page.
+    ///
+    /// `control` (a video in ComfyUI's input folder — Motion's blockout depth) puts the Fun
+    /// ControlNet on the model, so the shot follows that video's geometry and camera frame
+    /// for frame; `exact` then films at the control video's own size.
     static func renderH3(prompt: String, references: [URL], seconds: Double, size: CGSize, seed: Int,
                          full: Bool, pins: [(picture: URL, frame: Int)] = [], to out: URL, film: String,
-                         shot: Int) async throws {
+                         shot: Int, control: String? = nil, exact: (width: Int, height: Int)? = nil) async throws {
         guard await BoxServices.shared.ensure(.comfy) else { throw Failure.message("盒子上的 ComfyUI 起不来") }
         let base = await BoxServices.base(.comfy)
         // Upload each reference under a name that says whose it is.
@@ -242,8 +246,8 @@ extension FilmStudio {
         }
         let megapixels = UserDefaults.standard.object(forKey: h3MegapixelsKey) as? Double ?? 0.4
         let scale = (megapixels * 1_000_000 / Double(size.width * size.height)).squareRoot()
-        let width = max(256, Int((Double(size.width) * scale / 32).rounded()) * 32)
-        let height = max(256, Int((Double(size.height) * scale / 32).rounded()) * 32)
+        let width = exact?.width ?? max(256, Int((Double(size.width) * scale / 32).rounded()) * 32)
+        let height = exact?.height ?? max(256, Int((Double(size.height) * scale / 32).rounded()) * 32)
         var graph: [String: Any] = [
             "1": node("UNETLoader", ["unet_name": "minimax_h3_ref2va_pruned_int8_convrot.safetensors", "weight_dtype": "default"]),
             "2": node("CLIPLoader", ["clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors", "type": "minimax", "device": "default"]),
@@ -290,7 +294,18 @@ extension FilmStudio {
                                                             "vae": ["3", 0], "audio_vae": ["4", 0], "image": ["\(200 + i)", 0]])
             conditioning = ["\(300 + i)", 0]
         }
-        graph["10"] = node("BasicGuider", ["model": full ? ["1", 0] : ["5", 0], "conditioning": conditioning])
+        var model: [Any] = full ? ["1", 0] : ["5", 0]
+        if let control {
+            graph["20"] = node("ModelPatchLoader", ["name": MotionBuild.patch])
+            graph["21"] = node("LoadVideo", ["file": control])
+            graph["22"] = node("GetVideoComponents", ["video": ["21", 0]])
+            graph["23"] = node("MiniMaxH3FunControlNetApply", ["model": model, "model_patch": ["20", 0], "vae": ["3", 0],
+                                                               "strength": 1.0, "start_percent": 0.0, "end_percent": 1.0,
+                                                               "control_video": ["22", 0]])
+            model = ["23", 0]
+            graph["9"] = node("BasicScheduler", ["scheduler": "simple", "steps": full ? 20 : 4, "denoise": 1, "model": model])
+        }
+        graph["10"] = node("BasicGuider", ["model": model, "conditioning": conditioning])
 
         let video = try await comfyResult(graph, node: "15", base: base, what: "H3 镜头", deadline: 3600)
         try? FileManager.default.removeItem(at: out)

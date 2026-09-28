@@ -150,12 +150,12 @@ enum MotionStage {
 
     // MARK: Files, to the box and back
 
-    private static func copy(_ files: [URL], to remote: String) async throws {
+    static func copy(_ files: [URL], to remote: String) async throws {
         let (status, said) = await scp(files.map(\.path) + [remote])
         if status != 0 { throw Failure.transfer(said) }
     }
 
-    private static func fetch(_ remote: String, into local: URL) async throws {
+    static func fetch(_ remote: String, into local: URL) async throws {
         let (status, said) = await scp(["-r", remote, local.path])
         if status != 0 { throw Failure.transfer(said) }
     }

@@ -563,7 +563,13 @@ final class StudioAgent: ObservableObject {
                 model was given — fix what is wrong (film_edit, film_cast, film_fix_picture), then film_continue: a \
                 wrong first frame costs ten minutes of filming. One job at a time; follow it with film_status (wait: \
                 true) instead of asking again and again. A film they have open is the one they mean by "this film"; \
-                film_status lists them all. Speak the language they write in, and keep it short.
+                film_status lists them all. For craft, guides/higgsfield/ in this folder is a reference library (MIT, \
+                docs only) written for Higgsfield's cloud models: skip their model settings, take the craft — the MCSLA \
+                order for a shot's words (INDEX.md routes to every heading), skills/higgsfield-acting/SKILL.md for a \
+                performance (what the character wants, what stands in the way, the beats, the eyes), \
+                skills/higgsfield-seedance/HELL-GRIND.md for keeping people and places the same across a film, and \
+                skills/higgsfield-seedance/FAILURE-MODES.md for naming what went wrong in a shot. Speak the language \
+                they write in, and keep it short.
                 """
         case .motion:
             return """
@@ -579,8 +585,14 @@ final class StudioAgent: ObservableObject {
                 it copies and the words the model got — then motion_continue. Your own English for the scene \
                 (`scene_as_written`) or for the filming (`words`) is used as written. motion_status(wait: true) follows \
                 a take; motion_stop stops one; video_frames shows any finished video. \(Self.seeing) Ten seconds take \
-                about five minutes on the box: say so, and wait for a yes before a long one. Speak the language they \
-                write in, and keep it short.
+                about five minutes on the box: say so, and wait for a yes before a long one. \
+                The third route, 提示词白模, needs no reference: when they describe a place and a camera move ("雨夜的老街，\
+                镜头沿街往前推"), YOU write the set as a spec of plain shapes and a camera path (motion_make's description \
+                has the format and the looks) — a few hundred boxes, cylinders and balls make a street or a room; measure \
+                in metres and keep the camera inside the set. Pass `looks` (what each shape becomes, the light) and `words` \
+                (the English H3 films from: the place, the light, how the camera moves, the sound). Use until: "plan" \
+                first and look at the plan and the set's first frame yourself before anything is filmed; people stand \
+                still on this route. Speak the language they write in, and keep it short.
                 """
         case .comfy:
             return """

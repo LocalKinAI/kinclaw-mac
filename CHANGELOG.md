@@ -8,6 +8,37 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Added — Motion: a third route, 提示词白模 (a set from words, filmed by H3)
+
+"我们可以实现用提示次生成白模吗，就是确定视频轨迹，然后围绕白膜生出首帧……然后联合轨迹和多桢一起渲染成视频动画" —
+then "H3不行吗" and "做进 Motion，加第三条路线".
+
+- **No reference video.** The agent writes the set from the person's words as a spec of
+  plain shapes (box / cyl / ball, each with a look) and a camera path (eye point and
+  look-at over the shot); `motion_make {spec, looks, words}` takes it. The Motion tab's
+  机位 menu has 「提示词白模」: a sentence and 「交给 agent 搭白模」.
+- **Built and rendered on the box** (`MotionBuild`): Blender builds the spec, moves the
+  camera, renders the depth of every frame straight into ComfyUI's input as an mp4, the
+  first frame shaded, and a plan (the set from above, the camera's path drawn on it).
+  `until: "plan"` stops there to look before anything is filmed; `until: "still"` stops
+  after the first frame.
+- **Filmed by MiniMax H3** with its Fun ControlNet-Union over the depth and the first
+  frame (the blockout re-rendered as a photograph, "nothing moved") pinned: 5–15 s, sound
+  included. `FilmStudio.renderH3` takes a `control` video and an `exact` size for this.
+- **The ControlNet runs as bf16.** ComfyUI ships it int8 with a ConvRot rotation, which
+  needs `torch._int_mm` — absent on Apple's MPS (it crashed; on the CPU fallback one step
+  had not finished in 27 minutes). It is dequantized once on the box and rotated back
+  (re-quantized, it matches the shipped file entry for entry) and then runs on the GPU.
+- **First frame only.** Three keyframes painted separately put the right geometry in
+  but different signs and doors, and H3 snapped between them twice in five seconds; the
+  first frame alone, with the depth holding the set, is smooth.
+- Measured through the app: 124 frames at 864×480 — Blender under a minute, the first
+  frame 20 s, the H3 draft about nine minutes. The editor's model is stopped before H3
+  (after one large edit it held 73 GB of the box).
+- Film's agent now has `guides/higgsfield/` (OSideMedia/higgsfield-ai-prompt-skill, MIT,
+  the documents only) pointed out for craft: MCSLA, acting, Hell Grind continuity,
+  failure modes.
+
 ### Added — Montage: a library of other people's Opus 5.5 video prompts
 
 "把那26条完整的挑出来分类，加到我的kinclaw-mac里面".
