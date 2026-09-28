@@ -68,6 +68,24 @@ newline was a return. Several lines now go in as one bracketed paste.
   the app writes ("改个好名字"). The bundle id and the folders stay as they
   were, so nothing already set up — permissions, settings, sessions — is lost.
 
+### Added — 冰河三国: a Three Kingdoms city in an ice age
+
+"给我写一个冰河三国的游戏" — in the spirit of 《三国：冰河时代》, our own game
+(`JevIceKingdoms`): 100 days, a decision a day. A great furnace in the
+middle of the city burns coal and warms the houses in its reach; the cold
+deepens through the days, with snaps and a seven-day great blizzard (大寒)
+at about −50°C. Coal, wood, food and iron from eleven kinds of building;
+people fall sick and freeze outside the heat, starve without food, leave
+when 民心 is low; eleven kinds of resident event to answer. Twelve generals
+from the tavern — 张飞 against bandits, 吕布 unmatched but bad for 民心,
+诸葛亮, 华佗 who heals, 周瑜 who saves coal governing the furnace — lead
+expeditions over a snowy map of fourteen counties, while 魏 and 吴 take
+counties too and raid a neighbour. Each option says its verdict first, and
+when the city is doomed the situation says so and which option saves it.
+The evaluator survives 20 games in 20 with 6 counties; dice survive 2;
+Jev survived both its games. Click an option, a building (build or
+upgrade), a county (march on it) or the event card's buttons.
+
 ### Added — five more Jev games: 植物守卫战, 跑酷, 吃豆人, 消消乐, 德州扑克
 
 "可以再加一些有意思的游戏吗", and "有个一直跑左右闪那个". Each is one new file,

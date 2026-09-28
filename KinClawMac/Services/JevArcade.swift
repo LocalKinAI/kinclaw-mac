@@ -65,7 +65,7 @@ final class JevArcade: ObservableObject {
         var side: String? = nil
     }
 
-    let games: [JevGame] = [JevEmpire(), JevGarden(), JevDrive(), JevRunner(), JevShooter(), JevFlappy(), JevPacman(), JevTetris(), Jev2048(),
+    let games: [JevGame] = [JevEmpire(), JevIceKingdoms(), JevGarden(), JevDrive(), JevRunner(), JevShooter(), JevFlappy(), JevPacman(), JevTetris(), Jev2048(),
                             JevMatch3(), JevSnake(), JevBlackjack(), JevPoker(), JevGomoku(), JevChess(), JevXiangqi()]
     /// A game for two has a player a side, and any player can sit on either:
     /// Jev against Laya, a chat model against the yardstick, one chat model
