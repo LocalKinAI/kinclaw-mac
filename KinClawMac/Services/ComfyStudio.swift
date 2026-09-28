@@ -42,11 +42,20 @@ final class ComfyStudio: NSObject, ObservableObject {
         /// Categories a saved workflow also belongs in, from what it uses:
         /// one that asks Ollama is listed under LLM beside ComfyUI's own.
         var also: [String] = []
+        /// An example a community node pack on the box ships with (its
+        /// custom_nodes/<pack>/example_workflows), not one of ComfyUI's own.
+        var pack: String? = nil
         func belongs(to name: String) -> Bool { category == name || also.contains(name) }
-        var id: String { saved?.path ?? name }
+        var id: String { saved?.path ?? pack.map { $0 + "/" + name } ?? name }
 
         @MainActor var thumbnail: URL? {
-            saved == nil ? URL(string: ComfyStudio.base + "/templates/\(name)-1.\(mediaSubtype)") : nil
+            saved == nil && pack == nil ? URL(string: ComfyStudio.base + "/templates/\(name)-1.\(mediaSubtype)") : nil
+        }
+        /// Where ComfyUI serves the graph; a saved one is read from its file.
+        @MainActor var graph: URL? {
+            guard saved == nil else { return nil }
+            guard let pack else { return URL(string: ComfyStudio.base + "/templates/\(name).json") }
+            return ComfyStudio.packGraph(pack, name)
         }
     }
 
@@ -173,7 +182,7 @@ final class ComfyStudio: NSObject, ObservableObject {
                         local: open != false && !name.hasPrefix("api_")))
                 }
             }
-            templates = list
+            templates = list + (await packExamples())
             note = nil
             // The page takes a while over the LAN; start it now, so it is ready
             // by the time a workflow is clicked.
@@ -182,6 +191,33 @@ final class ComfyStudio: NSObject, ObservableObject {
             return
         }
         note = "ComfyUI 答应了，但拿不到模板目录（\(Self.base)/templates/index.zh.json）"
+    }
+
+    /// The examples the community node packs on the box ship with, listed as
+    /// 社区插件: a pack installed on the box is then something the agent can
+    /// find and run, not only nodes for a person to drag in.
+    private func packExamples() async -> [Template] {
+        guard let url = URL(string: Self.base + "/api/workflow_templates"),
+              let (data, _) = try? await URLSession.shared.data(from: url),
+              let packs = (try? JSONSerialization.jsonObject(with: data)) as? [String: [String]] else { return [] }
+        var list: [Template] = []
+        for (pack, names) in packs.sorted(by: { $0.key < $1.key }) {
+            for name in names.sorted() {
+                guard let graph = Self.packGraph(pack, name) else { continue }
+                let text = (try? await URLSession.shared.data(from: graph)).flatMap { String(data: $0.0, encoding: .utf8) } ?? ""
+                let video = ["\"SaveVideo\"", "\"CreateVideo\"", "\"VHS_VideoCombine\""].contains(where: text.contains)
+                list.append(Template(name: name, title: "\(pack) · \(name)",
+                                     description: "社区插件 \(pack) 自带的示例（装在盒子上的 custom_nodes 里）",
+                                     category: "社区插件", mediaType: video ? "video" : "image", mediaSubtype: "webp",
+                                     tags: [pack], models: [], size: nil, local: true, also: video ? ["视频"] : [], pack: pack))
+            }
+        }
+        return list
+    }
+
+    static func packGraph(_ pack: String, _ name: String) -> URL? {
+        let path = [pack, name + ".json"].map { $0.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? $0 }
+        return URL(string: base + "/api/workflow_templates/" + path.joined(separator: "/"))
     }
 
     var categories: [String] {
@@ -268,7 +304,7 @@ final class ComfyStudio: NSObject, ObservableObject {
         let data: Data?
         if let file = template.saved {
             data = try? Data(contentsOf: file)
-        } else if let url = URL(string: Self.base + "/templates/\(template.name).json") {
+        } else if let url = template.graph {
             data = try? await URLSession.shared.data(from: url).0
         } else { data = nil }
         guard let data, let text = String(data: data, encoding: .utf8) else { note = "拿不到 \(template.name) 的工作流"; return }
@@ -503,7 +539,12 @@ final class ComfyStudio: NSObject, ObservableObject {
             let input = node["input"] as? [String: Any] ?? [:]
             for section in ["required", "optional"] {
                 for case let spec as [Any] in (input[section] as? [String: Any] ?? [:]).values {
-                    for case let option as String in spec.first as? [Any] ?? [] where Self.isModelFile(option) != nil {
+                    // Two shapes: the old [[options…], {…}] and the newer nodes'
+                    // ["COMBO", {"options": […]}] (background removal, MoGe, …).
+                    let options = spec.first as? [Any]
+                        ?? (spec.first as? String == "COMBO" ? (spec.dropFirst().first as? [String: Any])?["options"] as? [Any] : nil)
+                        ?? []
+                    for case let option as String in options where Self.isModelFile(option) != nil {
                         names.insert(option)
                         names.insert((option as NSString).lastPathComponent)
                     }
@@ -583,14 +624,12 @@ final class ComfyStudio: NSObject, ObservableObject {
         modelFiles = [:]
         nodeTypes = nil
         _ = await knownNodes()
-        let base = Self.base
-        let names = templates.filter(\.local).map(\.name)
+        let graphs = templates.filter(\.local).compactMap { t in t.graph.map { (t.name, $0) } }
         var needs: [String: Needs] = [:]
         await withTaskGroup(of: (String, Needs?).self) { group in
-            for name in names {
+            for (name, url) in graphs {
                 group.addTask {
-                    guard let url = URL(string: base + "/templates/\(name).json"),
-                          let (data, _) = try? await URLSession.shared.data(from: url) else { return (name, nil) }
+                    guard let (data, _) = try? await URLSession.shared.data(from: url) else { return (name, nil) }
                     return (name, Self.requirements(of: data))
                 }
             }
