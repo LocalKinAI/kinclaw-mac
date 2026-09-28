@@ -39,6 +39,123 @@ then "H3不行吗" and "做进 Motion，加第三条路线".
   the documents only) pointed out for craft: MCSLA, acting, Hell Grind continuity,
   failure modes.
 
+### Added — Pixelle: Pixelle-Video on the box, as a tab its agent works
+
+"Pixelle-Video这个太酷了，接近来独立tab吧，agent可以操作那种".
+
+- **Pixelle** in Studio, after Motion. Pixelle-Video (AIDC-AI, Apache-2.0),
+  installed on the box on 2026-09-28, makes a narrated short video from a
+  script: a paragraph a scene, a Qwen Image 2.1 picture per scene on the
+  box's ComfyUI, each line read by the box's own voices (8102 from a
+  description, 8101 presets), cards with subtitles, music, −14 LUFS. The tab
+  shows whether its API is up (and starts or stops it), ComfyUI's queue and
+  the voices, the job in progress line by line, and every video made:
+  playing, each scene's line and the picture prompt it was drawn from, and
+  the storyboard sheet.
+- **The app carries pv.py** (Resources/pixelle/pv.py — the script the
+  Claude Code skill uses) and runs it with the box from Settings and the art
+  folder's pixelle/ as its output: ssh, curl over ssh and rsync, nothing new
+  installed anywhere. A job found running on the box when the tab opens — the
+  app restarted in the middle of one — is followed from there.
+- **Its agent** holds pixelle_status, pixelle_service, pixelle_make,
+  pixelle_wait, pixelle_cancel, pixelle_image, pixelle_voice,
+  pixelle_templates, pixelle_voices and pixelle_runs. It writes the script and
+  the pictures' words itself and they are used as written; it tries one
+  picture, and one line with what the box's recogniser heard back, and shows
+  the plan before the five-minute make. Pixelle's default.mp3 (an OC ReMix of
+  "Melodies of Life") is refused, a template left with Pixelle's own footer is
+  pointed out, and video_ templates — there is no video workflow on the box —
+  are refused before anything is sent.
+- **One narrator, and scenes that move.** "pixelle很好，有点像notebooklm，但是声音
+  不一致啊，不是一个人吗，还有要能能加动画，那就无敌了". The voice-design model
+  makes a new voice on every call, so a video voiced line by line had a new
+  person in every scene. Now the whole script is read in one take and cut at
+  the pauses between lines — of the pauses near where a line should end, the
+  one whose cut the box's recogniser hears as that line (the first test: five
+  lines, all five heard as themselves, the joined narration heard word for
+  word). A take that cannot be cut cleanly is read again, then voiced line by
+  line, and the result says so. Scenes can move: `motion` pan (an eased push
+  or drift, a second's work a scene) or ltx (LTX-2 on the box animates each
+  picture, about 3 minutes a scene). The clip goes exactly where the template
+  shows the picture and under everything the template draws over it —
+  measured by rendering the template once with a black and once with a white
+  picture — so the card, its rounded corners, the title and the subtitle stay
+  as they were. Both live in Pixelle on the box
+  (pixelle_video/services/localkin_motion.py, in ~/.kinclaw/pixelle/localkin.patch).
+- **pixelle_rework** remakes a finished video from its own pictures — a new
+  one-take voice-over, moving scenes, or both — as a new video beside the
+  old one: the still version is made and looked at first, and LTX's minutes
+  spent after. The tab shows each video's voice and motion and has 让画面动起来
+  and 重配成一个人, which ask the agent (it says how long before it starts).
+
+### Added — Easel: our own Easel, worked by our own agent
+
+"easel想法不错，可以复刻一个吗，然后加个tab，用我们自己的agent操控啊，不用openclaw" —
+then "把社媒改名字叫Easel，可以支持tiktok，x，wechat吗，youtube shorts".
+
+- **Easel** in Studio, last (it was 社媒 for a few hours): an account's
+  profile, the trending lists, a topic, the copy, the cards, a check, a
+  draft — Easel's workflow, and now its name: the tab is modelled on and named
+  after ZJU-REAL/Easel (Apache-2.0). Its guides are in the tab's folder
+  (social/guides/easel, with its licence and where they came from) for the
+  agent to read; its runtime, OpenClaw, is not used — what it needed a runtime
+  for is panel tools. Inside, it is still `social` (the mode, the social_*
+  tools, the art folder), so running agents and saved drafts carry on.
+- **TikTok, X, YouTube Shorts and WeChat's three places** (公众号 articles,
+  视频号 videos, 朋友圈 posts) beside 小红书, 抖音, B站, 微博, 知乎 and 快手. A
+  draft's platform may be given in English, Chinese or by another name
+  (twitter, 推特, channels, moments, shorts, 油管短视频…) and is saved under the
+  platform's own. 打开发布页 opens TikTok Studio's upload, x.com's compose,
+  YouTube Studio's upload, mp.weixin.qq.com or 视频号助手; 朋友圈 has no web
+  page, which the tab says (and opens WeChat on this Mac if it is there).
+- **Checked by each platform's own published numbers**, read on 2026-09-28
+  and cited in the code: X's weighted 280 (twitter-text v3 — a Chinese
+  character or an emoji weighs 2, a link 23; Premium 25,000), four pictures, no
+  more than two hashtags; TikTok's 4,000-character caption (2,200 through its
+  API), five hashtags, a 9:16 video or up to 35 photos; Shorts up to three
+  minutes, vertical or square, title 100, description 5,000, no < or >, links
+  that do not click; 公众号 title 64 (32 through its API), 摘要 120 (a new
+  summary field), a 2.35:1 cover with a 1:1 cut from it; 视频号 description
+  1,000, a video 0.33–3.0 wide; 朋友圈 nine pictures, no hashtags, videos to
+  five minutes. The video is measured (size, length) for this. Card sizes are
+  checked per platform (X 16:9, 1:1 or 4:5; 朋友圈 square in a grid; TikTok
+  upright; 公众号 2.35:1), and the wording checks read English as well as
+  Chinese — an English post for TikTok, X or Shorts gets the same AI-filler,
+  scare-word and absolute-claim checks. A wide card gets Easel's fill rule as
+  a warning only.
+- **Trends for them**: google_trends, Google Trends' own daily RSS for a
+  country (what people search, ten a country, with a news story each), and x,
+  X's trends for the latest hour from trends24.in — a third party, said so, as
+  X's own want a sign-in. TikTok (Creative Center answers "no permission"
+  signed out), YouTube (the Trending page is gone; its charts need an API key)
+  and WeChat (微信指数 and 搜一搜 live in the app) have no list that answers
+  without a sign-in or a key: each says so, and what to look at instead.
+- **A draft is shown the way a phone shows the post**: the cards to swipe,
+  the title, the text, the tags; beside it the title options with their
+  length, every fact's source and the checklist, and 复制文案, 在 Finder 中显示
+  and 打开发布页 (the platform's own page, in the default browser). Posting is
+  always the person's own click: the app signs in nowhere and posts nothing.
+  The earlier Easel run's draft in easel/ shows too, read only; nothing is
+  moved out of it.
+- **Tools**: social_status; social_profile (Easel's six files per account);
+  social_trends — Weibo, Douyin, Bilibili, Baidu, Zhihu, Toutiao over plain
+  HTTPS, kept with the time they were read (measured on 2026-09-28: Weibo's
+  own endpoint answers 403 without a visitor cookie, so its list comes through
+  v2.xxapi.cn and says so; Xiaohongshu has no public list, and says that);
+  social_page, a public page such as the 宇宙看板 read off-screen, signed in to
+  nothing — its text as the page shows it, and a screenshot; social_card, the
+  agent's HTML drawn at 1080×1440 and checked: text under 20 px, text over its
+  box, off the card or cut off, pictures that did not load, an empty card, and
+  Easel's card_audit rule measured on the picture (content over 80% of the
+  height, no empty band over 15%); social_draft (发布文案.txt, cards/01.png…
+  with their HTML and audit, the video, meta.json with each fact's source,
+  then the publish checklist: a card that failed its audit, a number without
+  a source, words that lead off the platform, absolute or frightening wording,
+  AI filler); social_drafts.
+- **Cards are drawn by a WKWebView in no window** (SocialCard.swift), with a
+  data store of its own and no screen updates to wait for — tested headless on
+  cards and on space.localkin.ai before it went in.
+
 ### Added — Montage: a library of other people's Opus 5.5 video prompts
 
 "把那26条完整的挑出来分类，加到我的kinclaw-mac里面".

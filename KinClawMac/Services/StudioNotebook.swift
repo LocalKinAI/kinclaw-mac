@@ -31,7 +31,8 @@ enum StudioNotebook {
         let url = file(place)
         try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         if !fm.fileExists(atPath: url.path) {
-            let tab = ["film": "Film（片场）", "motion": "Motion", "comfy": "Comfy", "montage": "Montage（OpenMontage）"][place.rawValue] ?? place.rawValue
+            let tab = ["film": "Film（片场）", "motion": "Motion", "comfy": "Comfy", "montage": "Montage（OpenMontage）",
+                       "pixelle": "Pixelle（Pixelle-Video）", "social": "Easel（社交媒体，照 ZJU-REAL/Easel 的做法）"][place.rawValue] ?? place.rawValue
             let body = """
                 # \(tab) 标签 agent 的工作笔记
 

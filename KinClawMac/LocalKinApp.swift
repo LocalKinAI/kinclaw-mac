@@ -189,6 +189,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The OpenMontage agent's ssh session and the board's tunnel: an ssh
         // left running after the app is gone holds the port for nobody.
         MontageStudio.shared.shutdown()
+        // pv.py following a Pixelle job over ssh: the job itself goes on on
+        // the box, and the tab picks it up again next time.
+        PixelleStudio.shared.shutdown()
         StudioAgent.all.forEach { $0.stop() }
         // The handshake file is a live claim about a port; a dead app should
         // not leave one lying around.

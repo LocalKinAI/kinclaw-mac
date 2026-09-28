@@ -360,17 +360,17 @@ enum PanelTools {
         ],
         [
             "name": "panel_show",
-            "description": "Show the LocalKin panel, optionally on one of its tabs: chat, cowork, code (Claude Code and Codex sessions), film, motion, montage, comfy, jev — or web / shell, which open the browser (on the right) or the shell (along the bottom) beside whichever tab is up; or make it full screen. With film, motion, comfy or montage, `ask` hands a request to the agent on that tab's left. Use it when the user asks to see the panel or to go to a tab (\"打开片场\" → film). With mode film, `film` selects a film and `shot` opens that shot's words for rewriting (\"我想改第三个镜头\").",
+            "description": "Show the LocalKin panel, optionally on one of its tabs: chat, cowork, code (Claude Code and Codex sessions), film, motion, pixelle, montage, comfy, social (the Easel tab — social-media drafts; it was called 社媒), jev — or web / shell, which open the browser (on the right) or the shell (along the bottom) beside whichever tab is up; or make it full screen. With film, motion, pixelle, montage, comfy or social, `ask` hands a request to the agent on that tab's left. Use it when the user asks to see the panel or to go to a tab (\"打开片场\" → film). With mode film, `film` selects a film and `shot` opens that shot's words for rewriting (\"我想改第三个镜头\").",
             "inputSchema": [
                 "type": "object",
                 "properties": [
-                    "mode": ["type": "string", "description": "chat | cowork | code | film | motion | montage | comfy | jev, or web | shell for the browser or shell drawer. Omit to leave the tab as it is."],
+                    "mode": ["type": "string", "description": "chat | cowork | code | film | motion | pixelle | montage | comfy | social | jev, or web | shell for the browser or shell drawer. Omit to leave the tab as it is."],
                     "film": ["type": "string", "description": "With mode film: the film to show, by id or title."],
                     "shot": ["type": "integer", "description": "With film: open this shot's prompt editor."],
                     "full_screen": ["type": "boolean", "description": "true: the panel goes full screen; false: back to a window. Omit to leave it."],
-                    "ask": ["type": "string", "description": "With mode film, motion, comfy or montage: hand these words to the agent docked in that tab (Claude Code or Codex, holding that tab's tools, which plans, asks, runs and checks), starting it if it is not running. For \"让片场的 agent 拍…\" / \"让 Comfy 那边的 agent 做…\"."],
-                    "agent": ["type": "boolean", "description": "With mode film, motion, comfy or montage: open that tab's agent dock without saying anything to it."],
-                    "resume": ["type": "boolean", "description": "With mode film, motion, comfy or montage: bring that tab's agent back into its last conversation, waiting for the next word — after the app was restarted in the middle of one."],
+                    "ask": ["type": "string", "description": "With mode film, motion, pixelle, montage, comfy or social: hand these words to the agent docked in that tab (Claude Code or Codex, holding that tab's tools, which plans, asks, runs and checks), starting it if it is not running. For \"让片场的 agent 拍…\" / \"让 Comfy 那边的 agent 做…\"."],
+                    "agent": ["type": "boolean", "description": "With mode film, motion, pixelle, montage, comfy or social: open that tab's agent dock without saying anything to it."],
+                    "resume": ["type": "boolean", "description": "With mode film, motion, pixelle, montage, comfy or social: bring that tab's agent back into its last conversation, waiting for the next word — after the app was restarted in the middle of one."],
                 ] as [String: Any],
             ],
         ],
@@ -909,6 +909,224 @@ enum PanelTools {
             "inputSchema": ["type": "object", "properties": [String: Any]()],
         ],
         [
+            "name": "pixelle_status",
+            "description": "The Pixelle tab (Pixelle-Video on the box — script → a Qwen Image picture and a voice per scene → cards with subtitles and music → one narrated video): whether its API is up, ComfyUI's queue (shared with the Film, Comfy and Montage tabs: a music score there holds it 25–50 minutes and every picture here waits behind it), the voices (8102 made from a description, 8101 presets), the job being made and how far along it is, and the latest finished videos. 看 Pixelle 在不在跑、在做什么。",
+            "inputSchema": ["type": "object", "properties": [String: Any]()],
+        ],
+        [
+            "name": "pixelle_service",
+            "description": "Start, stop or restart the Pixelle-Video API on the box. It is started by hand and does not survive a reboot of the box. stop refuses while a job runs (the job would be lost) unless force.",
+            "inputSchema": ["type": "object", "properties": [
+                "action": ["type": "string", "description": "start | stop | restart"],
+                "force": ["type": "boolean", "description": "Stop even with a job running; it is lost."],
+            ] as [String: Any], "required": ["action"]],
+        ],
+        [
+            "name": "pixelle_make",
+            "description": """
+                Make a narrated short video with Pixelle-Video on the box, from a script you wrote: each paragraph is \
+                a scene — spoken as written and shown as its subtitle over a card with one AI picture (Qwen Image 2.1 \
+                on the box's ComfyUI), music under it, finished to −14 LUFS. Everything given is used as written. It \
+                answers at once with a task id; follow it with pixelle_wait. About 5–6 minutes for five scenes when \
+                ComfyUI is free, longer behind other tabs' work (pixelle_status). Before calling this, show the person \
+                the script, the pictures' words, the voice, template and music and wait for a yes; try one picture \
+                (pixelle_image) and one line (pixelle_voice) first. The voice-over is read in ONE take and cut at the \
+                pauses between lines (one_take, default on), so the whole video has one narrator. Scenes are still \
+                cards unless `motion`: pan (a slow push or drift, seconds a scene) or ltx (LTX-2 on the box animates \
+                each picture — real motion, about 3 minutes a scene; the card, title and subtitle stay on top). A \
+                still version first and then pixelle_rework with motion is the way to show the pictures before \
+                spending the minutes. There is no redoing one scene's picture: change its line or prompt and make the \
+                video again (unchanged prompts give the same pictures).
+                """,
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "text": ["type": "string", "description": "The script (mode fixed): one paragraph per scene, a blank line between paragraphs. 20–35 Chinese characters a scene ≈ 5–9 s (about 4 characters a second, plus 0.2 s before and 0.6 s after each line). Numbers written as they are read (一九九五年). In mode generate: the topic."],
+                    "mode": ["type": "string", "description": "fixed (default: the script as written) | generate (text is a topic and the box's model writes the lines — vaguer and longer than asked)."],
+                    "title": ["type": "string", "description": "Shown on every card."],
+                    "image_prompts": ["type": "array", "items": ["type": "string"], "description": "One per scene, in English, used exactly as written: what is literally in the frame, no metaphors (a metaphor is drawn literally). As many as the scenes. Left out, the box's model writes them from the narration."],
+                    "prompt_prefix": ["type": "string", "description": "A style put in front of every picture prompt, e.g. \"Cinematic space-science illustration, photoreal, deep navy and amber palette\"."],
+                    "split_mode": ["type": "string", "description": "How the script is cut into scenes: paragraph (default) | line | sentence."],
+                    "frame_template": ["type": "string", "description": "Layout and video size (pixelle_templates). Default 1080x1920/image_default.html, vertical. On the box only image_* (an AI picture per scene) and static_* (text on a background, no ComfyUI) run."],
+                    "template_params": ["type": "object", "description": "The template's text fields. Most carry Pixelle's own footer (author @Pixelle.AI, brand, describe, signature): set them; \"\" hides one."],
+                    "media_workflow": ["type": "string", "description": "fast (default: 8 steps, about 45–60 s a picture) | full (25 steps, about 2 minutes a picture)."],
+                    "tts_url": ["type": "string", "description": "8102 (default: a voice made from tts_instruct) | 8101 (presets, by tts_voice)."],
+                    "tts_instruct": ["type": "string", "description": "8102: the voice in words, e.g. 中年男性科普纪录片旁白，嗓音沉稳温暖，吐字清晰，语速适中 — made once for the whole video (one_take). 8101: a style, or \"\"."],
+                    "one_take": ["type": "boolean", "description": "Default true: the whole script read in one take and cut at the pauses between lines — one narrator, and the lines flow like narration. false: line by line (8102 then makes a different voice for every line). If a take cannot be cut cleanly it falls back to line by line and the result says so."],
+                    "motion": ["type": "string", "description": "none (default: still pictures) | pan (a slow push-in, pull-out or drift, eased, a few seconds' work a scene) | ltx (LTX-2 image-to-video on the box: the picture really moves — light, water, particles, a slow camera — about 3 minutes a scene, 6 s of motion at most, longer scenes play it a little slower). Only image_ templates; one that shows the picture only blurred or tinted keeps it still and says why."],
+                    "motion_prompts": ["type": "array", "items": ["type": "string"], "description": "ltx: one per scene, in English, how that scene moves (\"slow push-in, the star's glow pulsing, dust drifting\"), used as written. Left out: the picture prompt plus a gentle cinematic move."],
+                    "tts_voice": ["type": "string", "description": "8101's preset: vivian, serena, uncle_fu, dylan, eric, ryan, aiden, ono_anna, sohee (pixelle_voices)."],
+                    "tts_speed": ["type": "number", "description": "0.5–2.0, default 1.0."],
+                    "tts_language": ["type": "string", "description": "zh (default) | en | ja | ko."],
+                    "bgm_path": ["type": "string", "description": "Music from the box's ~/Pixelle-Video/data/bgm/: localkin-wonder-33s.wav (33.75 s, hushed start rising to radiant, −20.5 LUFS). Left out: no music. default.mp3 is refused: a copyrighted OC ReMix."],
+                    "bgm_volume": ["type": "number", "description": "How loud the music is. The person wants it clearly heard, a few dB under the voice: about 0.45 for localkin-wonder-33s.wav."],
+                    "bgm_mode": ["type": "string", "description": "loop (default) | once. The music fades out over the last 2 s."],
+                    "master_audio": ["type": "boolean", "description": "The loudness pass (default on)."],
+                    "loudness_lufs": ["type": "number", "description": "Its target, default −14 (phone)."],
+                    "video_fps": ["type": "integer", "description": "Default 30."],
+                    "n_scenes": ["type": "integer", "description": "mode generate: how many scenes."],
+                ] as [String: Any],
+                "required": ["text"],
+            ],
+        ],
+        [
+            "name": "pixelle_rework",
+            "description": """
+                Remake a finished Pixelle video from its own pictures — nothing is drawn again, the original stays, the \
+                result is a new video: `revoice` reads the whole narration again in one take (one narrator; a video \
+                made line by line has a different voice in every scene), and/or `motion` makes the scenes move (pan: \
+                seconds; ltx: about 3 minutes a scene). Say how long before calling it and wait for a yes. Answers at \
+                once with a task id; follow it with pixelle_wait.
+                """,
+            "inputSchema": ["type": "object", "properties": [
+                "run": ["type": "string", "description": "Which video: its folder (20260928_093131_db14-… or just 20260928_093131_db14) or title. Default the newest."],
+                "revoice": ["type": "boolean", "description": "Read the narration again in one take. Default false (the voice is kept)."],
+                "tts_instruct": ["type": "string", "description": "With revoice: the voice in words (default: the one the video was made with)."],
+                "tts_url": ["type": "string", "description": "With revoice: 8102 | 8101 (default: as before)."],
+                "tts_voice": ["type": "string", "description": "With revoice and 8101: the preset."],
+                "tts_speed": ["type": "number", "description": "With revoice: 0.5–2.0."],
+                "motion": ["type": "string", "description": "none (default) | pan | ltx — as in pixelle_make."],
+                "motion_prompts": ["type": "array", "items": ["type": "string"], "description": "ltx: one per scene (all scenes, in order), used as written."],
+                "scenes": ["type": "array", "items": ["type": "integer"], "description": "Which scenes move (1-based). Default all."],
+                "bgm_path": ["type": "string", "description": "Music (default: as before); \"\" for none."],
+                "bgm_volume": ["type": "number", "description": "Default: as before."],
+            ] as [String: Any]],
+        ],
+        [
+            "name": "pixelle_wait",
+            "description": "Follow the Pixelle job until it is done — up to about nine minutes, then it answers anyway: its progress lines; when done, the video, its real length, the loudness, each scene's narration and the exact picture prompt used, and the storyboard sheet (every scene side by side), which you see — look at it before saying the video is good. Still going: call again; the job goes on on the box either way.",
+            "inputSchema": ["type": "object", "properties": [
+                "task": ["type": "string", "description": "The task id. Default: the job in progress."],
+            ] as [String: Any]],
+        ],
+        [
+            "name": "pixelle_cancel",
+            "description": "Cancel a Pixelle job (default: the one in progress). A picture already sent to ComfyUI still finishes there.",
+            "inputSchema": ["type": "object", "properties": [
+                "task": ["type": "string", "description": "The task id. Default: the job in progress."],
+            ] as [String: Any]],
+        ],
+        [
+            "name": "pixelle_image",
+            "description": "One test picture from Pixelle's own image workflow on the box (Qwen Image 2.1), to look at before a whole video: about 45 s (full: about 2 minutes), longer when ComfyUI is busy with other tabs' work. You see it.",
+            "inputSchema": ["type": "object", "properties": [
+                "prompt": ["type": "string", "description": "In English, literally what is in the frame — as an image_prompts entry would be."],
+                "prefix": ["type": "string", "description": "The prompt_prefix to try with it."],
+                "size": ["type": "string", "description": "WxH, default 1024x1024 (what the templates ask for)."],
+                "full": ["type": "boolean", "description": "25 steps instead of 8."],
+            ] as [String: Any], "required": ["prompt"]],
+        ],
+        [
+            "name": "pixelle_voice",
+            "description": "One test line from the box's voices, read the way a job would read it, and — `check`, on by default — what the box's speech recogniser heard back, which catches misreadings (a number, a name, a 多音字). A few seconds.",
+            "inputSchema": ["type": "object", "properties": [
+                "text": ["type": "string", "description": "One line of the script."],
+                "instruct": ["type": "string", "description": "8102: the voice in words; 8101: a style or \"\"."],
+                "tts_url": ["type": "string", "description": "8102 (default) | 8101."],
+                "speaker": ["type": "string", "description": "8101's preset id (vivian, uncle_fu …)."],
+                "speed": ["type": "number", "description": "0.5–2.0."],
+                "check": ["type": "boolean", "description": "Have the recogniser say what it heard. Default true."],
+            ] as [String: Any], "required": ["text"]],
+        ],
+        [
+            "name": "pixelle_templates",
+            "description": "Pixelle's frame templates — video size, kind (image_: an AI picture per scene; static_: text only; video_: not on the box) and the text fields each takes — the music on the box, and the two picture workflows.",
+            "inputSchema": ["type": "object", "properties": [String: Any]()],
+        ],
+        [
+            "name": "pixelle_voices",
+            "description": "The voices Pixelle has on the box: 8102 makes one from a description; 8101's presets by id.",
+            "inputSchema": ["type": "object", "properties": [String: Any]()],
+        ],
+        [
+            "name": "pixelle_runs",
+            "description": "The videos Pixelle has made, newest first, with their folders (final.mp4, storyboard.json, frames/ with each scene's picture, voice and card); for one — `run`, by folder name or title, default the newest — its scenes' narration and its storyboard sheet, which you see.",
+            "inputSchema": ["type": "object", "properties": [
+                "run": ["type": "string", "description": "A folder name (20260928_093131_db14-…) or a title."],
+                "limit": ["type": "integer", "description": "How many to list. Default 10."],
+            ] as [String: Any]],
+        ],
+        [
+            "name": "social_status",
+            "description": "The Easel tab (social-media drafts; it was called 社媒) — our own re-creation of ZJU-REAL/Easel (Apache-2.0), named after it: the platforms it writes for (小红书, 抖音, B站, 微博, 知乎, 快手, 公众号, 视频号, 朋友圈, TikTok, X, YouTube Shorts), the account profiles, the drafts (ours, and an earlier run of the original Easel's, read only), when trending lists were last read, and where the Easel guides are. It makes drafts only: the app never signs in to a platform or posts.",
+            "inputSchema": ["type": "object", "properties": [String: Any]()],
+        ],
+        [
+            "name": "social_profile",
+            "description": "An account's profile: six markdown files — identity, style, audience, platforms, preferences, memory — made from Easel's template, under the tab's profiles/<account>/. list | read (one file, or all six) | create (from the template) | write (a whole file's new text; the old one is moved aside). Fill it in with the person; never invent their account.",
+            "inputSchema": ["type": "object", "properties": [
+                "action": ["type": "string", "description": "list (default) | read | create | write"],
+                "account": ["type": "string", "description": "The account's name, e.g. 宇宙看板."],
+                "file": ["type": "string", "description": "identity | style | audience | platforms | preferences | memory"],
+                "text": ["type": "string", "description": "write: the file's whole new text (markdown)."],
+            ] as [String: Any]],
+        ],
+        [
+            "name": "social_trends",
+            "description": "Public trending lists, read now over plain HTTPS with no account and no API key: weibo (微博热搜 — weibo.com's own endpoint answers 403 without a visitor cookie, so it comes through v2.xxapi.cn, a third party, and says so), douyin (抖音热榜), bilibili (B站综合热门 videos), bilibili_search (B站热搜词), baidu (百度实时热搜), zhihu (知乎热榜), toutiao (今日头条热榜); google_trends (Google Trends' own daily RSS for a country: its newest ten rising searches, with rough search counts and a news story each — what people search, the list for TikTok, X and YouTube Shorts posts); x (X's trends for the latest hour — X's own want a sign-in, so they come from trends24.in, a third party, and say so); tiktok, youtube, wechat and xiaohongshu have no public list that answers without a sign-in or a key, and each says so and what to do instead; or all. Rank, title, heat, link and when it was read; saved under the tab's trends/ so a fact taken from a list can name it. A list says what people look at, not what is true: find the original source before using anything in it.",
+            "inputSchema": ["type": "object", "properties": [
+                "sources": ["type": "array", "items": ["type": "string"], "description": "Default: weibo, douyin, bilibili, baidu. [\"all\"] for every one. For an English post: [\"google_trends\", \"x\"]. \"google_trends:JP\" reads one list for another country than `geo`."],
+                "limit": ["type": "integer", "description": "Items per list, 5–50. Default 20."],
+                "geo": ["type": "string", "description": "The country for google_trends and x, two letters: US (default), GB, JP, SG, CA, AU, IN, DE, FR, KR, TW, HK… x has US, GB, JP, SG, CA, AU, IN, DE, FR, KR, MY, PH, ID, BR, MX, and WW for worldwide (any other reads worldwide, and says so)."],
+            ] as [String: Any]],
+        ],
+        [
+            "name": "social_page",
+            "description": "Read a public web page — one of the person's boards (the 宇宙看板 https://space.localkin.ai), the source of a fact — in the app's own off-screen browser, signed in to nothing: its title, all of its text as the page shows it once its scripts have run (numbers exactly as written, with the page's own dates), and a picture of it at the size asked (a real screenshot makes a good card), saved under the tab's captures/ with the text beside it. A page that draws only in animation frames (3D, canvas) shows what it had drawn by then.",
+            "inputSchema": ["type": "object", "properties": [
+                "url": ["type": "string", "description": "http(s) address."],
+                "width": ["type": "integer", "description": "Viewport width. Default 1080."],
+                "height": ["type": "integer", "description": "Viewport height, the picture's too. Default 1440."],
+                "top": ["type": "number", "description": "Scroll this many pixels down before the picture."],
+                "wait": ["type": "number", "description": "Seconds after it loads, for its scripts. Default 2.5."],
+                "chars": ["type": "integer", "description": "How much of its text to return. Default 12000."],
+            ] as [String: Any], "required": ["url"]],
+        ],
+        [
+            "name": "social_card",
+            "description": "Draw one card from your HTML/CSS, off-screen, and check it. Saved as a PNG under the tab's cards/ (its HTML beside it) and handed back for you to see, with an audit — in the page: text under 20 px (a problem) or under 24 px (fine for a corner label or a source line, not for body text), text spilling out of its box or off the card, text cut off by a box, pictures that did not load, an empty card; in the picture, Easel's card_audit: the content spans at least 80% of the height, no empty band over 15%, the bottom not left empty (on a wide card — X, a 公众号 cover — only a warning). Fix and draw again until it passes, then give the PNGs to social_draft in order. Pictures of this Mac go in as file:// paths under the art folder. Sizes by platform: 小红书 1080×1440 (3:4, the default) or 1080×1080; 朋友圈 1080×1080 (several are shown as a grid cut square; one alone may be 1080×1440); 公众号 cover 900×383 (2.35:1 — the editor also cuts a 1:1 from it, so keep what matters in the middle square, or draw a 1080×1080 as well); X 1600×900 (16:9, shown whole), 1080×1080 or 1080×1350 (4:5); TikTok photo mode 1080×1920 (9:16); a video's cover 1080×1920. English cards: put a Latin font first (-apple-system, Helvetica Neue, Avenir Next, Georgia), or give a whole page with <html lang=\"en\"> — bare markup is drawn as zh-CN, where PingFang's curly quotes come out full-width.",
+            "inputSchema": ["type": "object", "properties": [
+                "html": ["type": "string", "description": "The card: a whole page, or just the card's markup (it becomes the body)."],
+                "css": ["type": "string", "description": "Styles, if not in the html."],
+                "width": ["type": "integer", "description": "Default 1080. 1600 for X's 16:9, 900 for a 公众号 cover."],
+                "height": ["type": "integer", "description": "Default 1440 (小红书 3:4). 1080 for 1:1, 1350 for 4:5, 1920 for 9:16; 900 with width 1600 (X 16:9); 383 with width 900 (公众号 cover)."],
+                "name": ["type": "string", "description": "A short name for the file: cover, 02-planets…"],
+                "min_font": ["type": "number", "description": "Text under this many px (at 1080 wide) is pointed out. Default 24."],
+            ] as [String: Any], "required": ["html"]],
+        ],
+        [
+            "name": "social_draft",
+            "description": "Save a draft post: a folder under the tab's drafts/ with 发布文案.txt (platform, title options, body, tags, the cards in order, the sources), cards/01.png… (each with its HTML), the video if there is one, and meta.json with the platform and the source of every fact — then Easel's publish checklist on it (title and body length, pictures, tags, a number without a source, words that lead off the platform, absolute or scary wording, AI filler — in Chinese and in English). Each platform by its own numbers: 小红书 title 20, body 1,000, ≤18 pictures, 3:4; X 280 weighted (a Chinese character or an emoji counts 2, a link 23; Premium 25,000), ≤4 pictures and videos, ≤2 hashtags; TikTok caption 4,000 (2,200 through its API), ≤5 hashtags, a 9:16 video or up to 35 photos; YouTube Shorts ≤3 min, vertical or square, title 100, description 5,000, no < or >; 公众号 title 64 (32 through its API), summary 120, a 2.35:1 cover; 视频号 description 1,000, a video 0.33–3.0 wide; 朋友圈 ≤9 pictures, no hashtags. 抖音, B站, 快手, 视频号 and YouTube Shorts need `video` (TikTok too, unless it is photos): make it with pixelle_* — 1080×1920, 9:16. English posts are fine for TikTok, X and Shorts. It shows in the tab like a phone post, with 复制文案 and 打开发布页 for the person (朋友圈 has no web page: the phone's WeChat). Only a draft: posting is the person's own click on the platform. `draft` writes over one of ours (the old files moved aside).",
+            "inputSchema": ["type": "object", "properties": [
+                "platform": ["type": "string", "description": "小红书 (default) | 抖音 | B站 | 微博 | 知乎 | 快手 | 公众号 | 视频号 | 朋友圈 | TikTok | X | YouTube Shorts. Other names work too (tiktok; x, twitter, 推特; wechat article; channels; moments; shorts, 油管短视频); saved under the platform's own name."],
+                "title_options": ["type": "array", "items": ["type": "string"], "description": "Two or three titles, the one you would pick first. 小红书 ≤20 characters, 公众号 ≤64 (≤32 to be safe), YouTube Shorts ≤100, a TikTok photo post ≤90. X, 朋友圈 and 微博 have no title box: give a short name for the draft."],
+                "summary": ["type": "string", "description": "公众号's 摘要, ≤120 characters: the line under the title in a feed (without it WeChat takes the body's first 54)."],
+                "body": ["type": "string", "description": "The post's text, as it will be pasted; the tags go after it. For 公众号 the article, for YouTube the description, for X and TikTok the caption (counted with its tags)."],
+                "tags": ["type": "array", "items": ["type": "string"], "description": "Hashtags, # optional. 小红书 5–10, 抖音 3–5, TikTok ≤5, X ≤2, 朋友圈 none."],
+                "cards": ["type": "array", "items": ["type": "string"], "description": "Card PNG paths (from social_card, or any picture), in the order they are posted: the cover first (公众号: its 2.35:1 cover)."],
+                "video": ["type": "string", "description": "A video's path — a Pixelle run's final.mp4, say (1080×1920: right for TikTok, Shorts, 视频号, 抖音). Its size and length are measured and checked."],
+                "sources": ["type": "array", "description": "Every fact in the post, with where it is from and its date.",
+                            "items": ["type": "object", "properties": [
+                                "fact": ["type": "string", "description": "As written in the post."],
+                                "source": ["type": "string", "description": "Who says so: \"NASA Exoplanet Archive，经 space.localkin.ai\"."],
+                                "url": ["type": "string"],
+                                "date": ["type": "string", "description": "As of when: \"2026-09-28\"."],
+                            ] as [String: Any], "required": ["fact", "source"]] as [String: Any]],
+                "account": ["type": "string", "description": "The profile it was written for."],
+                "notes": ["type": "string", "description": "Anything for the person: the card style used, what to check."],
+                "slug": ["type": "string", "description": "A short name for the folder. Default: from the title."],
+                "draft": ["type": "string", "description": "Write over this draft of ours (a folder name from social_drafts)."],
+            ] as [String: Any], "required": ["title_options", "body"]],
+        ],
+        [
+            "name": "social_drafts",
+            "description": "The drafts, newest first; with `draft`, all of one — title options, body, tags, cards (you see up to four), video, sources, the checklist.",
+            "inputSchema": ["type": "object", "properties": [
+                "draft": ["type": "string", "description": "A folder name or title."],
+                "limit": ["type": "integer", "description": "How many to list. Default 20."],
+            ] as [String: Any]],
+        ],
+        [
             "name": "film_recut",
             "description": "Cut a film again from the files it has — shots, voice-over, music — without making anything new, and finish it: the title over the last shot, one warm grade, the picture doubled (each on unless turned off, here or in film_make). Use after a shot, the narration or the music was replaced by hand, or to change the finishing.",
             "inputSchema": ["type": "object", "properties": [
@@ -1305,7 +1523,7 @@ enum PanelTools {
         case "box_services": return await boxServices(args)
         case "studio_note":
             guard let place = Self.place.flatMap(StudioAgent.Place.init(rawValue:)) else {
-                return ("studio_note 只给 Film、Motion、Comfy、Montage 标签的 agent 用", true)
+                return ("studio_note 只给 Film、Motion、Pixelle、Comfy、Montage、Easel 标签的 agent 用", true)
             }
             guard let text = (args["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
                 return ("studio_note 要 text", true)
@@ -1763,6 +1981,11 @@ enum PanelTools {
             guard StudioAgent.montage.running else { return ("Montage 的 agent 没在跑", false) }
             StudioAgent.montage.stop()
             return ("停了。项目还在盒子上，看板上能看", false)
+        case "pixelle_status", "pixelle_service", "pixelle_make", "pixelle_rework", "pixelle_wait", "pixelle_cancel", "pixelle_image",
+             "pixelle_voice", "pixelle_templates", "pixelle_voices", "pixelle_runs":
+            return await PixelleTools.call(name, args)
+        case "social_status", "social_profile", "social_trends", "social_page", "social_card", "social_draft", "social_drafts":
+            return await SocialTools.call(name, args)
         case "film_recut":
             guard let id = args["film"] as? String else { return ("film_recut 需要 film", true) }
             switch FilmStudio.shared.recut(film: id, titleCard: args["title_card"] as? Bool, grade: args["grade"] as? Bool,

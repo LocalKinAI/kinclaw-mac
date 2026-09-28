@@ -663,6 +663,10 @@ struct SpotlightContentView: View {
                     ComfyView()
                 case .montage:
                     MontageView()
+                case .pixelle:
+                    PixelleView()
+                case .social:
+                    SocialView()
                 }
             }
             .frame(maxHeight: .infinity)
@@ -1334,7 +1338,7 @@ struct SpotlightContentView: View {
                     }
                 }
 
-            case .code, .term, .web, .film, .motion, .jev, .comfy, .montage:
+            case .code, .term, .web, .film, .motion, .jev, .comfy, .montage, .pixelle, .social:
                 // Unreachable — these modes have no agent picker: Code shows a
                 // static "🦞 kincode" label, Term and Web have toolbars of
                 // their own. Defensive empty case.
@@ -3334,7 +3338,7 @@ struct SpotlightContentView: View {
     ///   .code   → no agent (kincode is fixed)
     private func pickDefaultAgent(for mode: ChatMode) -> Agent? {
         switch mode {
-        case .code, .term, .web, .film, .motion, .jev, .comfy, .montage:
+        case .code, .term, .web, .film, .motion, .jev, .comfy, .montage, .pixelle, .social:
             return nil
         case .chat:
             if !chatLastAgentSlug.isEmpty,
@@ -3385,7 +3389,7 @@ struct SpotlightContentView: View {
             // localkin repo and carry `domain == "kinclaw-private"`.
             // Both flavours route through the same chatBody surface.
             return agent.name.hasPrefix("KinClaw") || agent.domain == "kinclaw-private"
-        case .code, .term, .web, .film, .motion, .jev, .comfy, .montage: return false   // never matches
+        case .code, .term, .web, .film, .motion, .jev, .comfy, .montage, .pixelle, .social: return false   // never matches
         }
     }
 
@@ -3399,7 +3403,7 @@ struct SpotlightContentView: View {
         switch mode {
         case .chat:   chatLastAgentSlug = s
         case .cowork: coworkLastSoulSlug = s
-        case .code, .term, .web, .film, .motion, .jev, .comfy, .montage: break
+        case .code, .term, .web, .film, .motion, .jev, .comfy, .montage, .pixelle, .social: break
         }
     }
 

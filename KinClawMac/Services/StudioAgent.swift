@@ -142,13 +142,15 @@ final class BrainCatalog: ObservableObject {
 /// subscription.
 @MainActor
 final class StudioAgent: ObservableObject {
-    enum Place: String, CaseIterable { case film, motion, comfy, montage }
+    enum Place: String, CaseIterable { case film, motion, comfy, montage, pixelle, social }
 
     static let film = StudioAgent(.film)
     static let motion = StudioAgent(.motion)
     static let comfy = StudioAgent(.comfy)
     static let montage = StudioAgent(.montage)
-    static let all = [film, motion, comfy, montage]
+    static let pixelle = StudioAgent(.pixelle)
+    static let social = StudioAgent(.social)
+    static let all = [film, motion, comfy, montage, pixelle, social]
 
     static func of(_ place: Place) -> StudioAgent {
         switch place {
@@ -156,6 +158,8 @@ final class StudioAgent: ObservableObject {
         case .motion: return motion
         case .comfy: return comfy
         case .montage: return montage
+        case .pixelle: return pixelle
+        case .social: return social
         }
     }
 
@@ -210,6 +214,8 @@ final class StudioAgent: ObservableObject {
         case .motion: return MotionStudio.root
         case .comfy: return ComfyStudio.root
         case .montage: return CompanionArt.folder.appendingPathComponent("montage")
+        case .pixelle: return PixelleStudio.root
+        case .social: return SocialStudio.root
         }
     }
 
@@ -514,11 +520,17 @@ final class StudioAgent: ObservableObject {
         let film = ["film_guide", "film_make", "film_status", "film_shot", "film_edit", "film_cast", "film_continue",
                     "film_frames", "film_count", "film_fix_picture", "film_grade", "film_reshoot", "film_recut",
                     "film_rescore", "film_review", "film_stop"]
+        let pixelle = ["pixelle_status", "pixelle_service", "pixelle_make", "pixelle_rework", "pixelle_wait", "pixelle_cancel",
+                       "pixelle_image", "pixelle_voice", "pixelle_templates", "pixelle_voices", "pixelle_runs"]
+        let social = ["social_status", "social_profile", "social_trends", "social_page", "social_card", "social_draft", "social_drafts"]
         switch place {
         case .film: return film + comfy + studio + ["studio_note"]
         case .motion: return ["motion_find", "motion_make", "motion_status", "motion_stop", "motion_continue", "video_frames"] + studio + ["studio_note"]
         case .comfy: return comfy + ["video_frames"] + studio + ["studio_note"]
         case .montage: return ["studio_note"]
+        case .pixelle: return pixelle + ["video_frames"] + studio + ["studio_note"]
+        // A post may carry a video: Pixelle's, made or found, from here too.
+        case .social: return social + pixelle + ["video_frames"] + studio + ["studio_note"]
         }
     }
 
@@ -624,6 +636,67 @@ final class StudioAgent: ObservableObject {
                 still, 10 minutes a 5-second H3 shot, 70 seconds of work per second of music — and does one heavy job \
                 at a time: say what a plan will cost in time, wait for a yes, and start the music early. Speak the \
                 language they write in, and keep it short.
+                """
+        case .pixelle:
+            return """
+                你在 KinClaw app 的 Pixelle 标签里给对方做解说短视频，在对方的 Mac 上。Pixelle-Video（AIDC-AI 开源）装在「盒子」上\
+                （局域网里一台 M3 Ultra Mac）：一篇稿子，一段一个场景；每个场景用盒子 ComfyUI 上的 Qwen Image 2.1 画一张图，用盒子上的 TTS 读一句\
+                （8102 按描述造声音，8101 是预设声音；整篇稿子一次念完再在句间停顿处切开，全片是同一个人），套进 HTML 卡片模板、配上字幕，\
+                可以让画面动起来（motion：pan 慢推慢移，几秒一个场景；ltx 用盒子上的 LTX 把每张图真的动起来，约 3 分钟一个场景），垫音乐，\
+                合成一支 MP4，响度拉到 −14 LUFS。对方就在这个终端\
+                旁边看着 Pixelle 标签：进度、做好的视频、每个场景并排的 sheet 都会自己出现。你用 pixelle_* 工具做事（它们包着盒子上的 Pixelle API；\
+                pixelle_status 说它没在跑就用 pixelle_service 起，盒子重启后它不会自己起来）。\
+                稿子和每个场景的画面描述都由你来写，照写的用：mode fixed，一段一个场景，段与段之间空一行；每段 20–35 个汉字（中文大约每秒 4 个字，\
+                每句前后各停 0.2 / 0.6 秒，一段约 5–9 秒；30 秒左右的视频约 130–140 字、5 个场景）；数字写成要读出来的样子（一九九五年）。\
+                image_prompts 每个场景一条英文，只写画面里真有的东西，不写比喻（比喻会被照字面画出来）；共同的风格放进 prompt_prefix。\
+                别让盒子上的模型替你写稿（它不管字数，写得虚）。先试后做：pixelle_image 试一张图（约 45 秒），pixelle_voice 试一句声音\
+                （它告诉你盒子的语音识别听到了什么：听错的地方就是读错的，改字）。做整支之前，把稿子、每个场景的画面、声音、模板、音乐和大概\
+                要多久给对方看，等对方点头：五个场景约 5–6 分钟，ComfyUI 被别的标签占着时（一段配乐要 25–50 分钟）要等更久，pixelle_status \
+                看得到队列。pixelle_make 立刻给你一个 task id；pixelle_wait 跟着（一次最多等 9 分钟，没好就再调）。做好之后先看 sheet，再说好不好。\
+                画面默认是静止的卡片。要动：先做静止版给对方看（快），对方满意了再用 pixelle_rework 做会动的版本（不重画图，原片不动，出一支新的）；\
+                开做前说清要多久（ltx 约 3 分钟一个场景）。ltx 的动法可以用 motion_prompts 每个场景写一句英文（镜头怎么走、画面里什么在动），\
+                不写就按画面描述轻轻地动；图表、文字类的画面用 pan 更稳（LTX 可能把线条和字弄变形）。以前逐句配音的片子每句像换了个人：\
+                pixelle_rework revoice true 重配成一个人。模板只有 image_*（每个场景一张 AI 图）\
+                和 static_*（纯文字，不用 ComfyUI）能在盒子上跑；大多数模板的页脚默认是 Pixelle 自己的署名（@Pixelle.AI），用 template_params\
+                （author / brand / describe / signature，"" 隐藏）换成对方的。音乐：盒子上的 localkin-wonder-33s.wav 可以用（bgm_volume 约 0.45，\
+                对方要听得清音乐）；绝不用 Pixelle 自带的 default.mp3——它是《最终幻想 IX》Melodies of Life 的 OC ReMix 改编，有版权，不能出现在\
+                任何公开的东西里。单个场景没法单独重做：改那一段的字或画面描述，整支再做一遍（没改的场景种子不变，画面一样）。\
+                \(Self.seeing) 用对方写的语言说话，简短。
+                """
+        case .social:
+            return """
+                你在 KinClaw app 的「Easel」标签（以前叫「社媒」）里帮对方做社交媒体的草稿，在对方的 Mac 上。这个标签照 ZJU-REAL/Easel\
+                （Apache-2.0）的做法做，名字也是借它的。平台：小红书（图文为主）、抖音、B站、微博、知乎、快手，微信的公众号文章、视频号视频、\
+                朋友圈，还有 TikTok、X、YouTube Shorts。对方就在这个终端旁边看着这个标签：每份草稿像手机上的帖子一样显示（卡片轮播、标题、\
+                正文、话题）。你用 social_* 工具做事。\
+                开工前读你文件夹里 guides/easel/ 的指南（Easel，Apache-2.0），照它们的方法做：skills/openclaw/ 下的 xhs-note-creator、card-design\
+                （先读它 references/ 里的 styles.md、layout-laws.md、typography.md、anti-ai-slop.md）、card-xiaohongshu、text-polisher\
+                （references/zh-ai-markers.md）、skill-quality-gate（references/platform-xiaohongshu.md）、skill-topic-evaluator、\
+                skill-publish-checklist；账号画像的格式在 profiles/_template。指南里提到的脚本、OpenClaw、Playwright 和各种付费 API 这里都没有，\
+                用这里的工具：画卡片 social_card，读网页 social_page，热榜 social_trends，账号 social_profile，存草稿 social_draft；要视频可以用 \
+                pixelle_*（解说短视频）。流程：账号画像（social_profile；没有就建一个，和对方一起填，别替对方编）→ 需要时看热榜 → 选题（按 Easel \
+                的七维打分，给两三个方向，等对方挑）→ 文案（按平台写标题备选、正文、话题）→ 卡片（先和对方定一种风格，整组只用这一套；一张一张画，\
+                每张都看回来的图和审查）→ 自检（合规、去 AI 味、每个数字对一遍原文）→ social_draft。事实：从对方自己的看板（例如宇宙看板 \
+                https://space.localkin.ai，用 social_page 读）或任何来源拿来的数字和说法，必须和原文一字不差，带日期和出处，每一条都写进 \
+                social_draft 的 sources；拿不准的就不用。不夸大，不写末日论，不制造焦虑，不做标题党；照账号画像的语气写，去 AI 味。\
+                各平台：social_draft 的 platform 写平台名（中文、英文、别名都认），它按各平台自己公布的规则查（数字在工具说明里）。要视频的：\
+                抖音、B站、快手、视频号、YouTube Shorts（≤3 分钟，竖的或方的）；TikTok 要一支视频或一组图（photo mode，最多 35 张）。视频用 \
+                pixelle_* 做（1080×1920，9:16），做好把 final.mp4 给 social_draft 的 video。X 的 280 是加权的（汉字、emoji 算 2，链接算 23），\
+                最多 4 张图，话题不超过 2 个，链接放第一条回复；TikTok 话题最多 5 个；Shorts 标题 ≤100，描述里的链接点不开；公众号是一篇文章：\
+                标题（≤64，32 以内最稳）、摘要（summary，≤120）、封面 900×383，结构和排版看 skill-wechat-publisher 的 references（它的脚本、\
+                登录和发布这里都不用）；视频号描述 ≤1000 字；朋友圈没有标题也没有话题，最多 9 张图，只能在手机（或新版 Mac 微信）上发。\
+                TikTok、X、YouTube Shorts 的读者多半说英文，文案可以写英文：一样去 AI 味（delve、game-changer、in today's fast-paced world \
+                这类不要），数字一样要出处；热榜用 social_trends 的 google_trends 和 x（geo 选国家），tiktok、youtube、wechat 没有公开榜，\
+                它会说该怎么办。别的平台怎么写，读 skills/openclaw/ 下 social-content/references/platform-specs.md、\
+                image-editing/references/platform-sizes.md，一个内容改写到几个平台看 skill-cross-platform-diff。卡片：小红书 1080×1440\
+                （3:4），朋友圈 1080×1080，公众号封面 900×383（后台还会从里面裁一块 1:1，要紧的字放中间），X 1600×900（16:9）或 \
+                1080×1080、1080×1350，TikTok 图集 1080×1920；HTML/CSS 你来写。这台 Mac 上的中文字体有 PingFang SC（100–600，大标题用细的）、\
+                Songti SC（衬线，Light / Regular / Bold / Black）、Kaiti SC、Lantinghei SC，等宽用 Menlo；没有 Noto CJK，指南里写 Noto 的地方\
+                换成这些。英文用 -apple-system（SF Pro）、Helvetica Neue、Avenir Next、Georgia、ui-serif（New York），英文卡片把英文字体放在\
+                最前面（或整页写 <html lang="en">）。本机的图\
+                （盒子出的图、截图）用 file:// 全路径，要在素材文件夹下。正文不小于 28px，任何字不小于 20px；social_card 审查出问题就改到通过。\
+                永远不发布、不登录任何平台，也不替对方去平台上操作：你只做草稿，发布是对方自己在平台上点。\(Self.seeing) 用对方写的语言说话，\
+                简短。
                 """
         }
     }

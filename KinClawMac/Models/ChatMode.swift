@@ -33,6 +33,12 @@ import Foundation
 ///   .montage → OpenMontage on the box: an agent there makes the video with
 ///             OpenMontage's pipelines and the box's own models, and its
 ///             Backlot board shows the production as it happens
+///   .pixelle → Pixelle-Video on the box: a script, a picture and a voice a
+///             scene, cards with subtitles and music, one narrated video — its
+///             agent writes the script and the pictures' words
+///   .social → Easel (was 社媒): our own Easel — an account's profile, trending lists,
+///             copy, cards drawn and checked, a draft; posting stays the
+///             person's own click
 ///
 /// This mirrors Claude Code Desktop's three-mode top bar, but plugged
 /// into the LocalKin kernel family (kinclaw + kincode) instead of
@@ -49,6 +55,8 @@ enum ChatMode: String, CaseIterable, Identifiable {
     case jev
     case comfy
     case montage
+    case pixelle
+    case social
 
     var id: String { rawValue }
 
@@ -65,6 +73,8 @@ enum ChatMode: String, CaseIterable, Identifiable {
         case .jev:    return "Jev"
         case .comfy:  return "Comfy"
         case .montage: return "Montage"
+        case .pixelle: return "Pixelle"
+        case .social: return "Easel"
         }
     }
 
@@ -83,6 +93,8 @@ enum ChatMode: String, CaseIterable, Identifiable {
         case .jev:    return "gamecontroller"
         case .comfy:  return "point.3.connected.trianglepath.dotted"
         case .montage: return "rectangle.stack.badge.play"
+        case .pixelle: return "wand.and.stars.inverse"
+        case .social: return "megaphone"
         }
     }
 
@@ -109,6 +121,10 @@ enum ChatMode: String, CaseIterable, Identifiable {
             return "Comfy — 盒子上 ComfyUI 的现成工作流：挑模板、填表、运行；或者一句话让 agent 挑和改"
         case .montage:
             return "Montage — OpenMontage，在盒子上：说想拍什么，agent 在那边写稿、出图、拍片、配乐、剪辑；上面是它的 Backlot 看板，下面是 agent 本身"
+        case .pixelle:
+            return "Pixelle — Pixelle-Video，在盒子上：一段稿子一个场景，Qwen Image 出图、盒子上的声音配音、卡片加字幕、配乐，合成一支解说短视频；agent 写稿、试图、试音，你点头了再做"
+        case .social:
+            return "Easel — 社交媒体的草稿，照 ZJU-REAL/Easel 的做法：账号画像、热榜、选题、文案、卡片、自检；小红书、抖音、B站、公众号、视频号、朋友圈、TikTok、X、YouTube Shorts；发布永远是你自己在平台上点"
         }
     }
 }
@@ -161,7 +177,7 @@ enum ModeGroup: String, CaseIterable, Identifiable {
         switch self {
         case .talk:   return [.chat, .cowork]
         case .work:   return [.term]
-        case .studio: return [.film, .motion, .montage, .comfy]
+        case .studio: return [.film, .motion, .pixelle, .montage, .comfy, .social]
         case .play:   return [.jev]
         }
     }
