@@ -8,6 +8,28 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Added — Remote Control for every Claude Code session the app starts
+
+"这两点是我们下面要加的，就是远程控制，所有的都要支持，包括你自己" → "第一层现在就开".
+The first layer is Claude's own Remote Control: the Studio agents start
+with `--remote-control "LocalKin · <tab>"` and the Code tab's Claude
+sessions with `"LocalKin · Code · <folder>"`, so the Claude app on a phone
+and claude.ai/code list them by name and can follow and steer them. Only on
+the Claude account (a session on Ollama or kinfer is left as it was);
+`kinclaw.agents.remoteControl` turns it off.
+
+The second layer ("开始做第二层吧") is LocalKin's own phone page, served by
+the localkin console over Tailscale (localkin-core). What the app gives it
+is one panel tool, `studio_agents`: every Studio agent at once — running,
+working or waiting, what needs the person, its last terminal lines, its
+Remote Control link, and `busy`, what its tab is making now (a film being
+shot, a take, a Pixelle job, a ComfyUI run), so the phone offers a tab's
+stop button only while there is something to stop. Also fixed on the way:
+a terminal read row by row had a NUL after every Chinese character (the
+wide character's placeholder cell), in `montage_status` and wherever an
+agent's screen is read; it is now read the way a selection reads it. AG-UI
+is the layer after.
+
 ### Added — a Studio guide: what each tab and each workflow is best at
 
 "我在studio有这么多工作流和工具，但是我并不知道他们都能干什么，甚至合适干什么，

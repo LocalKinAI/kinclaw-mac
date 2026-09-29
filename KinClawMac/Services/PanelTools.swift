@@ -510,6 +510,13 @@ enum PanelTools {
             ],
         ],
         [
+            "name": "studio_agents",
+            "description": "Every Studio tab's agent at once, for the remote view (the LocalKin console's phone page): whether it runs, whether it is working now, its brain, what needs the person (a sign-in, a question on screen), the last lines of its terminal, its Remote Control link on claude.ai/code when it has one, and `busy`: what its tab is making right now (a film being shot, a take, a Pixelle job, a ComfyUI run), whoever asked for it. Answers JSON.",
+            "inputSchema": ["type": "object", "properties": [
+                "lines": ["type": "integer", "description": "Terminal lines per agent, default 12, at most 40."],
+            ] as [String: Any]],
+        ],
+        [
             "name": "studio_note",
             "description": """
                 Write in your notebook — CLAUDE.md in your folder, which you \
@@ -1543,6 +1550,11 @@ enum PanelTools {
             return ((opened ? "设置窗口打开了" : "设置窗口没出来")
                     + "\n激活策略=\(NSApp.activationPolicy().rawValue) active=\(NSApp.isActive)\n" + windows.joined(separator: "\n"), !(sent && opened))
         case "box_services": return await boxServices(args)
+        case "studio_agents":
+            let keep = max(0, min(40, FilmTools.int(args["lines"]) ?? 12))
+            let list = StudioAgent.all.map { $0.snapshot(lines: keep) }
+            let data = try? JSONSerialization.data(withJSONObject: list, options: [.withoutEscapingSlashes])
+            return (data.flatMap { String(data: $0, encoding: .utf8) } ?? "[]", false)
         case "studio_note":
             guard let place = Self.place.flatMap(StudioAgent.Place.init(rawValue:)) else {
                 return ("studio_note 只给 Film、Motion、Pixelle、Comfy、Montage、Easel 标签的 agent 用", true)

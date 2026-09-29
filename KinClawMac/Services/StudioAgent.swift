@@ -13,6 +13,21 @@ enum AgentHarness: String, Codable, CaseIterable {
     var binary: String? { AgentLauncher.available.first { $0.integration.id == integration.id }?.binary }
 }
 
+/// Claude's Remote Control for the Claude Code sessions this app starts —
+/// the Studio agents and the Code tab's — so the Claude app on a phone and
+/// claude.ai/code show them by name and can follow and steer them. Jacky,
+/// 2026-09-28: remote control of everything, "包括你自己", "第一层现在就开".
+/// It needs the Claude account; a session on another brain is left as it was.
+enum RemoteControl {
+    static let key = "kinclaw.agents.remoteControl"
+    static var on: Bool { UserDefaults.standard.object(forKey: key) as? Bool ?? true }
+
+    /// `--remote-control <name>` for a Claude Code session on the account, else nothing.
+    static func args(_ name: String, brain: AgentBrain) -> [String] {
+        on && brain.source == .account ? ["--remote-control", name] : []
+    }
+}
+
 /// What the agent thinks with: where the model is served, and which one.
 struct AgentBrain: Hashable, Codable {
     enum Source: String, Codable, CaseIterable {
@@ -183,6 +198,9 @@ final class StudioAgent: ObservableObject {
     /// Its harness keeps a conversation of this tab's to go back to: what
     /// "接着上一次" and 重启 return to.
     @Published private(set) var resumable = false
+    /// Its Remote Control session on claude.ai (the Claude app opens the same),
+    /// read off its screen when it starts: the phone view links to it.
+    @Published private(set) var remoteURL: String?
 
     private(set) var terminal: LocalProcessTerminalView?
     private var relay: StudioAgentExitRelay?
@@ -313,6 +331,8 @@ final class StudioAgent: ObservableObject {
         if !allowed.isEmpty { args += ["--allowedTools", allowed.joined(separator: ",")] }
         args += ["--disallowedTools", "Edit,Write,NotebookEdit", "--append-system-prompt", briefing]
         if brain.source != .account { args += ["--model", brain.model] }
+        // Named, always: a bare --remote-control would take the first words as its name.
+        args += RemoteControl.args("LocalKin · " + (ChatMode(rawValue: place.rawValue)?.title ?? place.rawValue), brain: brain)
         if let session { args += ["--resume", session] }
         if let words, !words.isEmpty { args.append(words) }
         return args
@@ -469,19 +489,79 @@ final class StudioAgent: ObservableObject {
     }
 
     /// For the first half minute, what the screen says that needs a person:
-    /// a sign-in that has run out, a folder to trust.
+    /// a sign-in that has run out, a folder to trust. And, for up to a minute,
+    /// its Remote Control link, which scrolls away once it starts working.
     private func watchScreen() {
         watcher?.cancel()
+        remoteURL = nil
         watcher = Task { [weak self] in
-            for _ in 0..<15 {
+            for tick in 0..<30 {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
                 guard !Task.isCancelled, let self, let terminal = self.terminal else { return }
-                if let problem = Self.problem(terminal) ?? Self.asking(terminal) {
+                if self.remoteURL == nil { self.remoteURL = Self.remoteLink(terminal) }
+                if tick < 15, let problem = Self.problem(terminal) ?? Self.asking(terminal) {
                     self.note = problem
                     return
                 }
+                if tick >= 14, self.remoteURL != nil || !RemoteControl.on || self.harness != .claude { return }
             }
         }
+    }
+
+    /// The claude.ai/code session Remote Control shows for this terminal.
+    static func remoteLink(_ terminal: LocalProcessTerminalView) -> String? {
+        let screen = AgentTerminalSessions.visibleLines(terminal.getTerminal()).joined(separator: "\n")
+        guard let range = screen.range(of: #"https://claude\.ai/code/session_[A-Za-z0-9_-]+"#, options: .regularExpression) else { return nil }
+        return String(screen[range])
+    }
+
+    /// What the tab itself is making now, whoever asked for it — the agent,
+    /// the person in the tab, or the phone. The remote view shows a tab's
+    /// stop button only while this says something.
+    var busy: String? {
+        switch place {
+        case .film:
+            guard let id = FilmStudio.shared.shooting else { return nil }
+            return "在拍「\(FilmStudio.shared.films.first { $0.id == id }?.title ?? id)」"
+        case .motion:
+            let studio = MotionStudio.shared
+            guard let id = studio.working else { return nil }
+            let title = studio.takes.first { $0.id == id }?.title ?? id
+            return "在拍「\(title)」" + (studio.progress.map { "：\($0)" } ?? "")
+        case .pixelle:
+            guard let job = PixelleStudio.shared.job, job.state == .running else { return nil }
+            return "在做「\(job.title)」：\(job.progress)"
+        case .comfy:
+            return ComfyStudio.shared.working
+        case .montage, .social:
+            return nil
+        }
+    }
+
+    /// For the remote view (the LocalKin console's phone page): what it needs
+    /// to show this agent — running, working or waiting, what needs the
+    /// person, the last lines of its terminal, its Remote Control link, and
+    /// what its tab is busy making.
+    func snapshot(lines keep: Int) -> [String: Any] {
+        var rows: [String] = []
+        if let terminal {
+            rows = AgentTerminalSessions.visibleLines(terminal.getTerminal())
+            while let last = rows.last, last.trimmingCharacters(in: .whitespaces).isEmpty { rows.removeLast() }
+            if remoteURL == nil { remoteURL = Self.remoteLink(terminal) }
+        }
+        let screen = rows.joined(separator: "\n").lowercased()
+        var out: [String: Any] = [
+            "tab": place.rawValue, "title": ChatMode(rawValue: place.rawValue)?.title ?? place.rawValue,
+            "running": running, "harness": harness.title, "brain": brainTitle,
+            "working": running && screen.contains("esc to interrupt"),
+            "lines": Array(rows.suffix(keep)),
+        ]
+        if let note { out["note"] = note }
+        if let remoteURL { out["remote"] = remoteURL }
+        if let terminal, let needs = Self.problem(terminal) ?? Self.asking(terminal) { out["needs"] = needs }
+        // Always there, "" when idle: its absence tells the console an older app is answering.
+        out["busy"] = busy ?? ""
+        return out
     }
 
     /// What an agent's terminal is asking, if it is asking something a

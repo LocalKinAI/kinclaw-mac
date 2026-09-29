@@ -385,6 +385,7 @@ final class AgentTerminalSessions: ObservableObject {
         switch harness {
         case .claude:
             if brain.source != .account, !brain.model.isEmpty { args += ["--model", brain.model] }
+            args += RemoteControl.args("LocalKin · Code · " + URL(fileURLWithPath: folder(of: s)).lastPathComponent, brain: brain)
             if let id = s.conversation {
                 if CodeHistory.claudeFile(id, in: folder(of: s)) != nil {
                     args += ["--resume", id]
@@ -472,10 +473,14 @@ final class AgentTerminalSessions: ObservableObject {
         return text.components(separatedBy: "\n")
     }
 
-    /// The rows on screen, one string each.
+    /// The rows on screen, one string each, read the way a selection reads
+    /// them: a wide character (every Chinese one) is followed by an empty
+    /// placeholder cell, and a cell nothing was written to holds NUL — left
+    /// in, each 中文 character came out with a \0 after it.
     static func visibleLines(_ terminal: Terminal) -> [String] {
         (0..<terminal.rows).map { row in
-            terminal.getLine(row: row)?.translateToString(trimRight: true) ?? ""
+            (terminal.getLine(row: row)?.translateToString(trimRight: true, skipNullCellsFollowingWide: true) ?? "")
+                .replacingOccurrences(of: "\u{0}", with: " ")
         }
     }
 
