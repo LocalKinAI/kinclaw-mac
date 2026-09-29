@@ -8,6 +8,56 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Added — a Studio guide: what each tab and each workflow is best at
+
+"我在studio有这么多工作流和工具，但是我并不知道他们都能干什么，甚至合适干什么，
+你可以给我每个加说明和指导吗，分析他们最擅长什么".
+
+- **A "?" at the end of the Studio group** opens the guide: what someone
+  wants to make and the tab that makes it best (a click goes there); each
+  tab's card — what it does, what it is best at, what it is not, how long it
+  takes on the box, and how to ask its agent; and the box's services. Every
+  time in it was measured on the box.
+- **Every Studio agent is told the same map**, so a request that belongs to
+  another tab is sent there with the reason instead of being forced.
+- **Every ComfyUI template carries a note** (Resources/studio/
+  comfy-templates.json, from reading each template and checking its models
+  and nodes against the box): a Chinese title, what it is best at, the catch,
+  whether it runs on the box, needs a download, is paid cloud, or trips on the
+  Mac (int8 models, the 3D bake nodes), and its time when measured. The Comfy
+  tab shows them in the list and finds templates by them in Chinese, and
+  comfy_templates lists them for the agent.
+
+### Added — YuE2 songs for Film, Pixelle, Montage and Easel
+
+"yue2生成的音乐很好啊" → "都做吧". YuE2 (M-A-P's open lyrics-to-song model,
+in ComfyUI on the box as two templates: text to music, and a cover of a song
+given) makes a whole song with a voice and words — 80.8 s in 1349 s on the
+box, about 17 s of work a second of music, four times MiniMax Music 3's.
+
+- The Pixelle, Montage and Easel agents now hold the Comfy tools (Film's had
+  them), and every brief says how a song is made — the template, its fields,
+  what it costs, that ComfyUI is busy meanwhile — and where it goes.
+- **film_rescore** takes `music_file`: a song already made is laid under the
+  film instead of composing one; `voice: false` keeps the narration and only
+  changes the music.
+- **Pixelle**: `bgm_path` may be a sound file on this Mac (pv.py copies it to
+  the box's data/bgm/ first), and a remake can change only the music. A remake
+  that does not say how the scenes move now keeps each scene's motion — its
+  clips put in the window again under the new sound — instead of turning a
+  moving video still.
+- **Pixelle's LTX scenes are smoothed.** A scene longer than its clip plays
+  it slower (up to 1.5×), which at 24 frames a second stuttered; RIFE in the
+  box's ComfyUI now doubles each clip's frames first, a few seconds a scene
+  (two seconds of a slowed scene: 43 different frames before, 60 of 60 after).
+  While other tabs hold ComfyUI a scene goes unsmoothed rather than waiting,
+  and its motion says so; `smooth: false` turns it off. RIFE, FILM,
+  Real-ESRGAN and SeedVR2 were measured on the box for this — only RIFE is
+  cheap enough for every video (SeedVR2: six minutes a second of video).
+- **The Comfy tab plays sounds itself.** A YuE2 song (.flac) handed to the
+  Mac's default app opened Baidu Netdisk, which had claimed flac; now it plays
+  in the tab, and its menu opens QuickTime.
+
 ### Added — Motion: a third route, 提示词白模 (a set from words, filmed by H3)
 
 "我们可以实现用提示次生成白模吗，就是确定视频轨迹，然后围绕白膜生出首帧……然后联合轨迹和多桢一起渲染成视频动画" —

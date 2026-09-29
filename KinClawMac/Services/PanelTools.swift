@@ -973,10 +973,11 @@ enum PanelTools {
                     "one_take": ["type": "boolean", "description": "Default true: the whole script read in one take and cut at the pauses between lines — one narrator, and the lines flow like narration. false: line by line (8102 then makes a different voice for every line). If a take cannot be cut cleanly it falls back to line by line and the result says so."],
                     "motion": ["type": "string", "description": "none (default: still pictures) | pan (a slow push-in, pull-out or drift, eased, a few seconds' work a scene) | ltx (LTX-2 image-to-video on the box: the picture really moves — light, water, particles, a slow camera — about 3 minutes a scene, 6 s of motion at most, longer scenes play it a little slower). Only image_ templates; one that shows the picture only blurred or tinted keeps it still and says why."],
                     "motion_prompts": ["type": "array", "items": ["type": "string"], "description": "ltx: one per scene, in English, how that scene moves (\"slow push-in, the star's glow pulsing, dust drifting\"), used as written. Left out: the picture prompt plus a gentle cinematic move."],
+                    "smooth": ["type": "boolean", "description": "ltx: RIFE doubles each clip's frames first (a few seconds a scene in ComfyUI), so a scene played slower to fit its line stays smooth. Default true; while other tabs hold ComfyUI a scene goes unsmoothed and the result says so."],
                     "tts_voice": ["type": "string", "description": "8101's preset: vivian, serena, uncle_fu, dylan, eric, ryan, aiden, ono_anna, sohee (pixelle_voices)."],
                     "tts_speed": ["type": "number", "description": "0.5–2.0, default 1.0."],
                     "tts_language": ["type": "string", "description": "zh (default) | en | ja | ko."],
-                    "bgm_path": ["type": "string", "description": "Music from the box's ~/Pixelle-Video/data/bgm/: localkin-wonder-33s.wav (33.75 s, hushed start rising to radiant, −20.5 LUFS). Left out: no music. default.mp3 is refused: a copyrighted OC ReMix."],
+                    "bgm_path": ["type": "string", "description": "Music: a name in the box's ~/Pixelle-Video/data/bgm/ — localkin-wonder-33s.wav (33.75 s, hushed start rising to radiant, −20.5 LUFS) — or a sound file on this Mac (a YuE2 song comfy_run brought back), copied there first. Left out: no music. default.mp3 is refused: a copyrighted OC ReMix."],
                     "bgm_volume": ["type": "number", "description": "How loud the music is. The person wants it clearly heard, a few dB under the voice: about 0.45 for localkin-wonder-33s.wav."],
                     "bgm_mode": ["type": "string", "description": "loop (default) | once. The music fades out over the last 2 s."],
                     "master_audio": ["type": "boolean", "description": "The loudness pass (default on)."],
@@ -1003,10 +1004,11 @@ enum PanelTools {
                 "tts_url": ["type": "string", "description": "With revoice: 8102 | 8101 (default: as before)."],
                 "tts_voice": ["type": "string", "description": "With revoice and 8101: the preset."],
                 "tts_speed": ["type": "number", "description": "With revoice: 0.5–2.0."],
-                "motion": ["type": "string", "description": "none (default) | pan | ltx — as in pixelle_make."],
+                "motion": ["type": "string", "description": "Left out: every scene keeps the motion it had (a moving video stays moving, its clips reused). none makes them still; pan | ltx makes them move anew, as in pixelle_make."],
                 "motion_prompts": ["type": "array", "items": ["type": "string"], "description": "ltx: one per scene (all scenes, in order), used as written."],
                 "scenes": ["type": "array", "items": ["type": "integer"], "description": "Which scenes move (1-based). Default all."],
-                "bgm_path": ["type": "string", "description": "Music (default: as before); \"\" for none."],
+                "smooth": ["type": "boolean", "description": "ltx scenes, kept or new: RIFE doubles the frames first. Default true."],
+                "bgm_path": ["type": "string", "description": "Music (default: as before): a name in the box's data/bgm/ or a sound file on this Mac (a YuE2 song), copied there first; \"\" for none. Changing only the music is a rework too."],
                 "bgm_volume": ["type": "number", "description": "Default: as before."],
             ] as [String: Any]],
         ],
@@ -1156,12 +1158,14 @@ enum PanelTools {
         ],
         [
             "name": "film_rescore",
-            "description": "Give a finished film a fitting narrator and background music without filming anything: the writer picks a voice from the box's TTS (and how it should read — grave, warm…) and describes music for MusicGen; every voice-over line is read again in that voice, the music is made on the box (kin audio MusicGen; first use downloads it there, ~4 GB) and laid under the film, lower while the narrator speaks; then it is cut again. Old voice files and cut are kept aside. `music: false` does the voice only.",
+            "description": "Give a finished film a fitting narrator and background music without filming anything: the writer picks a voice from the box's TTS (and how it should read — grave, warm…) and describes the music; every voice-over line is read again in that voice, the music is made on the box and laid under the film, lower while the narrator speaks; then it is cut again. Old voice files and cut are kept aside. `music: false` does the voice only. `music_file` lays a song you already have under the film instead of making music — a YuE2 song (a voice and words: comfy_run, template audio_yue2_text2music, or audio_yue2_music_cover for a cover) — and with `voice: false` only the music changes.",
             "inputSchema": [
                 "type": "object",
                 "properties": [
                     "film": ["type": "string", "description": "The film's id or title."],
                     "music": ["type": "boolean", "description": "Default true."],
+                    "music_file": ["type": "string", "description": "A sound file on this Mac (flac, mp3, wav…) to use as the film's music, e.g. the YuE2 song comfy_run brought back."],
+                    "voice": ["type": "boolean", "description": "Default true: choose and read the narrator again. false keeps the narration as it is."],
                 ],
                 "required": ["film"],
             ],
@@ -1883,7 +1887,9 @@ enum PanelTools {
             let runnable = args["runnable"] as? Bool ?? false
             let hits = (comfy.saved + comfy.templates).filter { t in
                 (cloud || t.local) && (!runnable || comfy.readiness[t.name]?.runs == true) && words.allSatisfy { w in
-                    [t.name, t.title, t.description, t.category, t.also.joined(separator: " "), t.models.joined(separator: " "), t.tags.joined(separator: " ")].contains { $0.lowercased().contains(w) }
+                    [t.name, t.title, t.description, t.category, t.also.joined(separator: " "), t.models.joined(separator: " "), t.tags.joined(separator: " "),
+                     ComfyStudio.guide[t.name].map { [$0.title_zh, $0.best_for, $0.caution].compactMap { $0 }.joined(separator: " ") } ?? ""]
+                        .contains { $0.lowercased().contains(w) }
                 }
             }
             if hits.isEmpty { return ("没有「\(q)」的模板", false) }
@@ -1891,7 +1897,7 @@ enum PanelTools {
                 "· \(t.name) — \(t.title)（\(t.category)\(t.models.isEmpty ? "" : " · " + t.models.joined(separator: ", "))\(t.size.map { $0 > 0 ? " · " + ComfyStudio.gigabytes($0) : "" } ?? "")\(t.local ? "" : " · 云端付费")）" + {
                     guard let r = comfy.readiness[t.name] else { return "" }
                     return r.runs ? " ✓ 能跑" : !r.nodes.isEmpty ? " ✗ 缺插件" : r.lacking > 0 ? " ✗ 缺 \(r.lacking)/\(r.models) 个模型" : ""
-                }()
+                }() + (ComfyStudio.guide[t.name].map { "\n    " + $0.summary } ?? "")
             }
             return ("\(hits.count) 个\(hits.count > 25 ? "，前 25 个" : "")：\n" + lines.joined(separator: "\n"), false)
         case "comfy_run":
@@ -2028,8 +2034,13 @@ enum PanelTools {
             }
         case "film_rescore":
             guard let id = args["film"] as? String else { return ("film_rescore 需要 film", true) }
-            switch FilmStudio.shared.rescore(film: id, music: args["music"] as? Bool ?? true) {
-            case .success(let film): return ("在给「\(film.title)」重新配音\((args["music"] as? Bool ?? true) ? "配乐" : "")，完成后重新剪。film_status 看进度", false)
+            let song = (args["music_file"] as? String).map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
+            let voice = args["voice"] as? Bool ?? true
+            switch FilmStudio.shared.rescore(film: id, music: args["music"] as? Bool ?? true, musicFile: song, voice: voice) {
+            case .success(let film):
+                let what = [voice ? "重新配音" : nil, song.map { "配上「\($0.lastPathComponent)」" }
+                            ?? ((args["music"] as? Bool ?? true) ? "重新配乐" : nil)].compactMap { $0 }.joined(separator: "、")
+                return ("在给「\(film.title)」\(what)，完成后重新剪。film_status 看进度", false)
             case .failure(let failure): return (failure.localizedDescription, true)
             }
         case "film_stop":
