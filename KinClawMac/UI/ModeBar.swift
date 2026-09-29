@@ -18,6 +18,9 @@ struct ModeBar: View {
     /// it doesn't compete with the chat content for attention.
     var emphasis: Double = 1.0
 
+    /// The Studio guide's popover (the "?" at the end of the Studio group).
+    @State private var guiding = false
+
     var body: some View {
         // Full words while they fit; closed groups down to their icons when
         // the panel is narrow; then everything down to icons.
@@ -47,6 +50,19 @@ struct ModeBar: View {
         HStack(spacing: 2) {
             ForEach(group.members) { item in
                 Segment(item: item, on: item == mode, words: words) { pick(item) }
+            }
+            if group == .studio {
+                Button { guiding.toggle() } label: {
+                    Image(systemName: "questionmark.circle").font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Color.secondary)
+                        .frame(width: 20, height: 20)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help("Studio 指南：每个标签最擅长什么、要多久、怎么跟它的 agent 说")
+                .popover(isPresented: $guiding, arrowEdge: .bottom) {
+                    StudioGuideView(current: mode) { pick($0) }
+                }
             }
         }
         .padding(2)

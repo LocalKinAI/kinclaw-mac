@@ -346,6 +346,28 @@ def split_scenes(text, mode):
     return [p for p in re.split(r"\n\s*\n", text) if p.strip()]
 
 
+def upload_bgm(job):
+    """bgm_path given as a sound file on this Mac (a YuE2 song from the Comfy tools, say): copied into the
+    box's data/bgm/ and then used by its name. Returns a note, or None when bgm_path is already a box name."""
+    given = job.get("bgm_path")
+    if not given:
+        return None
+    local = os.path.expanduser(given)
+    if not os.path.isabs(local):
+        return None
+    if not os.path.isfile(local):
+        raise Failure("bgm_path %s is not a file on this Mac" % given)
+    name = re.sub(r"[^\w.\-]+", "-", os.path.basename(local))
+    if name == "default.mp3":
+        raise Failure("default.mp3 is an OC ReMix of Final Fantasy IX's Melodies of Life: never under a film")
+    r = subprocess.run(["scp", "-q", "-o", "BatchMode=yes", local, "%s:%s/data/bgm/%s" % (BOX, REMOTE_ROOT, name)],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        raise Failure("copying the music to the box failed: %s" % r.stderr.strip()[:300])
+    job["bgm_path"] = name
+    return "music %s copied to the box's data/bgm/ as %s" % (os.path.basename(local), name)
+
+
 def cmd_make(args):
     if args.file:
         with open(args.file) as f:
@@ -355,6 +377,9 @@ def cmd_make(args):
     if not isinstance(job, dict) or not job.get("text"):
         raise Failure("the job needs at least 'text' (a topic, or the script in mode 'fixed')")
     notes = []
+    uploaded = upload_bgm(job)
+    if uploaded:
+        notes.append(uploaded)
     if not job.get("frame_template"):
         job["frame_template"] = DEFAULT_TEMPLATE
         notes.append("frame_template not given: using %s" % DEFAULT_TEMPLATE)
@@ -422,11 +447,11 @@ def cmd_rework(args):
     if not m:
         raise Failure("source is an output_dir like 20260928_093131_db14 (the run folder's name before the title)")
     job["source"] = m.group(1)
-    motion = job.get("scene_motion") or "none"
-    if motion not in ("none", "pan", "ltx"):
-        raise Failure("scene_motion is none, pan or ltx")
-    if not job.get("revoice") and motion == "none":
-        raise Failure("nothing to redo: revoice true (one narrator) and/or scene_motion pan|ltx")
+    motion = job.get("scene_motion")          # left out: every scene keeps the motion it had
+    if motion is not None and motion not in ("none", "pan", "ltx"):
+        raise Failure("scene_motion is none (still), pan or ltx; leave it out to keep each scene's motion")
+    if not job.get("revoice") and motion is None and not job.get("bgm_path"):
+        raise Failure("nothing to redo: revoice true (one narrator), scene_motion none|pan|ltx and/or a new bgm_path")
     sb = json.loads(box_bytes("output/%s/storyboard.json" % job["source"]).decode())
     frames = sb.get("frames", [])
     n = len(frames)
@@ -447,15 +472,18 @@ def cmd_rework(args):
         else:
             seconds += 6
     title = job.pop("title", None) or sb.get("title")
+    uploaded = upload_bgm(job)
     res = api("POST", "/api/video/rework/async", job, timeout=60)
     task = res["task_id"]
     folder = ensure_dir(os.path.join(LOCAL_ROOT, "jobs"))
     with open(os.path.join(folder, task + ".json"), "w") as f:
         json.dump(dict(job, title=title), f, ensure_ascii=False, indent=2)
     out({"task_id": task, "source": job["source"], "title": title, "scenes": n,
-         "moving": sorted(chosen) if motion != "none" else [], "motion": motion, "revoice": bool(job.get("revoice")),
+         "moving": sorted(chosen) if motion in ("pan", "ltx") else [],
+         "motion": motion or "kept (each scene moves as it did)", "revoice": bool(job.get("revoice")),
          "estimate": "about %d min%s" % (max(1, round(seconds / 60)),
                                           " (LTX ≈3 min a scene)" if motion == "ltx" else ""),
+         "notes": [uploaded] if uploaded else [],
          "next": "pv.py wait %s" % task})
 
 

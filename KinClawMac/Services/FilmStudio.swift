@@ -2356,14 +2356,20 @@ final class FilmStudio: ObservableObject {
     /// Give a finished film its narrator and score again — the voice-over
     /// read anew and the music made — and cut again. Nothing is filmed; the
     /// old voice files and cut are set aside. `music: false` leaves the
-    /// music out this time (the voice alone).
-    func rescore(film id: String, music: Bool = true) -> Result<Film, Failure> {
+    /// music out this time (the voice alone). `musicFile` lays a song made
+    /// elsewhere under the film instead of composing one — a YuE2 song, say,
+    /// with a voice and words, made through the Comfy tools — and with
+    /// `voice: false` the narrator stays as it is and only the music changes.
+    func rescore(film id: String, music: Bool = true, musicFile: URL? = nil, voice: Bool = true) -> Result<Film, Failure> {
         guard shooting == nil else { return .failure(.message("片场正在拍「\(shooting!)」，等它拍完")) }
         guard var film = films.first(where: { $0.id == id || $0.title == id }) else {
             return .failure(.message("没有这部片子：\(id)"))
         }
         let done = film.shots.filter { $0.state == .done }
         guard !done.isEmpty else { return .failure(.message("「\(film.title)」还没有拍好的镜头")) }
+        if let musicFile, !FileManager.default.fileExists(atPath: musicFile.path) {
+            return .failure(.message("找不到这首：\(musicFile.path)"))
+        }
         let stamp = Int(Date().timeIntervalSince1970)
         let fm = FileManager.default
         film.state = .cutting
@@ -2371,28 +2377,40 @@ final class FilmStudio: ObservableObject {
         shooting = film.id
         work = Task { @MainActor in
             defer { shooting = nil; work = nil }
-            film.note = "定旁白的声音和配乐"
-            save(film)
             let seconds = Double(done.count) * (film.engine == .h3 ? Self.h3Seconds(film.seconds) : film.seconds)
-            let plan = await Self.planSound(film, seconds: seconds)
-            film.narrator = plan.narrator
-            film.score = plan.music
-            film.voiceover = film.tongue == "none" ? nil : plan.voiceover
-            film.sounded = true
-            try? fm.moveItem(at: film.voiceoverFile, to: film.folder.appendingPathComponent("voiceover.take-\(stamp).wav"))
-            if film.voiceover != nil { await readVoiceover(&film) }
-            for shot in done where film.voiceover == nil {
-                if Task.isCancelled { break }
-                try? fm.moveItem(at: film.voice(shot.id), to: film.folder.appendingPathComponent(String(format: "shot-%02d.take-\(stamp).wav", shot.id)))
-                film.note = "旁白：第 \(shot.id) 镜"
+            if voice {
+                film.note = "定旁白的声音和配乐"
                 save(film)
-                await speak(film, shot)
+                let plan = await Self.planSound(film, seconds: seconds)
+                film.narrator = plan.narrator
+                film.score = plan.music
+                film.voiceover = film.tongue == "none" ? nil : plan.voiceover
+                film.sounded = true
+                try? fm.moveItem(at: film.voiceoverFile, to: film.folder.appendingPathComponent("voiceover.take-\(stamp).wav"))
+                if film.voiceover != nil { await readVoiceover(&film) }
+                for shot in done where film.voiceover == nil {
+                    if Task.isCancelled { break }
+                    try? fm.moveItem(at: film.voice(shot.id), to: film.folder.appendingPathComponent(String(format: "shot-%02d.take-\(stamp).wav", shot.id)))
+                    film.note = "旁白：第 \(shot.id) 镜"
+                    save(film)
+                    await speak(film, shot)
+                }
             }
             try? fm.moveItem(at: film.music, to: film.folder.appendingPathComponent("music.take-\(stamp).wav"))
-            if music { await makeMusic(&film, seconds: seconds) }
+            if let musicFile {
+                do {
+                    try Self.copyAudio(musicFile, to: film.music)
+                    film.score = "现成的歌：\(musicFile.lastPathComponent)"
+                    film.withMusic = true
+                } catch {
+                    film.note = "这首放不进来（\(musicFile.lastPathComponent)）：\(error.localizedDescription)"
+                }
+            } else if music {
+                await makeMusic(&film, seconds: seconds)
+            }
             try? fm.moveItem(at: film.file, to: film.folder.appendingPathComponent("film.cut-\(stamp).mp4"))
             do {
-                try await assemble(&film, music: music)
+                try await assemble(&film, music: music || musicFile != nil)
                 film.state = .done
                 if film.note?.hasPrefix("旁白") == true || film.note == "定旁白的声音和配乐" { film.note = nil }
             } catch {
@@ -2402,6 +2420,26 @@ final class FilmStudio: ObservableObject {
             save(film)
         }
         return .success(film)
+    }
+
+    /// Any sound file the Mac can read (a YuE2 song is FLAC) as the 16-bit
+    /// WAV a film's music is kept in.
+    nonisolated static func copyAudio(_ source: URL, to target: URL) throws {
+        let input = try AVAudioFile(forReading: source)
+        let format = input.processingFormat
+        let output = try AVAudioFile(forWriting: target, settings: [
+            AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: format.sampleRate,
+            AVNumberOfChannelsKey: format.channelCount, AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false, AVLinearPCMIsBigEndianKey: false,
+        ], commonFormat: format.commonFormat, interleaved: format.isInterleaved)
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1 << 16) else {
+            throw Failure.message("读不出这段声音的格式")
+        }
+        while input.framePosition < input.length {
+            try input.read(into: buffer)
+            if buffer.frameLength == 0 { break }
+            try output.write(from: buffer)
+        }
     }
 
     /// Carry on with a film that stopped: everything not finished is tried

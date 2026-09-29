@@ -112,7 +112,8 @@ struct ComfyView: View {
         let q = search.trimmingCharacters(in: .whitespaces).lowercased()
         let found = pool.filter { t in
             (showCloud || t.local) && (!onlyRunnable || studio.readiness[t.name]?.runs == true)
-                && (q.isEmpty || [t.title, t.name, t.description, t.models.joined(separator: " "), t.tags.joined(separator: " ")]
+                && (q.isEmpty || [t.title, t.name, t.description, t.models.joined(separator: " "), t.tags.joined(separator: " "),
+                                  ComfyStudio.guide[t.name].map { [$0.title_zh, $0.best_for, $0.caution].compactMap { $0 }.joined(separator: " ") } ?? ""]
                 .contains { $0.lowercased().contains(q) })
         }
         // What runs now first, then what is one download away, then the rest.
@@ -189,11 +190,17 @@ struct ComfyView: View {
             HStack(spacing: 8) {
                 thumbnail(t).frame(width: 40, height: 40).clipShape(RoundedRectangle(cornerRadius: 5))
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(t.title).font(.system(size: 11, weight: .medium)).lineLimit(2)
+                    Text(ComfyStudio.guide[t.name]?.title_zh ?? t.title).font(.system(size: 11, weight: .medium)).lineLimit(2)
+                    if let best = ComfyStudio.guide[t.name]?.best_for {
+                        Text("擅长：" + best).font(.system(size: 9.5)).foregroundColor(.secondary).lineLimit(2)
+                    }
                     HStack(spacing: 4) {
                         Text(t.category).font(.system(size: 9)).foregroundColor(.secondary)
                         if let size = t.size, size > 0 { Text(ComfyStudio.gigabytes(size)).font(.system(size: 9)).foregroundColor(.secondary) }
                         if !t.local { Text("云").font(.system(size: 9, weight: .bold)).foregroundColor(.orange) }
+                        if ComfyStudio.guide[t.name]?.runs?.contains("坑") == true {
+                            Text("Mac 有坑").font(.system(size: 9, weight: .semibold)).foregroundColor(.red)
+                        }
                         badge(t)
                     }
                 }
@@ -204,7 +211,8 @@ struct ComfyView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(t.description)
+        .help([ComfyStudio.guide[t.name].map { $0.summary } ?? "", t.title, t.description]
+            .filter { !$0.isEmpty }.joined(separator: "\n\n"))
     }
 
     @ViewBuilder private func badge(_ t: ComfyStudio.Template) -> some View {
@@ -585,19 +593,41 @@ struct ComfyView: View {
 
     @ViewBuilder private func output(_ file: URL, size: CGFloat) -> some View {
         let ext = file.pathExtension.lowercased()
-        Group {
-            if ["mp4", "mov", "webm", "m4v"].contains(ext) {
-                LoopingVideoView(url: file)
-            } else if let image = NSImage(contentsOf: file) {
-                Image(nsImage: image).resizable().scaledToFit()
-            } else {
-                Color.primary.opacity(0.06).overlay(Text(ext).font(.system(size: 10)))
+        if Self.audio.contains(ext) {
+            // Music plays here. Handed to the Mac's default app for its type,
+            // a YuE2 song (.flac) opened Baidu Netdisk, which had claimed flac.
+            StudioVideoPlayer(url: file)
+                .frame(width: size, height: size)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .contextMenu {
+                    Button("用 QuickTime 打开") { Self.openInQuickTime(file) }
+                    Button("在 Finder 中显示") { NSWorkspace.shared.activateFileViewerSelecting([file]) }
+                }
+                .help(file.lastPathComponent)
+        } else {
+            Group {
+                if ["mp4", "mov", "webm", "m4v"].contains(ext) {
+                    LoopingVideoView(url: file)
+                } else if let image = NSImage(contentsOf: file) {
+                    Image(nsImage: image).resizable().scaledToFit()
+                } else {
+                    Color.primary.opacity(0.06).overlay(Text(ext).font(.system(size: 10)))
+                }
             }
+            .frame(width: size, height: size)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .onTapGesture { NSWorkspace.shared.open(file) }
+            .help(file.lastPathComponent)
         }
-        .frame(width: size, height: size)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .onTapGesture { NSWorkspace.shared.open(file) }
-        .help(file.lastPathComponent)
+    }
+
+    private static let audio: Set<String> = ["flac", "mp3", "wav", "opus", "ogg", "m4a", "aac", "aiff"]
+
+    private static func openInQuickTime(_ file: URL) {
+        guard let player = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.QuickTimePlayerX") else {
+            NSWorkspace.shared.activateFileViewerSelecting([file]); return
+        }
+        NSWorkspace.shared.open([file], withApplicationAt: player, configuration: NSWorkspace.OpenConfiguration())
     }
 
     private var editor: some View {

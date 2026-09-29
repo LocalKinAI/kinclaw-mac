@@ -24,6 +24,35 @@ import WebKit
 final class ComfyStudio: NSObject, ObservableObject {
     static let shared = ComfyStudio()
 
+    /// What each of ComfyUI's templates is good for on the box, written for the
+    /// person: a Chinese title, what it is best at, the catch, whether it runs
+    /// here (本地能跑 / 本地要下载 / 付费云端 / Mac 上有坑) and how long it takes
+    /// when measured. Resources/studio/comfy-templates.json, made by reading every
+    /// template and checking its models and nodes against the box (2026-09-28).
+    struct GuideNote: Decodable {
+        let name: String
+        let category: String?
+        let title_zh: String?
+        let runs: String?
+        let download_gb: Double?
+        let best_for: String?
+        let caution: String?
+        let minutes: Double?
+
+        /// The lines for a tooltip or an agent's listing.
+        var summary: String {
+            [best_for.map { "擅长：" + $0 }, caution.map { "注意：" + $0 },
+             minutes.map { String(format: "大概 %.0f 分钟", $0) }, runs].compactMap { $0 }.joined(separator: " · ")
+        }
+    }
+
+    nonisolated static let guide: [String: GuideNote] = {
+        guard let url = Bundle.main.url(forResource: "comfy-templates", withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let notes = try? JSONDecoder().decode([GuideNote].self, from: data) else { return [:] }
+        return Dictionary(notes.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+    }()
+
     struct Template: Identifiable, Hashable {
         let name: String
         let title: String

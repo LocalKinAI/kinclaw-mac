@@ -646,11 +646,18 @@ enum PixelleTools {
             }
             if let url = args["tts_url"] { spec["tts_url"] = FilmTools.text(url) }
             if let speed = FilmTools.number(args["tts_speed"]) { spec["tts_speed"] = speed }
-            let motion = (args["motion"] as? String)?.lowercased().trimmingCharacters(in: .whitespaces) ?? "none"
-            guard ["none", "pan", "ltx"].contains(motion) else { return ("motion 是 none、pan（慢推慢移，几秒一个场景）或 ltx（真的动，约 3 分钟一个场景）", true) }
-            spec["scene_motion"] = motion
+            // Left out, every scene keeps the motion it had: a remake for a new
+            // song must not turn a moving video still.
+            let motion = (args["motion"] as? String)?.lowercased().trimmingCharacters(in: .whitespaces)
+            if let motion {
+                guard ["none", "pan", "ltx"].contains(motion) else {
+                    return ("motion 是 none（变静止）、pan（慢推慢移，几秒一个场景）或 ltx（真的动，约 3 分钟一个场景）；不给就每个场景照原来的样子", true)
+                }
+                spec["scene_motion"] = motion
+            }
             if let prompts = args["motion_prompts"] as? [Any] { spec["motion_prompts"] = prompts.map(FilmTools.text) }
             if let scenes = args["scenes"] as? [Any] { spec["scenes"] = scenes.compactMap(FilmTools.int) }
+            if let smooth = args["smooth"] as? Bool { spec["motion_smooth"] = smooth }
             if let bgm = args["bgm_path"] as? String {
                 if (bgm as NSString).lastPathComponent == PixelleStudio.forbiddenMusic {
                     return ("default.mp3 不能用：它是 OC ReMix 改编的《最终幻想 IX》Melodies of Life，有版权", true)
@@ -658,11 +665,16 @@ enum PixelleTools {
                 spec["bgm_path"] = bgm
             }
             if let volume = FilmTools.number(args["bgm_volume"]) { spec["bgm_volume"] = volume }
-            guard revoice || motion != "none" else { return ("没什么可重做的：revoice true（整篇一次念完、一个人）和／或 motion pan|ltx", true) }
+            guard revoice || motion != nil || spec["bgm_path"] != nil else {
+                return ("没什么可重做的：revoice true（整篇一次念完、一个人）、motion none|pan|ltx，或者换一首 bgm_path", true)
+            }
             if studio.job?.state == .running, let busy = studio.job {
                 return ("已经有一个在做：「\(busy.title)」task \(busy.id)（\(busy.progress)）。等它做完（pixelle_wait），或者 pixelle_cancel", true)
             }
             if motion == "ltx", let why = await studio.readyForMotion() { return (why, true) }
+            if let music = spec["bgm_path"] as? String, music.hasPrefix("/") || music.hasPrefix("~") {
+                spec["bgm_path"] = (music as NSString).expandingTildeInPath
+            }
             switch await studio.rework(spec) {
             case .failure(let failure): return ("没发出去：\(failure.text)", true)
             case .success(let answer):
@@ -672,7 +684,9 @@ enum PixelleTools {
                 let moving = (answer["moving"] as? [Any] ?? []).compactMap(FilmTools.int)
                 var lines = ["开始重做「\(run.title)」（\(run.boxFolder)）：task \(answer["task_id"] as? String ?? "")，"
                              + (revoice ? "整篇重新一次念完（一个人）" : "旁白不变")
-                             + (moving.isEmpty ? "" : "，第 \(moving.map(String.init).joined(separator: "、")) 场会动（\(motion)）")
+                             + (moving.isEmpty ? (motion == nil ? "，画面照原来的样子" : "，全部静止")
+                                                : "，第 \(moving.map(String.init).joined(separator: "、")) 场会动（\(motion ?? "")）")
+                             + ((spec["bgm_path"] as? String).map { "，配乐换成 \(($0 as NSString).lastPathComponent)" } ?? "")
                              + "。\(answer["estimate"] as? String ?? "")"]
                 lines.append("原来那支不动，做好的是一支新的。跟着看：pixelle_wait。")
                 return (lines.joined(separator: "\n"), false)
@@ -863,6 +877,7 @@ enum PixelleTools {
             spec["scene_motion"] = motion
         }
         if let prompts = args["motion_prompts"] as? [Any] { spec["motion_prompts"] = prompts.map(FilmTools.text) }
+        if let smooth = args["smooth"] as? Bool { spec["motion_smooth"] = smooth }
         return .success((spec, notes))
     }
 }

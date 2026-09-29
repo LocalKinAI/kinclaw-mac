@@ -513,7 +513,8 @@ final class StudioAgent: ObservableObject {
     /// The tab's panel tools, and what they lean on. The panel's others — the
     /// browser the person is signed into, their terminals, her body, the
     /// games — never reach it: the relay serves only these
-    /// (`--mcp-stdio --tools`). Montage's has none: its tools are the bridge's.
+    /// (`--mcp-stdio --tools`). Montage's work is the bridge's; the Comfy
+    /// tools are there for YuE2 songs, as they are for Pixelle's and Easel's.
     var panelTools: [String] {
         let studio = ["panel_show", "box_services", "image_generate", "video_generate", "video_status"]
         let comfy = ["comfy_templates", "comfy_run", "comfy_import", "comfy_status", "comfy_stop"]
@@ -527,10 +528,10 @@ final class StudioAgent: ObservableObject {
         case .film: return film + comfy + studio + ["studio_note"]
         case .motion: return ["motion_find", "motion_make", "motion_status", "motion_stop", "motion_continue", "video_frames"] + studio + ["studio_note"]
         case .comfy: return comfy + ["video_frames"] + studio + ["studio_note"]
-        case .montage: return ["studio_note"]
-        case .pixelle: return pixelle + ["video_frames"] + studio + ["studio_note"]
+        case .montage: return comfy + ["studio_note"]
+        case .pixelle: return pixelle + comfy + ["video_frames"] + studio + ["studio_note"]
         // A post may carry a video: Pixelle's, made or found, from here too.
-        case .social: return social + pixelle + ["video_frames"] + studio + ["studio_note"]
+        case .social: return social + pixelle + comfy + ["video_frames"] + studio + ["studio_note"]
         }
     }
 
@@ -555,7 +556,18 @@ final class StudioAgent: ObservableObject {
         they are wrong or missing something; note each change as a lesson, with the file.
         """
 
-    var briefing: String { brief + " " + Self.notebook + (place == .montage ? " " + Self.openMontageCode : "") }
+    /// Said to every one of them: which tab makes what best — the Studio
+    /// guide the person opens from the top bar, from the same list — so a
+    /// request that belongs to another tab is sent there instead of forced.
+    private static var routing: String {
+        "What each Studio tab makes best (the person's Studio guide says the same): "
+            + StudioGuide.routes.map { "\($0.want) → \($0.mode.title)" }.joined(separator: "; ")
+            + ". When what they ask for is another tab's work, say which tab and why rather than forcing it here."
+    }
+
+    var briefing: String {
+        brief + " " + Self.notebook + " " + Self.routing + (place == .montage ? " " + Self.openMontageCode : "")
+    }
 
     private var brief: String {
         switch place {
@@ -580,8 +592,13 @@ final class StudioAgent: ObservableObject {
                 order for a shot's words (INDEX.md routes to every heading), skills/higgsfield-acting/SKILL.md for a \
                 performance (what the character wants, what stands in the way, the beats, the eyes), \
                 skills/higgsfield-seedance/HELL-GRIND.md for keeping people and places the same across a film, and \
-                skills/higgsfield-seedance/FAILURE-MODES.md for naming what went wrong in a shot. Speak the language \
-                they write in, and keep it short.
+                skills/higgsfield-seedance/FAILURE-MODES.md for naming what went wrong in a shot. A song with a voice \
+                and words — a theme, a closing song — is YuE2: comfy_run, template audio_yue2_text2music (open it with \
+                run: false and read comfy_status for its fields: the style in English, the lyrics in [Verse]/[Chorus] \
+                sections, max_duration in seconds, the format), or audio_yue2_music_cover for a cover of a song given \
+                in `files`. About 17 seconds of work per second of music, and ComfyUI is busy all that time. Then \
+                film_rescore with music_file (the file comfy_run brought back) and voice: false keeps the narration. \
+                Background music without words stays the film's own. Speak the language they write in, and keep it short.
                 """
         case .motion:
             return """
@@ -617,7 +634,10 @@ final class StudioAgent: ObservableObject {
                 files — you see the pictures; video_frames shows a video. A seed you set is kept; keep_seed keeps the \
                 form's. A run that fails is an error with ComfyUI's reason. comfy_status says what is open, what it \
                 lacks and the latest results (wait: true waits for a run); comfy_stop stops one; comfy_import brings \
-                in a workflow from a file or a link. \(Self.seeing) A missing model is a download of many gigabytes \
+                in a workflow from a file or a link. guides/comfy-templates.md in your folder says, for all 566 \
+                templates, which run on this Mac now (21), which need a download, which are paid cloud, what each is best \
+                at and what to avoid here (the 3D bake nodes, int8 patches, 30–90 GB models); comfy_templates shows the \
+                same notes. Recommend from it. \(Self.seeing) A missing model is a download of many gigabytes \
                 that only the person can start, in the Comfy tab: tell them which and how big. Speak the language \
                 they write in, and keep it short.
                 """
@@ -634,8 +654,12 @@ final class StudioAgent: ObservableObject {
                 .agents/skills/minimax-h3-local/SKILL.md first — instead of paid APIs. A project already under \
                 projects/ can be carried on from its checkpoints. \(Self.seeing) The box is slow — about 2 minutes a \
                 still, 10 minutes a 5-second H3 shot, 70 seconds of work per second of music — and does one heavy job \
-                at a time: say what a plan will cost in time, wait for a yes, and start the music early. Speak the \
-                language they write in, and keep it short.
+                at a time: say what a plan will cost in time, wait for a yes, and start the music early. A song with a \
+                voice and words is YuE2, through the Comfy tools (comfy_run, template audio_yue2_text2music — open it \
+                with run: false and read comfy_status for its fields — or audio_yue2_music_cover for a cover of a song \
+                in `files`): about 17 seconds of work per second of music, four times faster than minimax_music. The \
+                file comfy_run brings back is also on the box at ~/ComfyUI/output/audio/ under the same name, for \
+                OpenMontage to use. Speak the language they write in, and keep it short.
                 """
         case .pixelle:
             return """
@@ -655,12 +679,17 @@ final class StudioAgent: ObservableObject {
                 看得到队列。pixelle_make 立刻给你一个 task id；pixelle_wait 跟着（一次最多等 9 分钟，没好就再调）。做好之后先看 sheet，再说好不好。\
                 画面默认是静止的卡片。要动：先做静止版给对方看（快），对方满意了再用 pixelle_rework 做会动的版本（不重画图，原片不动，出一支新的）；\
                 开做前说清要多久（ltx 约 3 分钟一个场景）。ltx 的动法可以用 motion_prompts 每个场景写一句英文（镜头怎么走、画面里什么在动），\
-                不写就按画面描述轻轻地动；图表、文字类的画面用 pan 更稳（LTX 可能把线条和字弄变形）。以前逐句配音的片子每句像换了个人：\
+                不写就按画面描述轻轻地动；图表、文字类的画面用 pan 更稳（LTX 可能把线条和字弄变形）。ltx 的片段会先用 RIFE 补成两倍帧\
+                （几秒一个场景），场景比片段长、要放慢时也不卡；ComfyUI 被别的标签占着时那几场不补，结果里的 motion 会写明。以前逐句配音的片子每句像换了个人：\
                 pixelle_rework revoice true 重配成一个人。模板只有 image_*（每个场景一张 AI 图）\
                 和 static_*（纯文字，不用 ComfyUI）能在盒子上跑；大多数模板的页脚默认是 Pixelle 自己的署名（@Pixelle.AI），用 template_params\
                 （author / brand / describe / signature，"" 隐藏）换成对方的。音乐：盒子上的 localkin-wonder-33s.wav 可以用（bgm_volume 约 0.45，\
                 对方要听得清音乐）；绝不用 Pixelle 自带的 default.mp3——它是《最终幻想 IX》Melodies of Life 的 OC ReMix 改编，有版权，不能出现在\
-                任何公开的东西里。单个场景没法单独重做：改那一段的字或画面描述，整支再做一遍（没改的场景种子不变，画面一样）。\
+                任何公开的东西里。也可以专门写一首带人声的歌：comfy_run 跑 YuE2（template audio_yue2_text2music，先 run: false 再用 \
+                comfy_status 看字段：风格用英文写，歌词分 [Verse]/[Chorus] 段，max_duration 秒数，格式；翻唱用 audio_yue2_music_cover，\
+                参考歌给 files），每秒音乐约 17 秒计算，那段时间 ComfyUI 被占着；做好把 comfy_run 带回来的文件路径直接给 pixelle_make 或 \
+                pixelle_rework 的 bgm_path（会先传到盒子上；只换歌也能 rework）。人声会和旁白抢字：bgm_volume 放低到 0.15–0.25，或者用在旁白\
+                少的片子里。单个场景没法单独重做：改那一段的字或画面描述，整支再做一遍（没改的场景种子不变，画面一样）。\
                 \(Self.seeing) 用对方写的语言说话，简短。
                 """
         case .social:
@@ -681,7 +710,8 @@ final class StudioAgent: ObservableObject {
                 social_draft 的 sources；拿不准的就不用。不夸大，不写末日论，不制造焦虑，不做标题党；照账号画像的语气写，去 AI 味。\
                 各平台：social_draft 的 platform 写平台名（中文、英文、别名都认），它按各平台自己公布的规则查（数字在工具说明里）。要视频的：\
                 抖音、B站、快手、视频号、YouTube Shorts（≤3 分钟，竖的或方的）；TikTok 要一支视频或一组图（photo mode，最多 35 张）。视频用 \
-                pixelle_* 做（1080×1920，9:16），做好把 final.mp4 给 social_draft 的 video。X 的 280 是加权的（汉字、emoji 算 2，链接算 23），\
+                pixelle_* 做（1080×1920，9:16），做好把 final.mp4 给 social_draft 的 video；要一首专门的歌，用 comfy_run 跑 YuE2\
+                （audio_yue2_text2music，风格英文、歌词分段；每秒音乐约 17 秒计算），做好的文件给 pixelle 的 bgm_path。X 的 280 是加权的（汉字、emoji 算 2，链接算 23），\
                 最多 4 张图，话题不超过 2 个，链接放第一条回复；TikTok 话题最多 5 个；Shorts 标题 ≤100，描述里的链接点不开；公众号是一篇文章：\
                 标题（≤64，32 以内最稳）、摘要（summary，≤120）、封面 900×383，结构和排版看 skill-wechat-publisher 的 references（它的脚本、\
                 登录和发布这里都不用）；视频号描述 ≤1000 字；朋友圈没有标题也没有话题，最多 9 张图，只能在手机（或新版 Mac 微信）上发。\
