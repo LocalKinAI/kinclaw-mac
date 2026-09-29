@@ -28,6 +28,8 @@ struct JevView: View {
                 CityView()
             } else if doing == "sandbox" {
                 SandboxView()
+            } else if doing == "ice" {
+                IceView()
             } else {
                 VStack(spacing: 0) {
                     HStack(alignment: .top, spacing: 14) {
@@ -93,6 +95,16 @@ struct JevView: View {
                 }
                 .padding(8)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(doing == "sandbox" ? 0.10 : 0)))
+            }
+            .buttonStyle(.plain)
+            Button { doing = "ice" } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "snowflake.circle").frame(width: 18)
+                    Text("冰河三国").font(.system(size: 12, weight: .medium))
+                    Spacer(minLength: 0)
+                }
+                .padding(8)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(doing == "ice" ? 0.10 : 0)))
             }
             .buttonStyle(.plain)
             Divider().opacity(0.12).padding(.vertical, 4)

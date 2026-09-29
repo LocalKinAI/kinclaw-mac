@@ -824,6 +824,24 @@ enum PanelTools {
             "inputSchema": ["type": "object", "properties": [String: Any]()],
         ],
         [
+            "name": "ice_play",
+            "description": "Run 冰河三国 (建造) in the Jev tab — a Three Kingdoms city in an ice age, built with the mouse in real time: a great furnace in the middle whose heat circle keeps the houses in it warm and burns coal a day by its level; coal mines, lumber camps, quarries, iron mines, hunting lodges, ice-fishing huts, greenhouses, clinics, barracks and taverns; walls against the north wind; people who walk, work, fall sick and freeze outside the heat; residents' events for 民心; generals from the tavern who govern buildings or lead expeditions on the 舆图 against bandits, 魏 and 吴; a great blizzard about every 50 days, each colder and longer; no last day — it lasts until the city fails, and the longest run is kept. Choose the lord (me: the user plays with the mouse; computer: the script; jev: TypeSafe's Jev picks which need comes first every ten seconds of play; llm: a chat model does), the speed, or a new city. Shows the tab and answers with how it stands. Games start paused unless a speed is given here.",
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "lord": ["type": "string", "description": "me | computer | jev | llm. Omit to keep."],
+                    "model": ["type": "string", "description": "For llm: \"host|model\" or a model name; empty for the app's own pick."],
+                    "speed": ["type": "number", "description": "0 (pause), 1, 2, 4 or 8. A day is 9 seconds at 1×."],
+                    "restart": ["type": "boolean", "description": "true: a new city on a new map."],
+                ],
+            ],
+        ],
+        [
+            "name": "ice_status",
+            "description": "How 冰河三国 (建造) stands, without touching it: the day and the cold, the lord, people and their health, the stores, the furnace, 民心, generals, counties and expeditions, and what is being built.",
+            "inputSchema": ["type": "object", "properties": [String: Any]()],
+        ],
+        [
             "name": "sandbox_play",
             "description": "沙盒搭建's seat, as in 放逐之城 — who builds: me (the user, by hand), computer (the script grows a village round the square: homes, a well, fields, a market, a watchtower, a church, a windmill, lamps, a wall, a dock, a bridge), jev (TypeSafe's Jev chooses each next building from options that say what the village has and lacks) or llm (a chat model chooses from the same options). The program finds each a site, levels it, runs a path to the square and raises it block by block. Start or pause, or a new world. Shows the tab and answers with the village so far. The village waits for run: true.",
             "inputSchema": [
@@ -1740,6 +1758,21 @@ enum PanelTools {
             return (game.report, false)
         case "sandbox_status":
             return (SandboxGame.shared.report, false)
+        case "ice_play":
+            let game = IceGame.shared
+            UserDefaults.standard.set("ice", forKey: "kinclaw.jev.doing")
+            NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: ["mode": "jev", "raise": false])
+            if args["restart"] as? Bool == true { game.restart() }
+            if let raw = args["lord"] as? String {
+                guard let seat = IceSeat(rawValue: raw) else { return ("lord 只能是 me、computer、jev 或 llm", true) }
+                game.seat = seat
+            }
+            if let model = args["model"] as? String { game.model = model }
+            if let speed = (args["speed"] as? Double) ?? (args["speed"] as? Int).map(Double.init) { game.speed = [0, 1, 2, 4, 8].contains(speed) ? speed : 1 }
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            return (game.report, false)
+        case "ice_status":
+            return (IceGame.shared.report, false)
         case "sandbox_play":
             let game = SandboxGame.shared
             UserDefaults.standard.set("sandbox", forKey: "kinclaw.jev.doing")

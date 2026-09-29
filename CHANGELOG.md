@@ -216,6 +216,27 @@ newline was a return. Several lines now go in as one bracketed paste.
   the app writes ("改个好名字"). The bundle id and the folders stay as they
   were, so nothing already set up — permissions, settings, sessions — is lost.
 
+### Added — 冰河三国 (建造): the ice-age city, built with the mouse
+
+"冰河三国建造模式啊". Jev tab → 建造 → 冰河三国, played like 放逐之城 on a
+snowy map of 64 × 40 (`Games/Ice*.swift`): a great furnace in the middle
+whose heat circle keeps the houses inside it warm — click it to raise a
+level, and it burns more coal a day; coal seams, ore, rock, pines, a frozen
+lake for ice fishing; houses, storage, lumber camps, coal and iron mines,
+quarries, hunting lodges, ice-fishing huts, greenhouses, clinics, barracks
+and taverns, placed with the mouse and built by people who carry the
+materials; walls dragged like roads that keep the north wind off. People
+walk, work, eat and sleep, fall sick and freeze outside the heat, and walk
+away when 民心 is low. The ice age has no end ("应该可以无限长啊，直到失败"):
+the cold deepens fast for a hundred days and slowly after, with cold snaps
+and a great blizzard about every fifty days, each colder and longer than
+the last, until the city fails — the longest run is kept. Residents' events, generals who govern a
+building or lead an expedition on the 舆图, and 魏 and 吴 who expand and
+raid. The lord is 我, 电脑, Jev or 大模型: the script's cities last 190–460
+days on eight maps; Jev as lord kept 65 people through the first blizzard. `ice_play` and
+`ice_status` in the panel's tools. The day-a-decision version stays in the
+list as 冰河三国·回合.
+
 ### Added — 冰河三国: a Three Kingdoms city in an ice age
 
 "给我写一个冰河三国的游戏" — in the spirit of 《三国：冰河时代》, our own game
