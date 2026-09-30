@@ -30,6 +30,29 @@ wide character's placeholder cell), in `montage_status` and wherever an
 agent's screen is read; it is now read the way a selection reads it. AG-UI
 is the layer after.
 
+### Added — the Studio agents hand work over, and see one another
+
+"我现在各个agent之间是通的吗…彼此之间知道吗" — they knew what each tab is
+for, shared the box and the art folder, and nothing more: none saw what
+another was doing, and a request for another tab ended in "去 Motion 吧".
+"做吧，转交和看见彼此都加上":
+
+- **studio_handoff.** An agent that finds the request is another tab's
+  says so and asks whether to hand it over; on the person's yes it writes
+  the request out in full (that agent saw none of the conversation) and it
+  is typed into the other agent's terminal — started if need be — marked
+  【从 Film 转来 · 人已同意】, and the app shows that tab. Not straight back
+  to the tab that just handed it over, and not over a question waiting on
+  the other agent's screen.
+- **studio_team.** Every agent can look across: each tab's agent (working,
+  waiting for the person, stopped), what the tab is making on the box right
+  now, whoever asked, and the latest things it finished with their files —
+  so Film can use the song Comfy just wrote — plus the recent handovers,
+  and what the box's ComfyUI is running whoever put it there (the first
+  look found Motion's agent rendering an H3 take it had built by hand, which
+  no tab knew of); with a tab, that agent's last terminal lines.
+- Montage, which had none of the shared tools, has these two.
+
 ### Added — a Studio guide: what each tab and each workflow is best at
 
 "我在studio有这么多工作流和工具，但是我并不知道他们都能干什么，甚至合适干什么，
@@ -49,6 +72,20 @@ is the layer after.
   Mac (int8 models, the 3D bake nodes), and its time when measured. The Comfy
   tab shows them in the list and finds templates by them in Chinese, and
   comfy_templates lists them for the agent.
+- **Code animation is on the map** ("我的页面帮助有提及这一项吗" — it was
+  not): motion graphics, title sequences, kinetic type and charts go to
+  Montage, whose agent writes them as HTML and renders them frame by frame
+  with HyperFrames (15 s of 1080p60 in 22 s on the box), and so do songs set
+  to pictures, line by line, as in the 60-second 国庆 film. And the rest it
+  had left out ("看看还有什么我们漏掉了"), each checked against the tabs' own
+  tools: video-shotcraft for web and product promos (installed, not yet used
+  here); Film redoing one shot from a sentence, changing a picture in words,
+  counting the set before shooting, and a cast of up to four with a face from
+  a photo; Motion finding Creative Commons reference videos itself; Pixelle's
+  twenty-odd layouts, landscape and square as well as vertical, and trying one
+  picture and one line before a whole video; Comfy importing any workflow and
+  its image prompt library; Easel reading a page for its cards; and the phone
+  page, at the bottom.
 
 ### Added — YuE2 songs for Film, Pixelle, Montage and Easel
 

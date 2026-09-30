@@ -517,6 +517,23 @@ enum PanelTools {
             ] as [String: Any]],
         ],
         [
+            "name": "studio_team",
+            "description": "The other Studio tabs at once, for a Studio agent: whether each tab's agent runs, is working, or waits for the person; what the tab is making right now (a film being shot, a take, a Pixelle job, a ComfyUI run — whoever asked for it); and the latest things it finished, with their files, which you may use (\"用 Comfy 刚写的那首歌\"). With `tab`, that one closer, and the last lines of its agent's terminal — what it and the person are saying. Only looks.",
+            "inputSchema": ["type": "object", "properties": [
+                "tab": ["type": "string", "description": "One tab to look at closer: film, motion, pixelle, montage, comfy or social (Easel)."],
+                "lines": ["type": "integer", "description": "With `tab`: its agent's last terminal lines, default 14, at most 30."],
+            ] as [String: Any]],
+        ],
+        [
+            "name": "studio_handoff",
+            "description": "Hand the person's request to another Studio tab's agent — only after they said yes to handing it over (ask first: \"这是 Motion 的活，要我转给它吗？\"). That agent has seen none of this conversation: write the request out in full — what they want, what is already decided, the files by path. It is typed into that agent's terminal (started if it is not running), marked as handed over from your tab with the person's yes, and the app shows that tab unless `show` is false; the person carries on there, or on the phone. Not straight back to the tab that just handed it to you. Answers what that agent's screen shows a few seconds later.",
+            "inputSchema": ["type": "object", "properties": [
+                "tab": ["type": "string", "description": "film, motion, pixelle, montage, comfy or social (Easel)."],
+                "request": ["type": "string", "description": "The request in full, as the person would put it to that tab, with the files by path."],
+                "show": ["type": "boolean", "description": "Show that tab in the app (default true)."],
+            ] as [String: Any], "required": ["tab", "request"]],
+        ],
+        [
             "name": "studio_note",
             "description": """
                 Write in your notebook — CLAUDE.md in your folder, which you \
@@ -1473,6 +1490,12 @@ enum PanelTools {
     @TaskLocal static var patience: Double = 44
     /// The Studio tab whose agent is calling, when it is one (its relay says).
     @TaskLocal static var place: String?
+
+    /// A Studio tab from what an agent calls it: its id, or Easel for social.
+    static func studioPlace(_ name: String) -> StudioAgent.Place? {
+        let name = name.trimmingCharacters(in: .whitespaces).lowercased()
+        return StudioAgent.Place(rawValue: name == "easel" ? "social" : name)
+    }
     /// Two-second polls a waiting tool may make. A status call waits five
     /// minutes at most, so whoever is waiting still hears how it goes.
     static var polls: Int { max(1, Int(min(patience, 300) / 2)) }
@@ -1555,6 +1578,30 @@ enum PanelTools {
             let list = StudioAgent.all.map { $0.snapshot(lines: keep) }
             let data = try? JSONSerialization.data(withJSONObject: list, options: [.withoutEscapingSlashes])
             return (data.flatMap { String(data: $0, encoding: .utf8) } ?? "[]", false)
+        case "studio_team":
+            let me = Self.place.flatMap(StudioAgent.Place.init(rawValue:))
+            if let tab = (args["tab"] as? String).flatMap(Self.studioPlace) {
+                return (StudioAgent.of(tab).closer(lines: max(1, min(30, FilmTools.int(args["lines"]) ?? 14))), false)
+            }
+            return (await StudioAgent.team(for: me), false)
+        case "studio_handoff":
+            guard let me = Self.place.flatMap(StudioAgent.Place.init(rawValue:)) else {
+                return ("studio_handoff 是 Studio 标签的 agent 之间转交用的；从别处给一个标签的 agent 说话，用 panel_show 的 ask", true)
+            }
+            guard let to = (args["tab"] as? String).flatMap(Self.studioPlace) else {
+                return ("tab 要是 film、motion、pixelle、montage、comfy 或 social（Easel）", true)
+            }
+            guard to != me else { return ("这就是你自己的标签：直接做", true) }
+            guard let request = (args["request"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !request.isEmpty else {
+                return ("request 要写全：人要什么、已经定了什么、文件的路径——那边没看过这段对话", true)
+            }
+            let target = StudioAgent.of(to)
+            if let refused = target.handOver(request, from: StudioAgent.of(me)) { return (refused, true) }
+            if args["show"] as? Bool != false {
+                NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: ["mode": to.rawValue])
+            }
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            return ("交给了 \(target.title) 标签的 agent。人可以在 \(target.title) 标签或手机上跟它接着说。\n" + target.report, false)
         case "studio_note":
             guard let place = Self.place.flatMap(StudioAgent.Place.init(rawValue:)) else {
                 return ("studio_note 只给 Film、Motion、Pixelle、Comfy、Montage、Easel 标签的 agent 用", true)

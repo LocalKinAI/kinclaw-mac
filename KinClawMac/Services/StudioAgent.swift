@@ -564,6 +564,164 @@ final class StudioAgent: ObservableObject {
         return out
     }
 
+    // MARK: One another
+
+    /// The tab's name as the person sees it: Film, Motion, Easel…
+    var title: String { ChatMode(rawValue: place.rawValue)?.title ?? place.rawValue }
+
+    /// Its agent's state in a few words, for another tab's agent.
+    var stateWords: String {
+        guard running, let terminal else { return "agent 没在跑" }
+        if let needs = Self.problem(terminal) ?? Self.asking(terminal) { return "agent 在等人处理（\(needs)）" }
+        let screen = AgentTerminalSessions.visibleLines(terminal.getTerminal()).joined(separator: "\n").lowercased()
+        return screen.contains("esc to interrupt") ? "agent 在干活" : "agent 在等人说话"
+    }
+
+    /// What the tab finished last, newest first, each with its file: what
+    /// another tab's agent can pick up ("用 Comfy 刚写的那首歌").
+    func latest(_ count: Int) -> [String] {
+        func modified(_ url: URL) -> Date? {
+            (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+        }
+        var found: [(when: Date, what: String)] = []
+        switch place {
+        case .film:
+            for film in FilmStudio.shared.films where film.state == .done {
+                if let when = modified(film.file) { found.append((when, "「\(film.title)」 → \(film.file.path)")) }
+            }
+        case .motion:
+            for take in MotionStudio.shared.takes where take.state == .done {
+                if let when = modified(take.file) {
+                    found.append((when, "「\(take.title)」\(Int(take.seconds.rounded())) 秒 → \(take.file.path)"))
+                }
+            }
+        case .pixelle:
+            // Read from disk: the tab's own list fills when the tab is first shown.
+            for run in PixelleStudio.scan(PixelleStudio.root) {
+                found.append((run.date, "「\(run.title)」 → \(run.video.path)"))
+            }
+        case .comfy:
+            if ComfyStudio.shared.runs.isEmpty { ComfyStudio.shared.loadRuns() }
+            for run in ComfyStudio.shared.runs {
+                found.append((run.when, "\(run.title) → " + run.outputs.prefix(3).map(\.path).joined(separator: "，")))
+            }
+        case .social:
+            for draft in SocialStudio.scan(SocialStudio.draftsFolder, legacy: false) {
+                found.append((draft.created, "\(draft.platform)「\(draft.title)」 → \(draft.folder.path)"))
+            }
+        case .montage:
+            break // its work is OpenMontage's, on the box: its agent knows it
+        }
+        let clock = DateFormatter()
+        clock.dateFormat = "MM-dd HH:mm"
+        return found.sorted { $0.when > $1.when }.prefix(count).map { clock.string(from: $0.when) + " " + $0.what }
+    }
+
+    /// A request one tab's agent handed another's, the person having said yes.
+    struct Handoff {
+        let from: Place
+        let to: Place
+        let when: Date
+        let request: String
+    }
+    /// The last few, for studio_team: who passed what to whom.
+    private(set) static var handoffs: [Handoff] = []
+    /// Where the request it was last handed came from, and when: a request is
+    /// not handed straight back.
+    private var handedBy: (place: Place, when: Date)?
+
+    /// Take the person's request from another tab's agent: typed in marked as
+    /// handed over, so this one knows they already said yes and that it has
+    /// not seen the conversation it came from. nil when taken, else why not.
+    func handOver(_ request: String, from giver: StudioAgent) -> String? {
+        if let back = giver.handedBy, back.place == place, Date().timeIntervalSince(back.when) < 600 {
+            return "这件事是 \(title) 刚转给你的，别再转回去：问人要怎么办"
+        }
+        if let terminal, running, let question = Self.asking(terminal) {
+            return "\(title) 的终端里有个问题在等人回答（\(question)），现在打不进去：请人先在 \(title) 标签里答了，再转"
+        }
+        handedBy = (giver.place, Date())
+        Self.handoffs.append(Handoff(from: giver.place, to: place, when: Date(), request: request))
+        if Self.handoffs.count > 12 { Self.handoffs.removeFirst(Self.handoffs.count - 12) }
+        say("【从 \(giver.title) 转来 · 人已同意】" + request)
+        return nil
+    }
+
+    /// The other tabs at once, for an agent (or anyone): each one's agent,
+    /// what the tab is making now, and what it finished last; and what the
+    /// box's ComfyUI is running, whoever started it.
+    static func team(for me: Place?) async -> String {
+        var lines = [me.map { "你是 \(of($0).title) 标签的 agent。其他标签此刻：" } ?? "Studio 各标签此刻："]
+        for agent in all where agent.place != me {
+            let doing = agent.place == .montage ? "它的活在盒子上的 OpenMontage 里（问它的 agent）"
+                : agent.busy.map { "标签在做：\($0)" } ?? "标签空闲"
+            lines.append("· \(agent.title)：\(agent.stateWords)；\(doing)")
+            lines += agent.latest(2).map { "  最近做好：" + $0 }
+        }
+        if !handoffs.isEmpty {
+            let clock = DateFormatter()
+            clock.dateFormat = "HH:mm"
+            lines.append("最近的转交：" + handoffs.suffix(4).map {
+                "\(clock.string(from: $0.when)) \(of($0.from).title)→\(of($0.to).title)「\($0.request.prefix(30))」"
+            }.joined(separator: "；"))
+        }
+        lines.append(await comfyQueue())
+        lines.append("看某个标签的 agent 在跟人说什么：studio_team 带 tab。把人的请求交给别的标签：先问人，人说好再 studio_handoff。")
+        return lines.joined(separator: "\n")
+    }
+
+    /// The box's ComfyUI queue in a line. A job an agent put on the box
+    /// itself shows in no tab's `busy` — Motion's hand-built H3 take did not —
+    /// but it holds the box all the same.
+    static func comfyQueue() async -> String {
+        guard let url = URL(string: ComfyStudio.base + "/queue") else { return "盒子的 ComfyUI：地址不对" }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 4
+        guard let (data, _) = try? await URLSession.shared.data(for: request),
+              let queue = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return "盒子的 ComfyUI：连不上"
+        }
+        let running = queue["queue_running"] as? [[Any]] ?? []
+        let pending = queue["queue_pending"] as? [[Any]] ?? []
+        // What a job is, from its nodes: [number, id, graph, extra, outputs].
+        let kinds = [("MiniMaxH3", "H3 视频"), ("MiniMaxMusic", "MiniMax 配乐"), ("YuE", "YuE2 歌"), ("LTX", "LTX 视频"),
+                     ("FrameInterpolat", "补帧"), ("SeedVR", "放大"), ("Hunyuan3D", "3D"), ("Trellis", "3D"), ("Qwen", "出图")]
+        func kind(_ job: [Any]) -> String {
+            let graph = job.count > 2 ? job[2] as? [String: Any] ?? [:] : [:]
+            let nodes = graph.values.compactMap { ($0 as? [String: Any])?["class_type"] as? String }.joined(separator: " ")
+            return kinds.first { nodes.localizedCaseInsensitiveContains($0.0) }?.1 ?? "别的工作流"
+        }
+        let what = running.isEmpty ? "" : "（" + running.map(kind).joined(separator: "、") + "）"
+        return "盒子的 ComfyUI（几个标签共用）：在跑 \(running.count)\(what)，排队 \(pending.count)"
+    }
+
+    /// One tab closer: its agent, what it makes now and made last, and the
+    /// last lines of its terminal — what it and the person are saying.
+    func closer(lines keep: Int) -> String {
+        var out = ["\(title)：\(stateWords)" + (busy.map { "；标签在做：\($0)" } ?? "")]
+        out += latest(3).map { "最近做好：" + $0 }
+        if let terminal {
+            var rows: [String] = []
+            for row in AgentTerminalSessions.visibleLines(terminal.getTerminal()) where !Self.chrome(row) {
+                let blank = row.trimmingCharacters(in: .whitespaces).isEmpty
+                if blank, rows.last.map({ $0.trimmingCharacters(in: .whitespaces).isEmpty }) ?? true { continue }
+                rows.append(row)
+            }
+            while let last = rows.last, last.trimmingCharacters(in: .whitespaces).isEmpty { rows.removeLast() }
+            if !rows.isEmpty { out.append("它的终端最后几行：\n" + rows.suffix(keep).joined(separator: "\n")) }
+        }
+        return out.joined(separator: "\n")
+    }
+
+    /// The frame Claude Code draws around a conversation — rules, the empty
+    /// prompt, the mode line, the Remote Control notice — which says nothing.
+    static func chrome(_ line: String) -> Bool {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        guard !t.isEmpty else { return false }
+        return t.allSatisfy { "─━".contains($0) } || t == "❯" || t.hasPrefix("⏵⏵") || t.contains("shift+tab to cycle")
+            || t.contains("/remote-control is active") || t.hasPrefix("https://claude.ai/code/session_")
+    }
+
     /// What an agent's terminal is asking, if it is asking something a
     /// return would answer: the folder-trust question, first of all.
     static func asking(_ terminal: LocalProcessTerminalView) -> String? {
@@ -604,14 +762,17 @@ final class StudioAgent: ObservableObject {
         let pixelle = ["pixelle_status", "pixelle_service", "pixelle_make", "pixelle_rework", "pixelle_wait", "pixelle_cancel",
                        "pixelle_image", "pixelle_voice", "pixelle_templates", "pixelle_voices", "pixelle_runs"]
         let social = ["social_status", "social_profile", "social_trends", "social_page", "social_card", "social_draft", "social_drafts"]
+        // Each other: what the other tabs are doing and have made, and
+        // handing the person's request to one of them.
+        let team = ["studio_team", "studio_handoff"]
         switch place {
-        case .film: return film + comfy + studio + ["studio_note"]
-        case .motion: return ["motion_find", "motion_make", "motion_status", "motion_stop", "motion_continue", "video_frames"] + studio + ["studio_note"]
-        case .comfy: return comfy + ["video_frames"] + studio + ["studio_note"]
-        case .montage: return comfy + ["studio_note"]
-        case .pixelle: return pixelle + comfy + ["video_frames"] + studio + ["studio_note"]
+        case .film: return film + comfy + studio + team + ["studio_note"]
+        case .motion: return ["motion_find", "motion_make", "motion_status", "motion_stop", "motion_continue", "video_frames"] + studio + team + ["studio_note"]
+        case .comfy: return comfy + ["video_frames"] + studio + team + ["studio_note"]
+        case .montage: return comfy + team + ["studio_note"]
+        case .pixelle: return pixelle + comfy + ["video_frames"] + studio + team + ["studio_note"]
         // A post may carry a video: Pixelle's, made or found, from here too.
-        case .social: return social + pixelle + comfy + ["video_frames"] + studio + ["studio_note"]
+        case .social: return social + pixelle + comfy + ["video_frames"] + studio + team + ["studio_note"]
         }
     }
 
@@ -640,10 +801,21 @@ final class StudioAgent: ObservableObject {
     /// guide the person opens from the top bar, from the same list — so a
     /// request that belongs to another tab is sent there instead of forced.
     private static var routing: String {
-        "What each Studio tab makes best (the person's Studio guide says the same): "
-            + StudioGuide.routes.map { "\($0.want) → \($0.mode.title)" }.joined(separator: "; ")
-            + ". When what they ask for is another tab's work, say which tab and why rather than forcing it here."
+        let map = StudioGuide.routes.map { "\($0.want) → \($0.mode.title)" }.joined(separator: "; ")
+        return "What each Studio tab makes best (the person's Studio guide says the same): \(map). " + handing
     }
+
+    /// And how the tabs work with one another: handing a request over, with
+    /// the person's yes, and looking across at what the others are doing.
+    private static let handing = """
+        When what they ask for is another tab's work, say which tab and why rather than forcing it here, and ask \
+        whether to hand it over; only on their yes, studio_handoff it, written out in full — what they want, what \
+        is already decided, the files by path — since that agent has seen none of this conversation. A request \
+        that begins 【从 … 转来 · 人已同意】 was handed to you that way: it is the person's, go on with it as if they \
+        had said it here. studio_team shows the other tabs — whose agent is working, what each tab is making on the \
+        box right now, and what each finished last, with its file: look there when they mention another tab's work \
+        ("用 Comfy 刚写的那首歌"), and before starting something long while the box is busy.
+        """
 
     var briefing: String {
         brief + " " + Self.notebook + " " + Self.routing + (place == .montage ? " " + Self.openMontageCode : "")
