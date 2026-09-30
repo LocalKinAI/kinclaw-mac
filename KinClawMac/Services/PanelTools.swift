@@ -861,6 +861,44 @@ enum PanelTools {
             ],
         ],
         [
+            "name": "warlord_play",
+            "description": "Run 三国争霸 (建造) in the Jev tab — 190 AD, 43 cities on a map of China, 17 warlords (曹操, 刘备, 孙坚, 袁绍, 董卓…), 125 generals; a month a turn: 开垦, 商业, 筑城, 征兵, 训练, 搜索, 登用, 移动/运输, 出征 with up to three generals, 外交; battles with 单挑; whoever holds every city wins. Every faction's seat can be me (the user, by mouse), computer (the script), jev or llm (a chat model) — e.g. Jev as 曹操 against a model as 刘备. Games start paused unless a speed is given.",
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "seats": ["type": "object", "description": "A lord's name to me | computer | jev | llm, e.g. {\"曹操\": \"jev\", \"刘备\": \"llm\"}."],
+                    "model": ["type": "string", "description": "For llm seats: \"host|model\" or a model name; empty for the app's own pick."],
+                    "speed": ["type": "number", "description": "0 (pause), 1, 2 or 4."],
+                    "restart": ["type": "boolean", "description": "true: a new game from 190 AD."],
+                    "skip_months": ["type": "number", "description": "Play on at once with the script for every seat, up to 600 months."],
+                ],
+            ],
+        ],
+        [
+            "name": "wall_play",
+            "description": "Run 长城守卫 (建造) in the Jev tab — a maze tower defence at the Great Wall: 箭楼, 弩车, 投石机, 火油, 烽火台 and 拒马 placed on the grassland, enemies (骑兵, 步卒, 盾兵, 攻城车, 萨满, and every tenth wave 单于亲征) re-routing round them to the pass; endless waves until the lives run out, the best wave kept. Seat me (the user, by mouse), computer (the script), jev or llm. Games start paused unless a speed is given.",
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "seat": ["type": "string", "description": "me | computer | jev | llm. Omit to keep."],
+                    "model": ["type": "string", "description": "For llm: \"host|model\" or a model name; empty for the app's own pick."],
+                    "speed": ["type": "number", "description": "0 (pause), 1, 2, 4 or 8."],
+                    "restart": ["type": "boolean", "description": "true: a new game."],
+                    "next_wave": ["type": "boolean", "description": "Call the next wave early (only when the seat is me)."],
+                ],
+            ],
+        ],
+        [
+            "name": "wall_status",
+            "description": "How 长城守卫 stands, without touching it: wave and best, lives, gold, seat and speed, the next wave, enemies on the field, the path length, towers by kind, and the last Jev or model choice.",
+            "inputSchema": ["type": "object", "properties": [String: Any]()],
+        ],
+        [
+            "name": "warlord_status",
+            "description": "How 三国争霸 stands, without touching it: the date, whose turn, each living faction (seat, cities, troops, generals, gold, grain, allies, what Jev or the model last chose), the selected city and the latest chronicle.",
+            "inputSchema": ["type": "object", "properties": [String: Any]()],
+        ],
+        [
             "name": "ice_status",
             "description": "How 冰河三国 (建造) stands, without touching it: the day and the cold, the lord, people and their health, the stores, the furnace, 民心, generals, counties and expeditions, and what is being built.",
             "inputSchema": ["type": "object", "properties": [String: Any]()],
@@ -1836,6 +1874,41 @@ enum PanelTools {
             return (game.report, false)
         case "ice_status":
             return (IceGame.shared.report, false)
+        case "warlord_play":
+            let game = WarlordGame.shared
+            UserDefaults.standard.set("warlord", forKey: "kinclaw.jev.doing")
+            NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: ["mode": "jev", "raise": false])
+            if args["restart"] as? Bool == true { game.restart() }
+            if let seats = args["seats"] as? [String: String] {
+                for (name, raw) in seats {
+                    guard let f = game.faction(named: name) else { return ("没有这路诸侯：\(name)", true) }
+                    guard let seat = WarlordSeat(rawValue: raw) else { return ("seat 只能是 me、computer、jev 或 llm", true) }
+                    game.setSeat(f, seat)
+                }
+            }
+            if let model = args["model"] as? String { game.model = model }
+            if let months = (args["skip_months"] as? Int) ?? (args["skip_months"] as? Double).map(Int.init), months > 0 { game.fastForward(months: min(600, months)) }
+            if let speed = (args["speed"] as? Double) ?? (args["speed"] as? Int).map(Double.init) { game.speed = [0, 1, 2, 4].contains(speed) ? speed : 1 }
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            return (game.report, false)
+        case "warlord_status":
+            return (WarlordGame.shared.report, false)
+        case "wall_play":
+            let game = WallGame.shared
+            UserDefaults.standard.set("wall", forKey: "kinclaw.jev.doing")
+            NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: ["mode": "jev", "raise": false])
+            if args["restart"] as? Bool == true { game.restart() }
+            if let raw = args["seat"] as? String {
+                guard let seat = WallSeat(rawValue: raw) else { return ("seat 只能是 me、computer、jev 或 llm", true) }
+                game.seat = seat
+            }
+            if let model = args["model"] as? String { game.model = model }
+            if let speed = (args["speed"] as? Double) ?? (args["speed"] as? Int).map(Double.init) { game.speed = [0, 1, 2, 4, 8].contains(speed) ? speed : 1 }
+            if args["next_wave"] as? Bool == true { game.callNext() }
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            return (game.report, false)
+        case "wall_status":
+            return (WallGame.shared.report, false)
         case "sandbox_play":
             let game = SandboxGame.shared
             UserDefaults.standard.set("sandbox", forKey: "kinclaw.jev.doing")

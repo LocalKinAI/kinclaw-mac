@@ -325,6 +325,26 @@ newline was a return. Several lines now go in as one bracketed paste.
   the app writes ("改个好名字"). The bundle id and the folders stay as they
   were, so nothing already set up — permissions, settings, sessions — is lost.
 
+### Added — 三国争霸 and 长城守卫, in 建造
+
+"来个好玩的塔防和三国争霸大地图版".
+
+- **三国争霸** (`Games/Warlord*.swift`): 190 AD on a painted map of China —
+  43 cities on 63 roads (river crossings, mountain passes), 17 warlords and
+  125 generals, each with a chibi portrait. A month a turn: 开垦, 商业, 筑城,
+  征兵, 训练, 搜索, 登用, 移动/运输, 出征 with up to three generals, 外交
+  (同盟, 背盟, 离间, 劝降); battles with 单挑 and captured generals; harvest
+  in autumn; whoever holds every city wins. Every faction's seat is 我,
+  电脑, Jev or 大模型 — hot-seat for several 我. The script unifies China in
+  200–560 months on 9 seeds of 10. `warlord_play`, `warlord_status`.
+- **长城守卫** (`Games/Wall*.swift`): a maze tower defence at the Great
+  Wall. 箭楼, 弩车, 投石机, 火油, 烽火台 and 拒马, three levels each; the
+  enemy — 骑兵, 步卒, 盾兵, 攻城车 that ram towers, 萨满 who heal, and every
+  tenth wave 单于亲征 — re-routes round what you build, and a build that
+  would shut the pass off is refused. Endless waves; the best is kept.
+  Seat 我, 电脑, Jev or 大模型: the script falls around wave 31, dice by
+  wave 7, Jev reached wave 41. `wall_play`, `wall_status`.
+
 ### Added — 冰河三国 (建造): the ice-age city, built with the mouse
 
 "冰河三国建造模式啊". Jev tab → 建造 → 冰河三国, played like 放逐之城 on a

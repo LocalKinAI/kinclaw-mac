@@ -30,6 +30,10 @@ struct JevView: View {
                 SandboxView()
             } else if doing == "ice" {
                 IceView()
+            } else if doing == "warlord" {
+                WarlordView()
+            } else if doing == "wall" {
+                WallView()
             } else {
                 VStack(spacing: 0) {
                     HStack(alignment: .top, spacing: 14) {
@@ -105,6 +109,26 @@ struct JevView: View {
                 }
                 .padding(8)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(doing == "ice" ? 0.10 : 0)))
+            }
+            .buttonStyle(.plain)
+            Button { doing = "warlord" } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "map.fill").frame(width: 18)
+                    Text("三国争霸").font(.system(size: 12, weight: .medium))
+                    Spacer(minLength: 0)
+                }
+                .padding(8)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(doing == "warlord" ? 0.10 : 0)))
+            }
+            .buttonStyle(.plain)
+            Button { doing = "wall" } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "building.columns").frame(width: 18)
+                    Text("长城守卫").font(.system(size: 12, weight: .medium))
+                    Spacer(minLength: 0)
+                }
+                .padding(8)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(doing == "wall" ? 0.10 : 0)))
             }
             .buttonStyle(.plain)
             Divider().opacity(0.12).padding(.vertical, 4)
