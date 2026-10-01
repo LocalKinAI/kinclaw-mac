@@ -236,10 +236,10 @@ final class SandboxGame: ObservableObject {
         switch who {
         case .me: return
         case .computer: pick = town.scripted(options)
-        case .jev, .llm:
+        case .jev, .tev1, .nimble, .llm:
             let situation = town.situation(world)
             do {
-                (pick, chance, name) = who == .jev ? try await askJev(options, situation) : try await askChat(options, situation)
+                (pick, chance, name) = who.decides ? try await askJev(options, situation, via: who.open) : try await askChat(options, situation)
             } catch {
                 say("\(who.title)没答上：\(error.localizedDescription.prefix(60))")
                 try? await Task.sleep(nanoseconds: 4_000_000_000)
@@ -262,14 +262,14 @@ final class SandboxGame: ObservableObject {
         raise(finished: "盖好了：\(option.kind.name)")
     }
 
-    private func askJev(_ options: [TownOption], _ situation: String) async throws -> (Int, Double?, String) {
+    private func askJev(_ options: [TownOption], _ situation: String, via: String? = nil) async throws -> (Int, Double?, String) {
         let q = JevClient.Question(id: "next", question: SandboxTown.question, howToJudge: SandboxTown.howToJudge,
                                    options: options.enumerated().map { (String(format: "p%02d", $0.offset + 1), $0.element.words) })
-        let reply = try await JevClient.ask(state: [("game", SandboxTown.rules), ("village", situation)], [q])
+        let reply = try await JevClient.ask(state: [("game", SandboxTown.rules), ("village", situation)], [q], via: via)
         guard let answer = reply.answers["next"], let n = Int(answer.choice.dropFirst()), options.indices.contains(n - 1) else {
-            throw JevArcade.Failure.message("Jev 的回答读不出来")
+            throw JevArcade.Failure.message("\(via ?? "Jev") 的回答读不出来")
         }
-        return (n - 1, answer.chances[answer.choice], "Jev")
+        return (n - 1, answer.chances[answer.choice], via ?? "Jev")
     }
 
     private func askChat(_ options: [TownOption], _ situation: String) async throws -> (Int, Double?, String) {

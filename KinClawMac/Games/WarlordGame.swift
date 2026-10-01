@@ -3,11 +3,15 @@ import SwiftUI
 
 /// Who plays a faction.
 enum WarlordSeat: String, CaseIterable, Identifiable {
-    case me, computer, jev, llm
+    case me, computer, jev, tev1, nimble, llm
     var id: String { rawValue }
-    var title: String { ["我", "电脑", "Jev", "大模型"][Self.allCases.firstIndex(of: self)!] }
+    var title: String { ["我", "电脑", "Jev", "tev1", "nimble", "大模型"][Self.allCases.firstIndex(of: self)!] }
+    /// tev1 or nimble: an open decision model on the box's Ollama, asked Jev's own question.
+    var open: String? { self == .tev1 || self == .nimble ? rawValue : nil }
+    /// Jev, or an open model of its kind.
+    var decides: Bool { self == .jev || open != nil }
     /// Does somebody other than the script choose what comes first?
-    var commands: Bool { self == .jev || self == .llm }
+    var commands: Bool { decides || self == .llm }
 }
 
 /// An army being made ready to march: from where, at what, with whom, how many.
@@ -245,7 +249,7 @@ final class WarlordGame: ObservableObject {
         Task { @MainActor in
             defer { asking = false }
             do {
-                let (index, chance, name) = who == .jev ? try await askJev(options, situation, question) : try await askChat(options, situation, question)
+                let (index, chance, name) = who.decides ? try await askJev(options, situation, question, via: who.open) : try await askChat(options, situation, question)
                 guard (seed, world.turns) == stamp, seats[f] == who, current == f, !acted else { return }
                 let before = world.armies.count
                 WarlordCommander.execute(options[index].plan, &world, f)
@@ -262,14 +266,14 @@ final class WarlordGame: ObservableObject {
         }
     }
 
-    private func askJev(_ options: [WarlordOption], _ situation: String, _ question: String) async throws -> (Int, Double?, String) {
+    private func askJev(_ options: [WarlordOption], _ situation: String, _ question: String, via: String? = nil) async throws -> (Int, Double?, String) {
         let q = JevClient.Question(id: "q", question: question, howToJudge: WarlordCommander.howToJudge,
                                    options: options.enumerated().map { (String(format: "p%02d", $0.offset + 1), $0.element.words) })
-        let reply = try await JevClient.ask(state: [("game", WarlordCommander.rules), ("position_before_move", situation)], [q])
+        let reply = try await JevClient.ask(state: [("game", WarlordCommander.rules), ("position_before_move", situation)], [q], via: via)
         guard let answer = reply.answers["q"], let n = Int(answer.choice.dropFirst()), options.indices.contains(n - 1) else {
-            throw JevArcade.Failure.message("Jev 的回答读不出来")
+            throw JevArcade.Failure.message("\(via ?? "Jev") 的回答读不出来")
         }
-        return (n - 1, answer.chances[answer.choice], "Jev")
+        return (n - 1, answer.chances[answer.choice], via ?? "Jev")
     }
 
     private func askChat(_ options: [WarlordOption], _ situation: String, _ question: String) async throws -> (Int, Double?, String) {

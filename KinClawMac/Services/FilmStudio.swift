@@ -3194,9 +3194,10 @@ final class FilmStudio: ObservableObject {
         return list
     }
 
-    // Not an embedding model, not a toy, and not the one that starves the box
-    // of the memory the video model needs.
-    private static let never = ["embed", "bge", "nomic", "0.5b", "bench", "flash-next", "exp-local", "whisper"]
+    // Not an embedding model, not a toy, not the one that starves the box of
+    // the memory the video model needs, and not a decision model (tev1,
+    // nimble), which answers Jev's questions and cannot chat.
+    private static let never = ["embed", "bge", "nomic", "0.5b", "bench", "flash-next", "exp-local", "whisper", "tev1", "nimble"]
 
     private static func models(on host: String) async -> [String] {
         guard let url = URL(string: host + "/api/tags") else { return [] }

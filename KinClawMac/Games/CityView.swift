@@ -3,11 +3,15 @@ import SwiftUI
 
 /// Who runs 放逐之城.
 enum CitySeat: String, CaseIterable, Identifiable {
-    case me, computer, jev, llm
+    case me, computer, jev, tev1, nimble, llm
     var id: String { rawValue }
-    var title: String { ["我", "电脑", "Jev", "大模型"][Self.allCases.firstIndex(of: self)!] }
+    var title: String { ["我", "电脑", "Jev", "tev1", "nimble", "大模型"][Self.allCases.firstIndex(of: self)!] }
+    /// tev1 or nimble: an open decision model on the box's Ollama, asked Jev's own question.
+    var open: String? { self == .tev1 || self == .nimble ? rawValue : nil }
+    /// Jev, or an open model of its kind.
+    var decides: Bool { self == .jev || open != nil }
     /// Does somebody other than the script decide what comes first?
-    var commands: Bool { self == .jev || self == .llm }
+    var commands: Bool { decides || self == .llm }
 }
 
 /// 放逐之城, played with the mouse: the town's clock, who is mayor, what is
@@ -84,7 +88,7 @@ final class CityGame: ObservableObject {
                         world.step(dt)
                     }
                     watch()
-                    if seat.commands, !asking, world.time - lastAsked >= (seat == .jev ? 10 : 20) { consult() }
+                    if seat.commands, !asking, world.time - lastAsked >= (seat.decides ? 10 : 20) { consult() }
                     if me, jevAdvises, !advising, world.time - lastAdvised >= 12 { advise() }
                 }
                 frames += 1
@@ -167,8 +171,8 @@ final class CityGame: ObservableObject {
         Task { @MainActor in
             defer { asking = false }
             do {
-                let (index, chance, name) = who == .jev
-                    ? try await askJev(options, situation, CityCommander.question, CityCommander.howToJudge)
+                let (index, chance, name) = who.decides
+                    ? try await askJev(options, situation, CityCommander.question, CityCommander.howToJudge, via: who.open)
                     : try await askChat(options, situation, CityCommander.question, CityCommander.howToJudge)
                 guard seat == who, !world.over else { return }
                 CityCommander.execute(options[index].plan, &world, &brain)
@@ -201,14 +205,14 @@ final class CityGame: ObservableObject {
         self.advice = nil; lastAdvised = world.time - 6
     }
 
-    private func askJev(_ options: [CityOption], _ situation: String, _ question: String, _ judge: String) async throws -> (Int, Double?, String) {
+    private func askJev(_ options: [CityOption], _ situation: String, _ question: String, _ judge: String, via: String? = nil) async throws -> (Int, Double?, String) {
         let q = JevClient.Question(id: "order", question: question, howToJudge: judge,
                                    options: options.enumerated().map { (String(format: "p%02d", $0.offset + 1), $0.element.words) })
-        let reply = try await JevClient.ask(state: [("game", CityCommander.rules), ("situation", situation)], [q])
+        let reply = try await JevClient.ask(state: [("game", CityCommander.rules), ("situation", situation)], [q], via: via)
         guard let answer = reply.answers["order"], let n = Int(answer.choice.dropFirst()), options.indices.contains(n - 1) else {
-            throw JevArcade.Failure.message("Jev 的回答读不出来")
+            throw JevArcade.Failure.message("\(via ?? "Jev") 的回答读不出来")
         }
-        return (n - 1, answer.chances[answer.choice], "Jev")
+        return (n - 1, answer.chances[answer.choice], via ?? "Jev")
     }
 
     private func askChat(_ options: [CityOption], _ situation: String, _ question: String, _ judge: String) async throws -> (Int, Double?, String) {

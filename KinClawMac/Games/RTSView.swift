@@ -3,11 +3,15 @@ import SwiftUI
 
 /// Who sits on a side of 帝国时代.
 enum RTSSeat: String, CaseIterable, Identifiable {
-    case me, computer, jev, llm
+    case me, computer, jev, tev1, nimble, llm
     var id: String { rawValue }
-    var title: String { ["我", "电脑", "Jev", "大模型"][Self.allCases.firstIndex(of: self)!] }
+    var title: String { ["我", "电脑", "Jev", "tev1", "nimble", "大模型"][Self.allCases.firstIndex(of: self)!] }
+    /// tev1 or nimble: an open decision model on the box's Ollama, asked Jev's own question.
+    var open: String? { self == .tev1 || self == .nimble ? rawValue : nil }
+    /// Jev, or an open model of its kind.
+    var decides: Bool { self == .jev || open != nil }
     /// Does somebody other than the script decide this side's big moves?
-    var commands: Bool { self == .jev || self == .llm }
+    var commands: Bool { decides || self == .llm }
 }
 
 /// 帝国时代, played with the mouse: the game's clock, who sits on each side,
@@ -95,7 +99,7 @@ final class RTSGame: ObservableObject {
                         world.step(dt)
                     }
                     watch()
-                    for s in 0..<2 where seats[s].commands && !asking[s] && world.time - lastAsked[s] >= (seats[s] == .jev ? 5 : 10) { consult(s) }
+                    for s in 0..<2 where seats[s].commands && !asking[s] && world.time - lastAsked[s] >= (seats[s].decides ? 5 : 10) { consult(s) }
                     if jevAdvises, let me, !advising, world.time - lastAdvised >= 8 { advise(me) }
                 }
                 frames += 1
@@ -132,7 +136,7 @@ final class RTSGame: ObservableObject {
         Task { @MainActor in
             defer { asking[s] = false }
             do {
-                let (index, chance, who) = seat == .jev ? try await askJev(options, situation, strategy: true) : try await askChat(options, situation, model: models[s])
+                let (index, chance, who) = seat.decides ? try await askJev(options, situation, strategy: true, via: seat.open) : try await askChat(options, situation, model: models[s])
                 guard seats[s] == seat, world.winner == nil else { return }
                 RTSCommander.execute(options[index].plan, &world, s, &brains[s])
                 notes[s] = "\(who)（\(RTSWorld.names[s])）：\(options[index].title)" + (chance.map { " · \(Int($0 * 100))%" } ?? "")
@@ -154,15 +158,15 @@ final class RTSGame: ObservableObject {
         }
     }
 
-    private func askJev(_ options: [RTSOption], _ situation: String, strategy: Bool = false) async throws -> (Int, Double?, String) {
+    private func askJev(_ options: [RTSOption], _ situation: String, strategy: Bool = false, via: String? = nil) async throws -> (Int, Double?, String) {
         let question = JevClient.Question(id: "order", question: strategy ? RTSCommander.postureQuestion : RTSCommander.question,
                                           howToJudge: strategy ? RTSCommander.postureJudge : RTSCommander.howToJudge,
                                           options: options.enumerated().map { (String(format: "p%02d", $0.offset + 1), $0.element.words) })
-        let reply = try await JevClient.ask(state: [("game", RTSCommander.rules), ("situation", situation)], [question])
+        let reply = try await JevClient.ask(state: [("game", RTSCommander.rules), ("situation", situation)], [question], via: via)
         guard let answer = reply.answers["order"], let n = Int(answer.choice.dropFirst()), options.indices.contains(n - 1) else {
-            throw JevArcade.Failure.message("Jev 的回答读不出来")
+            throw JevArcade.Failure.message("\(via ?? "Jev") 的回答读不出来")
         }
-        return (n - 1, answer.chances[answer.choice], "Jev")
+        return (n - 1, answer.chances[answer.choice], via ?? "Jev")
     }
 
     /// The same question to a chat model on an Ollama, told to answer with the option's key.

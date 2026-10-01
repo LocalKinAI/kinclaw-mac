@@ -7,9 +7,13 @@ import Foundation
 /// the ground and runs a path from its door to the square. Foundation only.
 
 enum SandboxSeat: String, CaseIterable, Identifiable {
-    case me, computer, jev, llm
+    case me, computer, jev, tev1, nimble, llm
     var id: String { rawValue }
-    var title: String { ["我", "电脑", "Jev", "大模型"][Self.allCases.firstIndex(of: self)!] }
+    var title: String { ["我", "电脑", "Jev", "tev1", "nimble", "大模型"][Self.allCases.firstIndex(of: self)!] }
+    /// tev1 or nimble: an open decision model on the box's Ollama, asked Jev's own question.
+    var open: String? { self == .tev1 || self == .nimble ? rawValue : nil }
+    /// Jev, or an open model of its kind.
+    var decides: Bool { self == .jev || open != nil }
 }
 
 enum TownKind: String, CaseIterable, Codable {

@@ -726,12 +726,12 @@ enum PanelTools {
         ],
         [
             "name": "jev_play",
-            "description": "Have a decision model play a game in the Jev tab: each move is one multiple-choice question whose options are the legal moves described in words. Games: empire (帝国, a small Age of Empires for two — `blue` against `red`: villagers, three resources, four ages, eight buildings, spearmen/archers/knights that counter one another; one order a side each round; a fallen town centre loses, else the stronger empire at round 100), icekingdoms (冰河三国: a Three Kingdoms city in an ice age — a day a decision: feed the great furnace with coal, keep houses inside its heat, answer the residents' events for 民心, recruit generals like 赵云, 吕布, 诸葛亮, take counties from bandits, 魏 and 吴, and be ready for the great blizzard; 100 days), garden (植物守卫战, a lawn defence in the spirit of Plants vs. Zombies: sun, sunflowers, shooters, walls and cherry bombs against waves of zombies), drive (a five-lane highway: lane, speed and fuel every tick), runner (跑酷, an endless runner down three tracks: jump barriers, roll under them, dodge trains, collect coins), shooter (a plane shooting down fighters, swoopers and bombers), flappy (Flappy Bird: flap or glide), pacman (吃豆人: a maze, dots, power pellets and four ghosts with their own ways), tetris, 2048, match3 (消消乐: swap gems into lines of three, with striped, wrapped and colour-bomb gems, 30 moves), snake, blackjack (200 hands against the dealer; the yardstick is exact basic strategy, so chips and agreement mean something), poker (德州扑克: no-limit Texas Hold'em against a rock, a calling station and a maniac, up to 100 hands; equity and fold chances in words), and three for two players — chess (`white` against `black`), xiangqi, Chinese chess (`red` against `black`), and gomoku, five in a row (`black`, who moves first, against `white`). Players: jev (TypeSafe's API — needs the user's key, which only they can enter in the tab), laya (the open local model of the same kind), llm (a local chat model), duoJev and duoLaya (the fast judge first; when it is unsure, its best three go to the chat model, which is shown the board), deep (the program itself looking as far as the words for a reader look — what a perfect reader could do), heuristic (the game's own evaluator, the yardstick), random. The same seed deals the same game to every player, so they can be compared. Plays up to `moves` moves and reports the score, how often the player agreed with the heuristic, and the time per move.",
+            "description": "Have a decision model play a game in the Jev tab: each move is one multiple-choice question whose options are the legal moves described in words. Games: empire (帝国, a small Age of Empires for two — `blue` against `red`: villagers, three resources, four ages, eight buildings, spearmen/archers/knights that counter one another; one order a side each round; a fallen town centre loses, else the stronger empire at round 100), icekingdoms (冰河三国: a Three Kingdoms city in an ice age — a day a decision: feed the great furnace with coal, keep houses inside its heat, answer the residents' events for 民心, recruit generals like 赵云, 吕布, 诸葛亮, take counties from bandits, 魏 and 吴, and be ready for the great blizzard; 100 days), garden (植物守卫战, a lawn defence in the spirit of Plants vs. Zombies: sun, sunflowers, shooters, walls and cherry bombs against waves of zombies), drive (a five-lane highway: lane, speed and fuel every tick), runner (跑酷, an endless runner down three tracks: jump barriers, roll under them, dodge trains, collect coins), shooter (a plane shooting down fighters, swoopers and bombers), flappy (Flappy Bird: flap or glide), pacman (吃豆人: a maze, dots, power pellets and four ghosts with their own ways), tetris, 2048, match3 (消消乐: swap gems into lines of three, with striped, wrapped and colour-bomb gems, 30 moves), snake, blackjack (200 hands against the dealer; the yardstick is exact basic strategy, so chips and agreement mean something), poker (德州扑克: no-limit Texas Hold'em against a rock, a calling station and a maniac, up to 100 hands; equity and fold chances in words), and three for two players — chess (`white` against `black`), xiangqi, Chinese chess (`red` against `black`), and gomoku, five in a row (`black`, who moves first, against `white`). Players: jev (TypeSafe's API — needs the user's key, which only they can enter in the tab), laya (the open local model of the same kind), tev1 and nimble (two more open decision models of the same kind — Together AI's 4B and Bespoke Labs' 9B — on the box's Ollama, asked through its /v1/systemone, Jev's own wire format; no key, no cost; they see the first 24 options), llm (a local chat model), duoJev and duoLaya (the fast judge first; when it is unsure, its best three go to the chat model, which is shown the board), deep (the program itself looking as far as the words for a reader look — what a perfect reader could do), heuristic (the game's own evaluator, the yardstick), random. The same seed deals the same game to every player, so they can be compared. Plays up to `moves` moves and reports the score, how often the player agreed with the heuristic, and the time per move.",
             "inputSchema": [
                 "type": "object",
                 "properties": [
                     "game": ["type": "string", "description": "empire | icekingdoms | garden | drive | runner | shooter | flappy | pacman | tetris | 2048 | match3 | snake | blackjack | poker | gomoku | chess | xiangqi. Default: the one showing."],
-                    "player": ["type": "string", "description": "jev | laya | llm | duoJev | duoLaya | deep | heuristic | random — for the games played alone. Default: the one selected."],
+                    "player": ["type": "string", "description": "jev | laya | tev1 | nimble | llm | duoJev | duoLaya | deep | heuristic | random — for the games played alone. Default: the one selected."],
                     "model": ["type": "string", "description": "When player is llm: which chat model, as for white_model."],
                     "white": ["type": "string", "description": "For chess: who plays White, same choices. Any two can meet: jev against laya, a chat model against the yardstick."],
                     "red": ["type": "string", "description": "For xiangqi: who plays Red, who moves first. For empire: who plays Red, who orders second. Same as `white`."],
@@ -817,7 +817,7 @@ enum PanelTools {
             "inputSchema": [
                 "type": "object",
                 "properties": [
-                    "mayor": ["type": "string", "description": "me | computer | jev | llm. Omit to keep."],
+                    "mayor": ["type": "string", "description": "me | computer | jev | tev1 | nimble | llm (tev1, nimble: open decision models of Jev's kind on the box). Omit to keep."],
                     "model": ["type": "string", "description": "For llm: \"host|model\" or a model name; empty for the app's own pick."],
                     "speed": ["type": "number", "description": "0 (pause), 1, 2, 4 or 8. A year is four minutes at 1×."],
                     "restart": ["type": "boolean", "description": "true: a new town on a new map."],
@@ -853,7 +853,7 @@ enum PanelTools {
             "inputSchema": [
                 "type": "object",
                 "properties": [
-                    "lord": ["type": "string", "description": "me | computer | jev | llm. Omit to keep."],
+                    "lord": ["type": "string", "description": "me | computer | jev | tev1 | nimble | llm (tev1, nimble: open decision models of Jev's kind on the box). Omit to keep."],
                     "model": ["type": "string", "description": "For llm: \"host|model\" or a model name; empty for the app's own pick."],
                     "speed": ["type": "number", "description": "0 (pause), 1, 2, 4 or 8. A day is 9 seconds at 1×."],
                     "restart": ["type": "boolean", "description": "true: a new city on a new map."],
@@ -866,7 +866,7 @@ enum PanelTools {
             "inputSchema": [
                 "type": "object",
                 "properties": [
-                    "seats": ["type": "object", "description": "A lord's name to me | computer | jev | llm, e.g. {\"曹操\": \"jev\", \"刘备\": \"llm\"}."],
+                    "seats": ["type": "object", "description": "A lord's name to me | computer | jev | tev1 | nimble | llm, e.g. {\"曹操\": \"jev\", \"刘备\": \"tev1\", \"孙坚\": \"nimble\"}."],
                     "model": ["type": "string", "description": "For llm seats: \"host|model\" or a model name; empty for the app's own pick."],
                     "speed": ["type": "number", "description": "0 (pause), 1, 2 or 4."],
                     "restart": ["type": "boolean", "description": "true: a new game from 190 AD."],
@@ -880,7 +880,7 @@ enum PanelTools {
             "inputSchema": [
                 "type": "object",
                 "properties": [
-                    "seat": ["type": "string", "description": "me | computer | jev | llm. Omit to keep."],
+                    "seat": ["type": "string", "description": "me | computer | jev | tev1 | nimble | llm (tev1, nimble: open decision models of Jev's kind on the box). Omit to keep."],
                     "model": ["type": "string", "description": "For llm: \"host|model\" or a model name; empty for the app's own pick."],
                     "speed": ["type": "number", "description": "0 (pause), 1, 2, 4 or 8."],
                     "restart": ["type": "boolean", "description": "true: a new game."],
@@ -909,7 +909,7 @@ enum PanelTools {
             "inputSchema": [
                 "type": "object",
                 "properties": [
-                    "seat": ["type": "string", "description": "me | computer | jev | llm. Omit to keep."],
+                    "seat": ["type": "string", "description": "me | computer | jev | tev1 | nimble | llm (tev1, nimble: open decision models of Jev's kind on the box). Omit to keep."],
                     "model": ["type": "string", "description": "For llm: \"host|model\" or a model name; empty for the app's own pick. Omit to keep."],
                     "run": ["type": "boolean", "description": "true: start growing; false: pause. Omit to keep."],
                     "new_world": ["type": "boolean", "description": "true: a fresh world and an empty village first — the old one is gone."],
@@ -1823,7 +1823,7 @@ enum PanelTools {
             NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: ["mode": "jev", "raise": false])
             if args["restart"] as? Bool == true { game.restart() }
             if let raw = args["mayor"] as? String {
-                guard let seat = CitySeat(rawValue: raw) else { return ("mayor 只能是 me、computer、jev 或 llm", true) }
+                guard let seat = CitySeat(rawValue: raw) else { return ("mayor 只能是 me、computer、jev、tev1、nimble 或 llm", true) }
                 game.seat = seat
             }
             if let model = args["model"] as? String { game.model = model }
@@ -1865,7 +1865,7 @@ enum PanelTools {
             NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: ["mode": "jev", "raise": false])
             if args["restart"] as? Bool == true { game.restart() }
             if let raw = args["lord"] as? String {
-                guard let seat = IceSeat(rawValue: raw) else { return ("lord 只能是 me、computer、jev 或 llm", true) }
+                guard let seat = IceSeat(rawValue: raw) else { return ("lord 只能是 me、computer、jev、tev1、nimble 或 llm", true) }
                 game.seat = seat
             }
             if let model = args["model"] as? String { game.model = model }
@@ -1882,7 +1882,7 @@ enum PanelTools {
             if let seats = args["seats"] as? [String: String] {
                 for (name, raw) in seats {
                     guard let f = game.faction(named: name) else { return ("没有这路诸侯：\(name)", true) }
-                    guard let seat = WarlordSeat(rawValue: raw) else { return ("seat 只能是 me、computer、jev 或 llm", true) }
+                    guard let seat = WarlordSeat(rawValue: raw) else { return ("seat 只能是 me、computer、jev、tev1、nimble 或 llm", true) }
                     game.setSeat(f, seat)
                 }
             }
@@ -1899,7 +1899,7 @@ enum PanelTools {
             NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: ["mode": "jev", "raise": false])
             if args["restart"] as? Bool == true { game.restart() }
             if let raw = args["seat"] as? String {
-                guard let seat = WallSeat(rawValue: raw) else { return ("seat 只能是 me、computer、jev 或 llm", true) }
+                guard let seat = WallSeat(rawValue: raw) else { return ("seat 只能是 me、computer、jev、tev1、nimble 或 llm", true) }
                 game.seat = seat
             }
             if let model = args["model"] as? String { game.model = model }
@@ -1915,7 +1915,7 @@ enum PanelTools {
             NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: ["mode": "jev", "raise": false])
             if args["new_world"] as? Bool == true { game.newWorld() }
             if let raw = args["seat"] as? String {
-                guard let seat = SandboxSeat(rawValue: raw) else { return ("seat 只能是 me、computer、jev 或 llm", true) }
+                guard let seat = SandboxSeat(rawValue: raw) else { return ("seat 只能是 me、computer、jev、tev1、nimble 或 llm", true) }
                 game.seat = seat
             }
             if let model = args["model"] as? String { game.model = model }

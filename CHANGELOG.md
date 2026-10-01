@@ -8,6 +8,16 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Added — tev1 and nimble in the Jev tab
+
+"把这个 tev1 和 nimble 部署到盒子上，然后加入 jev tab 对比用". Ollama 0.35
+serves Jev's own API (`/v1/systemone`) for open decision models, and the
+box's Ollama was brought up to 0.35.0 (one Ollama, upgraded in place):
+tev1 (Together AI, 4B) and nimble (Bespoke Labs, 9B) sit in any seat, as
+Jev and Laya do — no key, no cost; they see the first 24 options, as Laya
+sees its first twelve. A blackjack question came back from tev1 in 216–243
+ms warm. `jev_play` takes them too, and chat-model menus leave them out.
+
 ### Faster — a film's music in minutes, and every H3 shot a little quicker
 
 "怎么能让电影拍的更快，现在太慢了啊". Measured on the box first

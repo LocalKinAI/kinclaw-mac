@@ -3,11 +3,15 @@ import SwiftUI
 
 /// Who holds the pass.
 enum WallSeat: String, CaseIterable, Identifiable {
-    case me, computer, jev, llm
+    case me, computer, jev, tev1, nimble, llm
     var id: String { rawValue }
-    var title: String { ["我", "电脑", "Jev", "大模型"][Self.allCases.firstIndex(of: self)!] }
+    var title: String { ["我", "电脑", "Jev", "tev1", "nimble", "大模型"][Self.allCases.firstIndex(of: self)!] }
+    /// tev1 or nimble: an open decision model on the box's Ollama, asked Jev's own question.
+    var open: String? { self == .tev1 || self == .nimble ? rawValue : nil }
+    /// Jev, or an open model of its kind.
+    var decides: Bool { self == .jev || open != nil }
     /// Does somebody other than the script decide?
-    var commands: Bool { self == .jev || self == .llm }
+    var commands: Bool { decides || self == .llm }
 }
 
 /// What placing a tower on the tile under the mouse would do: refused and why, or the ways it would make.
@@ -98,7 +102,7 @@ final class WallGame: ObservableObject {
                         field.step(dt)
                     }
                     watch()
-                    if seat.commands, !asking, field.time - lastAsked >= (seat == .jev ? 5 : 10) { consult() }
+                    if seat.commands, !asking, field.time - lastAsked >= (seat.decides ? 5 : 10) { consult() }
                 }
                 frames += 1
                 if frames % 6 == 0 { beat += 1 }
@@ -228,7 +232,7 @@ final class WallGame: ObservableObject {
         Task { @MainActor in
             defer { asking = false }
             do {
-                let (index, chance, name) = who == .jev ? try await askJev(options, situation) : try await askChat(options, situation)
+                let (index, chance, name) = who.decides ? try await askJev(options, situation, via: who.open) : try await askChat(options, situation)
                 guard seat == who, !field.over else { return }
                 let done = WallCommander.execute(options[index].order, &field)
                 ballot = (options, index, chance)
@@ -240,14 +244,14 @@ final class WallGame: ObservableObject {
         }
     }
 
-    private func askJev(_ options: [WallOption], _ situation: String) async throws -> (Int, Double?, String) {
+    private func askJev(_ options: [WallOption], _ situation: String, via: String? = nil) async throws -> (Int, Double?, String) {
         let q = JevClient.Question(id: "order", question: WallCommander.question, howToJudge: WallCommander.howToJudge,
                                    options: options.enumerated().map { (String(format: "p%02d", $0.offset + 1), $0.element.words) })
-        let reply = try await JevClient.ask(state: [("game", WallCommander.rules), ("position_before_move", situation)], [q])
+        let reply = try await JevClient.ask(state: [("game", WallCommander.rules), ("position_before_move", situation)], [q], via: via)
         guard let answer = reply.answers["order"], let n = Int(answer.choice.dropFirst()), options.indices.contains(n - 1) else {
-            throw JevArcade.Failure.message("Jev 的回答读不出来")
+            throw JevArcade.Failure.message("\(via ?? "Jev") 的回答读不出来")
         }
-        return (n - 1, answer.chances[answer.choice], "Jev")
+        return (n - 1, answer.chances[answer.choice], via ?? "Jev")
     }
 
     private func askChat(_ options: [WallOption], _ situation: String) async throws -> (Int, Double?, String) {

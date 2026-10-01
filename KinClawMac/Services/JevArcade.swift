@@ -13,6 +13,12 @@ import Security
 ///     the Keychain and is typed into the tab by them.
 ///   - **Laya** — the open 0.4B model of the same kind, on this Mac, behind
 ///     `scripts/laya_judge.py`. Same question, no key, no cost.
+///   - **tev1**, **nimble** — two more open ones of the same kind, on the box's
+///     Ollama (0.35 or later), which answers Jev's own wire format at
+///     `/v1/systemone`: Together AI's 4B, fine-tuned from Qwen3.5, and Bespoke
+///     Labs' 9B, from Qwen3.5-9B, trained on pairs that differ by one fact.
+///     Jacky, 2026-09-30: 「部署到盒子上，然后加入 jev tab 对比用」. Asked through
+///     `JevClient.ask(…, via:)`, like Jev; the 建造 games seat them too.
 ///   - **本地大模型** — a chat model on the user's Ollama, asked the same
 ///     question and told to answer with the option's key.
 ///   - **Jev＋大模型**, **Laya＋大模型** — the two kinds of mind together, which
@@ -33,7 +39,7 @@ final class JevArcade: ObservableObject {
     static let shared = JevArcade()
 
     enum Player: String, CaseIterable, Identifiable {
-        case me, jev, laya, llm, duoJev, duoLaya, deep, heuristic, random
+        case me, jev, laya, tev1, nimble, llm, duoJev, duoLaya, deep, heuristic, random
         /// Does this player need a chat model chosen for it?
         var thinks: Bool { self == .llm || self == .duoJev || self == .duoLaya }
         var id: String { rawValue }
@@ -42,6 +48,7 @@ final class JevArcade: ObservableObject {
             case .me: return "我"
             case .jev: return "Jev（云）"
             case .laya: return FilmStudio.layaURL == BoxServices.base(.laya) ? "Laya（盒子）" : "Laya（本机）"
+            case .tev1, .nimble: return rawValue + (BoxServices.ollama == nil ? "（本机）" : "（盒子）")
             case .llm: return "本地大模型"
             case .duoJev: return "Jev＋大模型"
             case .duoLaya: return "Laya＋大模型"
@@ -375,6 +382,7 @@ final class JevArcade: ObservableObject {
             return Decision(chosen: options[Int.random(in: 0..<options.count)].id, options: options, milliseconds: 0, by: "随机", agreed: false)
         case .jev: return try await askJev(game, options)
         case .laya: return try await askLaya(game, options)
+        case .tev1, .nimble: return try await askJev(game, options, via: player.rawValue)
         case .llm: return try await askChat(game, options, model: model)
         case .duoJev: return try await askDuo(game, options, fast: .jev, model: model)
         case .duoLaya: return try await askDuo(game, options, fast: .laya, model: model)
@@ -414,12 +422,14 @@ final class JevArcade: ObservableObject {
     private static func object(_ fields: [(String, String)]) -> String { JevClient.object(fields) }
     private static func quoted(_ text: String) -> String { JevClient.quoted(text) }
 
-    private static func askJev(_ game: JevGame, _ options: [JevOption]) async throws -> Decision {
+    /// Jev — or, `via` one of them, an open decision model of its kind (tev1, nimble).
+    private static func askJev(_ game: JevGame, _ options: [JevOption], via open: String? = nil) async throws -> Decision {
         let question = JevClient.Question(id: "move", question: game.question, howToJudge: game.howToJudge,
                                           options: options.map { ($0.id, $0.label) })
-        let reply = try await JevClient.ask(state: [("game", game.rules), ("position_before_move", game.situation)], [question])
-        guard let move = reply.answers["move"] else { throw Failure.message("Jev 的回答里没有这道题") }
-        await MainActor.run { JevArcade.shared.tokens += reply.tokens }
+        let reply = try await JevClient.ask(state: [("game", game.rules), ("position_before_move", game.situation)], [question], via: open)
+        guard let move = reply.answers["move"] else { throw Failure.message("\(open ?? "Jev") 的回答里没有这道题") }
+        // What TypeSafe is paid for; an open model on the box costs nothing.
+        if open == nil { await MainActor.run { JevArcade.shared.tokens += reply.tokens } }
         return Decision(chosen: move.choice, options: options, chances: move.chances, confidence: move.confidence,
                         milliseconds: 0, by: reply.model, agreed: false)
     }
@@ -546,6 +556,11 @@ enum JevClient {
 
     static let base = "https://api.typesafe.ai"
 
+    /// The open decision models that answer Jev's own questions — Ollama 0.35
+    /// or later serves them at `/v1/systemone`: Together AI's tev1 and Bespoke
+    /// Labs' nimble, put on the box's Ollama (Jacky, 2026-09-30).
+    static let open = ["tev1", "nimble"]
+
     /// Field order is part of the question: a model reads a request top to
     /// bottom, and a dictionary would shuffle it. So the JSON is written by hand.
     static func object(_ fields: [(String, String)]) -> String {
@@ -556,7 +571,10 @@ enum JevClient {
         return String(String(data: data, encoding: .utf8)!.dropFirst().dropLast())
     }
 
-    static func ask(state: [(String, String)], _ questions: [Question]) async throws -> Reply {
+    /// Ask Jev — or, `via` "tev1" or "nimble", that open model on the box's
+    /// Ollama, which takes the same questions and needs no key.
+    static func ask(state: [(String, String)], _ questions: [Question], via decider: String? = nil) async throws -> Reply {
+        if let decider { return try await askOpen(decider, state: state, questions) }
         guard let key = JevKey.read(), !key.isEmpty else {
             if let status = JevKey.refusal {
                 throw JevArcade.Failure.message("钥匙串没让这一版 app 读 TypeSafe 的 key（\(status)）：app 重新编译过，对钥匙串来说是另一个程序。到 Jev 标签点一次「开始」让它问你，或者把 key 重新填一遍")
@@ -621,6 +639,95 @@ enum JevClient {
         }
         return Reply(answers: read, tokens: ((reply["usage"] as? [String: Any])?["input_tokens"] as? Int) ?? 0,
                      model: (reply["model"] as? String) ?? model)
+    }
+}
+
+extension JevClient {
+    /// Where each open model was found, and under which tag: looked up once.
+    /// The box's Ollama first — that is where they were put — then this Mac's.
+    @MainActor private static var homes: [String: (host: String, name: String)] = [:]
+
+    @MainActor
+    static func askOpen(_ model: String, state: [(String, String)], _ questions: [Question]) async throws -> Reply {
+        if homes[model] == nil {
+            for host in [BoxServices.ollama, OllamaCatalog.defaultBaseURL].compactMap({ $0 }) {
+                guard let url = URL(string: host + "/api/tags"),
+                      let (data, _) = try? await URLSession.shared.data(for: URLRequest(url: url, timeoutInterval: 4)),
+                      let names = (((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["models"] as? [[String: Any]])?
+                          .compactMap({ $0["name"] as? String }).filter({ $0.hasPrefix(model + ":") }),
+                      let name = names.first(where: { $0.hasSuffix(":latest") }) ?? names.first else { continue }
+                homes[model] = (host, name)
+                break
+            }
+        }
+        guard let found = homes[model] else {
+            throw JevArcade.Failure.message("盒子和本机的 Ollama 上都没有 \(model)：在盒子上 ollama pull \(model)（要 Ollama 0.35 以上）")
+        }
+        var reply = Reply(answers: [:], tokens: 0, model: "\(model)（\(BoxServices.place(of: found.host))）")
+        do {
+            for question in questions { reply.answers[question.id] = try await knockout(found, state, question) }
+        } catch {
+            homes[model] = nil                          // looked for again next time: it may have moved, or come back
+            throw error
+        }
+        return reply
+    }
+
+    /// A question takes 2 to 26 options, and tev1 was trained on up to 24.
+    /// More than that go through a knockout, so that every one is seen and
+    /// the model is the only judge: groups of at most 24, then a final among
+    /// the groups' winners. An option's chance is its chance in its group
+    /// times its group's winner's in the final.
+    private static func knockout(_ found: (host: String, name: String), _ state: [(String, String)], _ question: Question) async throws -> Answer {
+        let all = question.options
+        guard all.count > 24 else { return try await once(found, state, question) }
+        let groups = (all.count + 23) / 24, size = (all.count + groups - 1) / groups
+        var winners: [(key: String, label: String)] = [], first: [String: Double] = [:], group: [String: Int] = [:]
+        for (index, start) in stride(from: 0, to: all.count, by: size).enumerated() {
+            var part = question
+            part.options = Array(all[start..<min(start + size, all.count)])
+            let answer = try await once(found, state, part)
+            winners.append(part.options.first { $0.key == answer.choice } ?? part.options[0])
+            for option in part.options { first[option.key] = answer.chances[option.key] ?? 0; group[option.key] = index }
+        }
+        var final = question
+        final.options = winners
+        let last = try await once(found, state, final)
+        var chances: [String: Double] = [:]
+        for (key, chance) in first { chances[key] = chance * (last.chances[winners[group[key] ?? 0].key] ?? 0) }
+        return Answer(choice: last.choice, chances: chances, confidence: last.confidence)
+    }
+
+    /// One question, the way Ollama's own examples put it: the instructions
+    /// as one sentence. A game is hundreds of questions: the model stays loaded.
+    private static func once(_ found: (host: String, name: String), _ state: [(String, String)], _ question: Question) async throws -> Answer {
+        guard let url = URL(string: found.host + "/v1/systemone") else { throw JevArcade.Failure.message("地址不对：\(found.host)") }
+        let instructions = [question.question, question.howToJudge].filter { !$0.isEmpty }.joined(separator: " ")
+        let body = object([
+            ("model", quoted(found.name)),
+            ("state", object(state.map { ($0.0, quoted($0.1)) })),
+            ("questions", object([(question.id, object([
+                ("type", quoted("choice")),
+                ("instructions", quoted(instructions)),
+                ("criteria", object(question.options.map { ($0.key, quoted($0.label)) })),
+            ]))])),
+            ("keep_alive", quoted("30m")),
+        ])
+        var request = URLRequest(url: url, timeoutInterval: 90)            // the first question loads the model
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = Data(body.utf8)
+        guard let (data, response) = try? await URLSession.shared.data(for: request) else {
+            throw JevArcade.Failure.message("连不上 \(found.host) 的 Ollama")
+        }
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            let said = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["error"] as? String
+            throw JevArcade.Failure.message("\(found.name) 没接这道题：\(said ?? String(data: data.prefix(200), encoding: .utf8) ?? "")")
+        }
+        guard let reply = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let item = (reply["answers"] as? [String: Any])?[question.id] as? [String: Any],
+              let choice = item["choice"] as? String else { throw JevArcade.Failure.message("\(found.name) 的回答读不出来") }
+        return Answer(choice: choice, chances: (item["probabilities"] as? [String: Double]) ?? [:], confidence: item["confidence"] as? Double)
     }
 }
 
