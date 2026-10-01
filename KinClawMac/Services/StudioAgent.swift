@@ -829,10 +829,16 @@ final class StudioAgent: ObservableObject {
                 this terminal: the storyboard, every still and clip as it lands, and the cut appear there by \
                 themselves. You work through the panel's film tools (mcp__panel__film_*). Call film_guide once before \
                 anything else and follow it: it is the method this studio's films are made by, learned the hard way. \
-                \(Self.seeing) The work runs on the box and is slow — a still about 2 minutes, an H3 shot 10–12, music about a \
-                minute of work per second of music (25 minutes for 20 s), showing no progress while it works: \
+                \(Self.seeing) The work runs on the box and is slow — a still about 2 minutes, an H3 shot 10–12, music about 6 \
+                seconds of work per second of music (3 minutes for 30 s; a minute a second when the box lacks its GPU \
+                text encoder; film_status gives the estimate), showing no progress while it works: \
                 film_status says when it began and how long it takes, and it is not stuck — so before you shoot a film, give them the plan in a few lines (the shots, engine, shape, \
                 length, roughly how long it takes) and wait for a yes; say what a fix will cost before starting it. \
+                The studio no longer reviews or retakes shots by itself unless the person turns 把关 back on: you \
+                are the reviewer. Look at each finished take (film_frames) and reshoot only what is wrong. Every shot \
+                of an H3 film is filmed on LTX first (animate, about a minute and a half against H3's 5–6), a \
+                person's shot from its composed first frame with the cast in it; when a face drifts or a movement \
+                LTX cannot do comes out wrong, film_reshoot that shot with method "h3". \
                 You decide as much as you want to: what you give film_make (the cast, each shot's `who`, its \
                 `picture`, its `h3` words) is used as written, and the studio writes only the rest. On H3, make it with \
                 stop_after "frames", look at every shot with film_shot — its set, its first frame, the words each \
@@ -905,11 +911,13 @@ final class StudioAgent: ObservableObject {
                 `backlot open`). Generate on the box with its local tools qwen_image, h3_video and minimax_music — read \
                 .agents/skills/minimax-h3-local/SKILL.md first — instead of paid APIs. A project already under \
                 projects/ can be carried on from its checkpoints. \(Self.seeing) The box is slow — about 2 minutes a \
-                still, 10 minutes a 5-second H3 shot, 70 seconds of work per second of music — and does one heavy job \
+                still, 10 minutes a 5-second H3 shot, about 6 seconds of work per second of music (minimax_music's text \
+                stage runs on the box's GPU now: 3 minutes for 30 s) — and does one heavy job \
                 at a time: say what a plan will cost in time, wait for a yes, and start the music early. A song with a \
                 voice and words is YuE2, through the Comfy tools (comfy_run, template audio_yue2_text2music — open it \
                 with run: false and read comfy_status for its fields — or audio_yue2_music_cover for a cover of a song \
-                in `files`): about 17 seconds of work per second of music, four times faster than minimax_music. The \
+                in `files`): about 17 seconds of work per second of music — slower than minimax_music now, but it \
+                sings the words. The \
                 file comfy_run brings back is also on the box at ~/ComfyUI/output/audio/ under the same name, for \
                 OpenMontage to use. Speak the language they write in, and keep it short.
                 """
@@ -927,7 +935,7 @@ final class StudioAgent: ObservableObject {
                 image_prompts 每个场景一条英文，只写画面里真有的东西，不写比喻（比喻会被照字面画出来）；共同的风格放进 prompt_prefix。\
                 别让盒子上的模型替你写稿（它不管字数，写得虚）。先试后做：pixelle_image 试一张图（约 45 秒），pixelle_voice 试一句声音\
                 （它告诉你盒子的语音识别听到了什么：听错的地方就是读错的，改字）。做整支之前，把稿子、每个场景的画面、声音、模板、音乐和大概\
-                要多久给对方看，等对方点头：五个场景约 5–6 分钟，ComfyUI 被别的标签占着时（一段配乐要 25–50 分钟）要等更久，pixelle_status \
+                要多久给对方看，等对方点头：五个场景约 5–6 分钟，ComfyUI 被别的标签占着时（一段 MiniMax 配乐几分钟，一首 YuE2 歌二十分钟上下）要等更久，pixelle_status \
                 看得到队列。pixelle_make 立刻给你一个 task id；pixelle_wait 跟着（一次最多等 9 分钟，没好就再调）。做好之后先看 sheet，再说好不好。\
                 画面默认是静止的卡片。要动：先做静止版给对方看（快），对方满意了再用 pixelle_rework 做会动的版本（不重画图，原片不动，出一支新的）；\
                 开做前说清要多久（ltx 约 3 分钟一个场景）。ltx 的动法可以用 motion_prompts 每个场景写一句英文（镜头怎么走、画面里什么在动），\

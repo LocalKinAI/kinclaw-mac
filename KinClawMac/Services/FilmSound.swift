@@ -151,9 +151,24 @@ extension FilmStudio {
     /// The score by MiniMax Music 3, through ComfyUI on the box: the graph its
     /// official template makes, written directly. The description is used as
     /// its caption; an instrumental piece is asked for with section tags only.
+    /// MiniMax Music 3's text encoder, dequantized to bf16 so it can run on
+    /// the Apple GPU (which has no int8 matmul), made once on the box by
+    /// scripts/comfy/dequant_te.py.
+    static let gpuMusicEncoder = "minimax_music3_text_encoder_bf16_dequant.safetensors"
+
+    /// Whether a score's text stage runs on the box's GPU: KinClaw's loader and
+    /// the bf16 encoder are both there. It writes 25 tokens a second of music,
+    /// one at a time — 2.7 s a token on the CPU, where ComfyUI puts every text
+    /// encoder on a Mac; on the GPU a 30 s cue took 3 minutes instead of about
+    /// 34 (2026-09-29).
+    static func musicOnGPU() async -> Bool {
+        await boxHas("KinClawCLIPLoaderGPU", offering: gpuMusicEncoder, at: BoxServices.base(.comfy))
+    }
+
     static func composeMiniMax(_ description: String, seconds: Double, for film: String, to out: URL) async throws {
         guard await BoxServices.shared.ensure(.comfy) else { throw Failure.message("盒子上的 ComfyUI 起不来") }
         let base = await BoxServices.base(.comfy)
+        let gpu = await musicOnGPU()
         let caption = description.contains("Global Metadata") ? description : """
             Global Metadata: \(description)
 
@@ -165,7 +180,8 @@ extension FilmStudio {
         func node(_ type: String, _ inputs: [String: Any]) -> [String: Any] { ["class_type": type, "inputs": inputs] }
         let graph: [String: Any] = [
             "1": node("UNETLoader", ["unet_name": "minimax_music3_dit_fp16.safetensors", "weight_dtype": "default"]),
-            "2": node("CLIPLoader", ["clip_name": "minimax_music3_text_encoder_pruned_int8_convrot.safetensors", "type": "minimax", "device": "default"]),
+            "2": gpu ? node("KinClawCLIPLoaderGPU", ["clip_name": gpuMusicEncoder, "type": "minimax", "dtype": "bf16"])
+                : node("CLIPLoader", ["clip_name": "minimax_music3_text_encoder_pruned_int8_convrot.safetensors", "type": "minimax", "device": "default"]),
             "3": node("VAELoader", ["vae_name": "minimax_music3_dav.safetensors"]),
             "4": node("MiniMaxMusic3TextEncode", ["clip": ["2", 0], "caption": caption, "lyrics": "[intro]\n\n[instrumental]\n\n[outro]",
                                                   "seed": seed, "max_duration": min(300, max(10, seconds + 2)), "cfg_scale": 1.7, "top_k": 50]),
@@ -186,8 +202,9 @@ extension FilmStudio {
         guard (response as? HTTPURLResponse)?.statusCode == 200, let id = answer["prompt_id"] as? String else {
             throw Failure.message("ComfyUI 不接配乐：\(String(data: data, encoding: .utf8)?.prefix(300) ?? "")")
         }
-        // MiniMax Music 3's text stage is ~2.7 s a token on the box and a 45 s
-        // piece is over a thousand tokens: fifty minutes. Thirty was too few.
+        // MiniMax Music 3's text stage is ~2.7 s a token on the box's CPU and a
+        // 45 s piece is over a thousand tokens: fifty minutes (thirty was too
+        // few). On the GPU it is minutes, but the deadline is the CPU's.
         let deadline = Date().addingTimeInterval(3 * 3600)
         while Date() < deadline {
             try await Task.sleep(nanoseconds: 4_000_000_000)

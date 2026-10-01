@@ -305,6 +305,13 @@ extension FilmStudio {
             model = ["23", 0]
             graph["9"] = node("BasicScheduler", ["scheduler": "simple", "steps": full ? 20 : 4, "denoise": 1, "model": model])
         }
+        // PyTorch's own attention for this model (KinClaw's node on the box)
+        // instead of ComfyUI's sub-quadratic default on a Mac: 75.6 → 68.3 s a
+        // step at 640×640×124, the same picture (2026-09-29).
+        if await boxHas("KinClawPytorchAttention", at: base) {
+            graph["24"] = node("KinClawPytorchAttention", ["model": model])
+            model = ["24", 0]
+        }
         graph["10"] = node("BasicGuider", ["model": model, "conditioning": conditioning])
 
         let video = try await comfyResult(graph, node: "15", base: base, what: "H3 镜头", deadline: 3600)
@@ -418,6 +425,23 @@ extension FilmStudio {
 
     static func node(_ type: String, _ inputs: [String: Any]) -> [String: Any] {
         ["class_type": type, "inputs": inputs]
+    }
+
+    /// Whether the box's ComfyUI has a node — KinClaw's own
+    /// (kinclaw-mac/scripts/comfy): PyTorch attention for one model, a text
+    /// encoder kept on the GPU — and, with `option`, whether it offers that
+    /// value (a model file). Remembered once found; a box without it gets the
+    /// stock graph, not a refusal.
+    private static var boxFound: Set<String> = []
+    static func boxHas(_ node: String, offering option: String? = nil, at base: String) async -> Bool {
+        let key = node + "|" + (option ?? "")
+        if boxFound.contains(key) { return true }
+        guard let url = URL(string: base + "/object_info/" + node),
+              let (data, _) = try? await URLSession.shared.data(from: url) else { return false }
+        let info = String(decoding: data, as: UTF8.self)
+        guard info.contains("\"\(node)\""), option.map({ info.contains($0) }) ?? true else { return false }
+        boxFound.insert(key)
+        return true
     }
 
     static func upload(_ file: URL, as name: String, to base: String) async throws -> String {

@@ -39,7 +39,7 @@ struct FilmStudioView: View {
     @AppStorage(FilmStudio.jevOnKey) private var jevOn = false
     @AppStorage(FilmStudio.jevCountsKey) private var jevCounts = false
     /// Automatic retakes per shot on the reviewer's say-so; 0 is no reviewer.
-    @AppStorage(FilmStudio.retakesKey) private var retakes = 1
+    @AppStorage(FilmStudio.retakesKey) private var retakes = 0
     /// The shape of the picture: a phone holds a portrait one.
     @AppStorage("kinclaw.film.shape") private var shape = FilmStudio.Shape.square.rawValue
     /// 自动 reads the sentence; the other two overrule the reading.

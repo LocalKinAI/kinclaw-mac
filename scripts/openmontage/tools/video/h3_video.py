@@ -213,6 +213,12 @@ class H3Video(BaseTool):
                     "positive": conditioning, "latent": ["6", 1], "frame_idx": frame,
                     "vae": ["3", 0], "audio_vae": ["4", 0], "image": [str(200 + i), 0]})
                 conditioning = [str(300 + i), 0]
+            # PyTorch's own attention for this model (KinClaw's node on the box,
+            # kinclaw-mac/scripts/comfy) instead of ComfyUI's sub-quadratic
+            # default on a Mac: 75.6 -> 68.3 s a step at 640x640x124.
+            if self._client.has_node("KinClawPytorchAttention"):
+                graph["24"] = node("KinClawPytorchAttention", {"model": model})
+                model = ["24", 0]
             graph["10"] = node("BasicGuider", {"model": model, "conditioning": conditioning})
             graph["11"] = node("SamplerCustomAdvanced", {"noise": ["7", 0], "guider": ["10", 0], "sampler": ["8", 0],
                                                          "sigmas": ["9", 0], "latent_image": ["6", 1]})

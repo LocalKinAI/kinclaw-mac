@@ -25,6 +25,9 @@ p.add_argument("--height", type=int, default=480)
 p.add_argument("--length", type=int, default=124)
 p.add_argument("--strength", type=float, default=1.0)
 p.add_argument("--port", type=int, default=8188)
+# PyTorch's own attention for H3 through KinClaw's node (scripts/comfy), when
+# the box has it: 75.6 -> 68.3 s a step at 640x640x124, the same picture.
+p.add_argument("--no-fast-attention", action="store_true")
 # The int8 ControlNet patch needs torch._int_mm, which MPS does not have; the bf16 one is the same
 # weights dequantized (ConvRot rotated back) and runs on the GPU. Made once by dequantize_patch.py.
 p.add_argument("--patch", default="minimax_h3_fun_controlnet_union_bf16_dequant.safetensors")
@@ -68,6 +71,12 @@ async def main():
     t0 = time.time()
     say = lambda s: print(f"{time.time() - t0:7.1f}s {s}", flush=True)
     async with aiohttp.ClientSession() as s:
+        if not a.no_fast_attention:
+            info = await (await s.get(f"http://127.0.0.1:{a.port}/object_info/KinClawPytorchAttention")).text()
+            if '"KinClawPytorchAttention"' in info:
+                g["24"] = node("KinClawPytorchAttention", {"model": g["10"]["inputs"]["model"]})
+                g["10"]["inputs"]["model"] = ["24", 0]
+                say("PyTorch attention (KinClawPytorchAttention)")
         async with s.ws_connect(f"http://127.0.0.1:{a.port}/ws?clientId={cid}") as ws:
             r = await s.post(f"http://127.0.0.1:{a.port}/prompt", json={"prompt": g, "client_id": cid})
             body = await r.json()

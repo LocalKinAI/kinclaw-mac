@@ -8,6 +8,48 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Faster — a film's music in minutes, and every H3 shot a little quicker
+
+"怎么能让电影拍的更快，现在太慢了啊". Measured on the box first
+(2026-09-29): an H3 shot is 73 % sampling (4 steps × 75.6 s at 640×640×124),
+and a film's score was the other hour — MiniMax Music 3's text stage writes
+25 tokens a second of music, one at a time, on the CPU, where ComfyUI puts
+every text encoder on a Mac: 2.7 s a token, 402 of a 6-second cue's 415 s.
+
+- **The score's text stage runs on the box's GPU.** Its int8 encoder cannot
+  (the Apple GPU has no int8 matmul, and `--gpu-only` also breaks H3's nvfp4
+  one), so it was written out once as plain bf16 with comfy_kitchen's own
+  dequantizer, and a small node of ours loads it on the GPU. A 6-second cue:
+  419 → 37 s; a 30-second cue in 3 minutes instead of about 34. Film's time
+  estimate, the agents' briefs and the Studio guide say so.
+- **H3 uses PyTorch's own attention** — for that model only, through the
+  same node pack, instead of ComfyUI's sub-quadratic default: 75.6 → 68.3 s a
+  step, a warm shot 350 → 312 s, the same picture (SSIM 0.94 at one seed).
+- **YuE2 songs on the GPU too.** Its ABC score and music tokens are written
+  by the checkpoint's text encoder, on the CPU at 2.4 tokens/s; a bf16 copy
+  of the checkpoint and a loader that keeps that encoder on the GPU
+  (KinClawCheckpointLoaderGPU) made a 20-second song in 46 s instead of
+  439. The Comfy tab swaps both stock loaders — YuE2's and MiniMax Music's —
+  for the GPU ones when the box has them, so every tab that writes a song
+  through comfy_run gets it.
+- The nodes, the converter and how to install them are in `scripts/comfy`;
+  Film, Motion's `h3run.py` and OpenMontage's `minimax_music` / `h3_video`
+  use them when the box has them and the stock graph when it does not.
+- **Film's own reviewer is off by default** ("把打分和重拍停了" — "以前没有
+  agent 审片，现在有"). It was written before the Film tab had an agent:
+  after every take a model scored four frames, Laya and Jev gave opinions,
+  and a failed take was shot again — a whole H3 shot each time. The agent
+  now looks at the takes itself and reshoots only what is wrong; 把关 turns
+  the old reviewer back on, and counting what a plan numbers still runs.
+- **An H3 film is filmed on LTX first** ("人物镜头也默认先用 LTX，拍出来不对
+  的那一镜，再用 H3 重拍"). Every shot goes to LTX from its picture — a
+  person's shot from its composed first frame, the cast already standing in
+  it — and film_reshoot with method "h3" is there for the one that comes out
+  wrong. On 米迦勒's shot 2 LTX took 69 s and held his face for all five
+  seconds; H3 took 316 s and its camera wandered off him. The box's LTX
+  service no longer streams its weights from disk (low_ram off): 81 → 67 s
+  a clip.
+
 ### Added — Remote Control for every Claude Code session the app starts
 
 "这两点是我们下面要加的，就是远程控制，所有的都要支持，包括你自己" → "第一层现在就开".

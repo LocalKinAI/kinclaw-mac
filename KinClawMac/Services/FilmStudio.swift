@@ -371,13 +371,14 @@ final class FilmStudio: ObservableObject {
         ("pt", "Português", "Portuguese"), ("hi", "हिन्दी", "Hindi"),
     ]
     static let tongueKey = "kinclaw.film.narration"
-    /// Automatic retakes per shot: 0 turns the reviewer off. One by default —
-    /// it catches the take that went somewhere else, and costs two and a half
-    /// minutes only when it does.
+    /// Automatic retakes per shot: 0 turns the reviewer off. Off by default
+    /// since the Film tab has an agent that looks at every take itself
+    /// (Jacky, 2026-09-29: 以前没有 agent 审片，现在有) — the reviewer was
+    /// written before it, and each retake it asked for was a whole H3 shot.
     static let retakesKey = "kinclaw.film.retakes"
     static var retakes: Int {
         let set = UserDefaults.standard.object(forKey: retakesKey) as? Int
-        return min(max(set ?? 1, 0), 3)
+        return min(max(set ?? 0, 0), 3)
     }
 
     /// A take the reviewer sent back, remembered in case nothing better comes:
@@ -1131,12 +1132,14 @@ final class FilmStudio: ObservableObject {
     private func makeMusic(_ film: inout Film, seconds: Double) async {
         guard film.withMusic ?? Self.musicOn, let score = film.score, !FileManager.default.fileExists(atPath: film.music.path) else { return }
         // How long it will take, said with when it began: MiniMax Music 3 reads
-        // its caption token by token, about 67 s of work a second of music (568
-        // tokens at 2.7 s for 23 s). Without it an agent took twenty quiet
-        // minutes for a hang, stopped the film and cut it with no music.
+        // its caption token by token, about 67 s of work a second of music on
+        // the box's CPU (568 tokens at 2.7 s for 23 s), about 6 s with the text
+        // stage on its GPU (30 s in 179 s). Without it an agent took twenty
+        // quiet minutes for a hang, stopped the film and cut it with no music.
         let clock = DateFormatter()
         clock.dateFormat = "HH:mm"
-        let minutes = Int(((seconds + 2) * 67 + 120) / 60)
+        let perSecond: Double = await Self.musicOnGPU() ? 6 : 67
+        let minutes = max(1, Int(((seconds + 2) * perSecond + 60) / 60))
         film.note = Self.musicEngine == "minimax3"
             ? "在盒子上作配乐（MiniMax Music 3，\(clock.string(from: Date())) 开始，大约 \(minutes) 分钟：先逐字读描述、再出声音，中间没有进度，不是卡住）"
             : "在盒子上作配乐（\(clock.string(from: Date())) 开始）"
@@ -1208,6 +1211,24 @@ final class FilmStudio: ObservableObject {
             return stopped("第 \(nobody.map(String.init).joined(separator: "、")) 镜拍的是人，但没分到演员（who 是空的）：照这样 H3 会拍出空景。"
                            + ((film.cast ?? []).isEmpty ? "这部片子还没有演员：用 film_cast 加。" : "")
                            + "用 film_edit 给这些镜头 who，或者把 subject 改成 place / thing，再 film_continue")
+        }
+        // Every shot of an H3 film is filmed on LTX first, from its picture —
+        // a person's shot from its composed first frame, the cast standing in
+        // the set — and H3 is kept for the one that comes out wrong
+        // (film_reshoot with method "h3"). LTX made 米迦勒's shot 2 in 69 s
+        // with his face held for all five seconds, where H3 took 316 s and
+        // wandered off him (Jacky, 2026-09-30: 人物镜头也默认先用 LTX，拍出来不对
+        // 的那一镜，再用 H3 重拍). Without composed first frames a person's shot
+        // would start from the empty set, so those stay on H3, as does her own.
+        if film.engine == .h3 {
+            let composed = film.pinFrames ?? Self.pinOn
+            let onLTX = film.shots.indices.filter {
+                let shot = film.shots[$0]
+                guard shot.state != .done, shot.method == nil else { return false }
+                return (shot.who ?? []).isEmpty ? [.place, .thing].contains(shot.of) : composed && shot.of != .her
+            }
+            for i in onLTX { film.shots[i].method = .animate }
+            if !onLTX.isEmpty { save(film) }
         }
 
         // The photographer was told the pictures are empty sets and put
@@ -1291,8 +1312,8 @@ final class FilmStudio: ObservableObject {
         // Shots with nobody in them start from the set itself.
         let pinning = film.pinFrames ?? Self.pinOn
         let composing = pinning ? film.shots.indices.filter {
-            film.shots[$0].state != .done && (film.shots[$0].method ?? .h3) == .h3 && !(film.shots[$0].who ?? []).isEmpty
-                && !fm.fileExists(atPath: film.start(film.shots[$0].id).path)
+            film.shots[$0].state != .done && [.h3, .animate].contains(film.shots[$0].method ?? .h3)
+                && !(film.shots[$0].who ?? []).isEmpty && !fm.fileExists(atPath: film.start(film.shots[$0].id).path)
         } : []
         for index in composing {
             if Task.isCancelled { return stopped(halt) }

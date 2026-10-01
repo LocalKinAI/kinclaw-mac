@@ -928,10 +928,11 @@ final class ComfyStudio: NSObject, ObservableObject {
               let graph = try? await js("return JSON.stringify(window.app.graph.serialize());"),
               let output = try? JSONSerialization.jsonObject(with: Data(prompt.utf8)),
               let url = URL(string: Self.base + "/prompt") else { note = "工作流转不成 ComfyUI 能跑的样子"; return }
+        let sent = await Self.onGPU(output, base: Self.base)
         var request = URLRequest(url: url, timeoutInterval: 30)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["prompt": output, "client_id": client])
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["prompt": sent, "client_id": client])
         guard let (data, response) = try? await URLSession.shared.data(for: request) else { note = "ComfyUI 没应答"; return }
         let answer = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
         guard (response as? HTTPURLResponse)?.statusCode == 200, let id = answer["prompt_id"] as? String else {
@@ -1047,6 +1048,35 @@ final class ComfyStudio: NSObject, ObservableObject {
                 _ = try? await URLSession.shared.data(for: request)
             }
         }
+    }
+
+    /// Loaders that would put an autoregressive text stage on the box's CPU —
+    /// where ComfyUI puts every text encoder on a Mac — swapped for KinClaw's
+    /// GPU loaders when the box has them with the plain bf16 copy
+    /// (kinclaw-mac/scripts/comfy): a YuE2 song 9.6× faster (20 s in 46 s
+    /// instead of 439), MiniMax Music 11× (2026-09-29). Anything else is sent
+    /// as the template made it.
+    static func onGPU(_ prompt: Any, base: String) async -> Any {
+        guard var graph = prompt as? [String: Any] else { return prompt }
+        let yue2 = ("yue2_3b_int8_convrot.safetensors", "yue2_3b_bf16_dequant.safetensors")
+        for (id, value) in graph {
+            guard var node = value as? [String: Any], let inputs = node["inputs"] as? [String: Any],
+                  let type = node["class_type"] as? String else { continue }
+            if type == "CheckpointLoaderSimple", inputs["ckpt_name"] as? String == yue2.0,
+               await FilmStudio.boxHas("KinClawCheckpointLoaderGPU", offering: yue2.1, at: base) {
+                node["class_type"] = "KinClawCheckpointLoaderGPU"
+                node["inputs"] = ["ckpt_name": yue2.1, "dtype": "bf16"]
+            } else if type == "CLIPLoader",
+                      inputs["clip_name"] as? String == "minimax_music3_text_encoder_pruned_int8_convrot.safetensors",
+                      await FilmStudio.boxHas("KinClawCLIPLoaderGPU", offering: FilmStudio.gpuMusicEncoder, at: base) {
+                node["class_type"] = "KinClawCLIPLoaderGPU"
+                node["inputs"] = ["clip_name": FilmStudio.gpuMusicEncoder, "type": inputs["type"] ?? "minimax", "dtype": "bf16"]
+            } else {
+                continue
+            }
+            graph[id] = node
+        }
+        return graph
     }
 
     /// Have ComfyUI let go of the models it is holding, for the Film and
