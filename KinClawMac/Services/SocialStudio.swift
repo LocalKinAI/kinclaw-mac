@@ -61,6 +61,13 @@ final class SocialStudio: ObservableObject {
         let video: URL?
         let created: Date
         let account: String?
+        /// 一稿多发: the versions of one piece for different platforms share
+        /// this name (the first version's folder, as a rule).
+        let master: String?
+        /// The 选题库 idea it was made from.
+        let idea: String?
+        /// A 公众号 article laid out for the editor (social_article), and its screens.
+        let article: URL?
         let sources: [Source]
         let checks: [String]
         /// From the earlier Easel run: read only.
@@ -71,15 +78,21 @@ final class SocialStudio: ObservableObject {
     @Published private(set) var accounts: [String] = []
     @Published var selected: String?
     /// What is being drawn or read off-screen right now.
-    @Published private(set) var working: String?
+    @Published var working: String?
     @Published private(set) var lastTrends: Date?
     @Published var note: String?
+    /// The 选题库, the 内容日历 and the kept 拆解 — SocialPlan.swift keeps them;
+    /// they live here because an extension cannot hold stored properties.
+    @Published var ideas: [Idea] = []
+    @Published var planned: [Planned] = []
+    @Published var breakdowns: [Breakdown] = []
 
     private init() {}
 
     // MARK: Drafts
 
     func reload(select: String? = nil) {
+        reloadPlan()
         let drafts = Self.draftsFolder, easel = Self.easelFolder, profiles = Self.profilesFolder
         Task {
             let (found, names) = await Task.detached(priority: .utility) {
@@ -155,8 +168,9 @@ final class SocialStudio: ObservableObject {
                      platform: meta["platform"] as? String ?? "小红书", title: title, titleOptions: options.isEmpty ? [title] : options,
                      summary: summary?.isEmpty == false ? summary : nil,
                      body: body, tags: tags, cards: cards, video: video, created: created,
-                     account: meta["account"] as? String, sources: sources, checks: meta["checks"] as? [String] ?? [],
-                     legacy: legacy)
+                     account: meta["account"] as? String, master: meta["master"] as? String, idea: meta["idea"] as? String,
+                     article: files.fileExists(atPath: SocialArticle.file(in: folder).path) ? SocialArticle.file(in: folder) : nil,
+                     sources: sources, checks: meta["checks"] as? [String] ?? [], legacy: legacy)
     }
 
     /// 发布文案.txt, by its headings: 标题…：, 正文：, 话题：, 卡片…：.
@@ -209,6 +223,8 @@ final class SocialStudio: ObservableObject {
         var videoSeconds: Double?
         var sources: [Draft.Source] = []
         var account: String?
+        var master: String?
+        var idea: String?
         var notes: String?
         var slug: String?
         /// A draft of ours to write over (its old files moved aside first).
@@ -312,6 +328,8 @@ final class SocialStudio: ObservableObject {
             if let videoName { meta["video"] = videoName }
             if let summary = input.summary, !summary.isEmpty { meta["summary"] = summary }
             if let account = input.account { meta["account"] = account }
+            if let master = input.master, !master.isEmpty { meta["master"] = master }
+            if let idea = input.idea, !idea.isEmpty { meta["idea"] = idea }
             if let notes = input.notes { meta["notes"] = notes }
             let json = try JSONSerialization.data(withJSONObject: meta, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
             try json.write(to: folder.appendingPathComponent("meta.json"))
@@ -1454,6 +1472,8 @@ enum SocialTools {
                 return SocialStudio.Draft.Source(fact: fact, source: source, url: row["url"] as? String, date: row["date"].map(FilmTools.text))
             }
             input.account = args["account"] as? String
+            input.master = (args["master"] as? String)?.trimmingCharacters(in: .whitespaces)
+            input.idea = (args["idea"] as? String)?.trimmingCharacters(in: .whitespaces)
             input.notes = args["notes"] as? String
             input.slug = args["slug"] as? String
             input.replacing = args["draft"] as? String
@@ -1462,6 +1482,15 @@ enum SocialTools {
             case .success(let (draft, checks)):
                 if PanelTools.place == nil || PanelTools.place == "social" {
                     NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: ["mode": "social", "raise": false])
+                }
+                SocialPage.show(.drafts)            // the new draft is selected there
+                // The idea it came from knows its drafts, and is being made.
+                if let idea = draft.idea {
+                    studio.reloadPlan()
+                    _ = studio.updateIdea(idea) { idea in
+                        if !(idea.drafts ?? []).contains(draft.folder.lastPathComponent) { idea.drafts = (idea.drafts ?? []) + [draft.folder.lastPathComponent] }
+                        if idea.status == .todo { idea.status = .doing }
+                    }
                 }
                 var lines = ["草稿存好了：\(draft.folder.path)（平台：\(draft.platform)）",
                              "（\(draft.cards.count) 张卡片\(draft.video != nil ? "、一段视频" : "")；Easel 标签里已经选中，像手机上的帖子一样显示）",
@@ -1488,6 +1517,10 @@ enum SocialTools {
                 if let video = draft.video { lines.append("视频：\(video.path)") }
                 lines += draft.sources.map { "出处：\($0.fact) —— \($0.source)" + ($0.date.map { "，\($0)" } ?? "") + ($0.url.map { "，\($0)" } ?? "") }
                 lines += draft.checks.map { "自检：\($0)" }
+                if let master = draft.master {
+                    let versions = drafts.filter { $0.master == master && $0.id != draft.id }
+                    lines.append("一稿多发「\(master)」的其他版本：" + (versions.isEmpty ? "还没有" : versions.map { "\($0.platform) \($0.id)" }.joined(separator: "、")))
+                }
                 lines += draft.cards.prefix(4).map { "image://\($0.path)" }
                 return (lines.joined(separator: "\n"), false)
             }
@@ -1500,6 +1533,7 @@ enum SocialTools {
 
     private static func draftLine(_ draft: SocialStudio.Draft) -> String {
         "· \(draft.id) · \(draft.platform) · 「\(draft.title)」 · \(draft.cards.count) 张卡片\(draft.video != nil ? " + 视频" : "")"
+            + (draft.master.map { " · 一稿多发：\($0)" } ?? "")
             + (draft.legacy ? " · 原版 Easel 的旧草稿（只读）" : "") + " · \(time(draft.created))"
     }
 

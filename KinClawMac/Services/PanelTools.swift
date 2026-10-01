@@ -1195,6 +1195,8 @@ enum PanelTools {
                                 "date": ["type": "string", "description": "As of when: \"2026-09-28\"."],
                             ] as [String: Any], "required": ["fact", "source"]] as [String: Any]],
                 "account": ["type": "string", "description": "The profile it was written for."],
+                "master": ["type": "string", "description": "一稿多发: versions of one piece for different platforms share a master — give every version the first one's folder name. The tab shows them together; social_drafts lists the others."],
+                "idea": ["type": "string", "description": "The 选题库 idea it was made from (its id from social_ideas): the idea records the draft and moves to 进行中."],
                 "notes": ["type": "string", "description": "Anything for the person: the card style used, what to check."],
                 "slug": ["type": "string", "description": "A short name for the folder. Default: from the title."],
                 "draft": ["type": "string", "description": "Write over this draft of ours (a folder name from social_drafts)."],
@@ -1206,6 +1208,83 @@ enum PanelTools {
             "inputSchema": ["type": "object", "properties": [
                 "draft": ["type": "string", "description": "A folder name or title."],
                 "limit": ["type": "integer", "description": "How many to list. Default 20."],
+            ] as [String: Any]],
+        ],
+        [
+            "name": "social_ideas",
+            "description": "The 选题库 (Easel's idea bank), shown in the Easel tab under 选题库: what is worth making, 待做 → 进行中 → 已完成. action list (default; `status` filters), add (title; angle, source — 热榜 / 拆解 / 节日 / 灵感 / 对方, platforms), update (id; any of title, angle, source, platforms, status, draft — a draft folder made from it), remove (kept in ideas-removed.json). A draft saved with `idea` records itself on the idea and moves it to 进行中; a topic put on the calendar with `idea` does the same.",
+            "inputSchema": ["type": "object", "properties": [
+                "action": ["type": "string", "description": "list | add | update | remove. Default list."],
+                "id": ["type": "string", "description": "For update and remove: the id in brackets from list."],
+                "title": ["type": "string", "description": "The topic, in a line."],
+                "angle": ["type": "string", "description": "How this account would do it: the hook, the promise, the form."],
+                "source": ["type": "string", "description": "Where it came from: 热榜, 拆解, 节日, 灵感, 对方."],
+                "platforms": ["type": "array", "items": ["type": "string"], "description": "Where it would go."],
+                "status": ["type": "string", "description": "待做 | 进行中 | 已完成 (todo | doing | done)."],
+                "draft": ["type": "string", "description": "For update: a draft folder made from it."],
+            ] as [String: Any]],
+        ],
+        [
+            "name": "social_calendar",
+            "description": "The 内容日历, shown in the Easel tab under 日历: posts planned by day, beside the year's 节点 from Easel's calendar — 法定节假日, 传统节日 on their real 农历 dates, 国际节日, 电商 (618, 双11, 年货节…), 行业节点 — with stars for how much traffic each brings (★★★★★ national) and which accounts they suit; plan content 7–14 days before a big one. action list (default: from today — or `from` — `days` ahead, default 30, or up to `to`; what is planned and the 节点 of `min_stars` or more, default 3), entries (only what is planned), add (day yyyy-MM-dd, title; platform, status 计划 / 待发 / 已发, idea — its id, which moves it to 进行中 — draft, note), update (id; any field), remove. 已发 is the person saying so: nothing here posts.",
+            "inputSchema": ["type": "object", "properties": [
+                "action": ["type": "string", "description": "list | entries | add | update | remove. Default list."],
+                "id": ["type": "string", "description": "For update and remove."],
+                "day": ["type": "string", "description": "yyyy-MM-dd."],
+                "title": ["type": "string"],
+                "platform": ["type": "string"],
+                "status": ["type": "string", "description": "计划 | 待发 | 已发 (planned | ready | posted)."],
+                "idea": ["type": "string", "description": "The 选题库 idea's id."],
+                "draft": ["type": "string", "description": "The draft folder, once there is one."],
+                "note": ["type": "string"],
+                "from": ["type": "string", "description": "For list: yyyy-MM-dd. Default today."],
+                "to": ["type": "string", "description": "For list: yyyy-MM-dd."],
+                "days": ["type": "integer", "description": "For list: how many days from `from`. Default 30."],
+                "min_stars": ["type": "integer", "description": "For list: the 节点 shown, 1–5. Default 3."],
+            ] as [String: Any]],
+        ],
+        [
+            "name": "social_article",
+            "description": "Lay out a 公众号 article's body for WeChat's editor (Easel's gzh-design). Save the draft first with social_draft (platform 公众号: title options, summary, the 900×383 cover), then give its folder and the whole article as HTML — written from gzh-design's guide (guides/easel/skills/openclaw/gzh-design: SKILL.md, references/theme-index.md, the theme-*.md component libraries, common-components.md), with every style inline. It is tidied for the editor (div → section, text wrapped in <span leaf=\"\">, class/id removed, links turned into text, pictures made max-width 100%, empty decorations kept, the whole in one <section> ≤677 px), checked for what the editor destroys (<style>, position, float, grid, CSS variables, white-space:pre) and for half-width punctuation in Chinese, saved as article.html in the draft, and drawn a phone screen at a time — you see the first three. The person copies it from the tab (「复制排版」, pictures on this Mac inlined) and pastes it into the editor themselves. Pictures: file:// paths under the art folder, or paths relative to the draft (cards/01.png).",
+            "inputSchema": ["type": "object", "properties": [
+                "draft": ["type": "string", "description": "The 公众号 draft's folder name (from social_drafts)."],
+                "html": ["type": "string", "description": "The article: one <section>…</section>, all styles inline."],
+            ] as [String: Any], "required": ["draft", "html"]],
+        ],
+        [
+            "name": "social_subtitles",
+            "description": "Subtitles for a video, on this Mac (Easel's auto-subtitle and subtitle-translate). hear: mlx_whisper (medium) listens and the words' times cut it into lines a phone can read — Chinese ≤16 characters without punctuation, English ≤42; give `script` (the narration or spoken script, when there is one) and it spells names and terms as the script does. Read every line back and correct it (names, terms, numbers are what it gets wrong). burn: all the corrected `lines` ({start, end, text, second?} — seconds; `second` is a translation you write, shown smaller under the line for bilingual subtitles), burned into a copy of the video with ffmpeg (white bold PingFang on a dark outline; lifted above the bottom fifth on a vertical video, where the feed's own buttons sit); you get the file and two frames to look at. A Film film or a Pixelle video already carries its own captions — this is for videos that do not. The result can go into social_draft's `video`.",
+            "inputSchema": ["type": "object", "properties": [
+                "action": ["type": "string", "description": "hear | burn. Default hear."],
+                "video": ["type": "string", "description": "The video's path."],
+                "language": ["type": "string", "description": "For hear: zh, en, ja… Default: detected."],
+                "script": ["type": "string", "description": "For hear: what is said, when it is known."],
+                "longest": ["type": "integer", "description": "For hear: characters a line at most. Default 16 for Chinese, 42 otherwise."],
+                "lines": ["type": "array", "description": "For burn: every line, corrected. Default: the lines hear kept.",
+                          "items": ["type": "object", "properties": [
+                              "start": ["type": "number"], "end": ["type": "number"], "text": ["type": "string"],
+                              "second": ["type": "string", "description": "The same line in a second language."],
+                          ] as [String: Any], "required": ["start", "end", "text"]] as [String: Any]],
+                "size": ["type": "number", "description": "For burn: font size in the video's pixels. Default: from its size."],
+                "lift": ["type": "number", "description": "For burn: distance from the bottom as a fraction of the height. Default 0.2 on a vertical video, 0.07 otherwise."],
+                "name": ["type": "string", "description": "For burn: the new file's name. Default: <video>-字幕."],
+            ] as [String: Any], "required": ["video"]],
+        ],
+        [
+            "name": "social_breakdown",
+            "description": "爆款拆解 (Easel's viral breakdown), shown in the Easel tab under 拆解: when the person brings a post that did well — pasted, or read with social_page — take it apart and keep it. hook: the first line or cover, and why it stops a thumb. structure: its beats in order. why: why it spread (emotion, usefulness, identity, timing, the comments it invites). template: a reusable skeleton with blanks, for this account. topics: 3–5 angles this account could do with it — they go into the 选题库 unless topics_to_ideas is false. Take apart what is there; do not invent numbers it does not show. action save, list (default), get (id).",
+            "inputSchema": ["type": "object", "properties": [
+                "action": ["type": "string", "description": "save | list | get. Default list."],
+                "id": ["type": "string", "description": "For get."],
+                "text": ["type": "string", "description": "The post as it was: its title and text (and what its cards say)."],
+                "platform": ["type": "string"],
+                "source": ["type": "string", "description": "A link, or where it was seen."],
+                "hook": ["type": "string"],
+                "structure": ["type": "array", "items": ["type": "string"]],
+                "why": ["type": "array", "items": ["type": "string"]],
+                "template": ["type": "string"],
+                "topics": ["type": "array", "items": ["type": "string"]],
+                "topics_to_ideas": ["type": "boolean", "description": "Default true."],
             ] as [String: Any]],
         ],
         [
@@ -2157,6 +2236,8 @@ enum PanelTools {
             return await PixelleTools.call(name, args)
         case "social_status", "social_profile", "social_trends", "social_page", "social_card", "social_draft", "social_drafts":
             return await SocialTools.call(name, args)
+        case "social_ideas", "social_calendar", "social_breakdown", "social_subtitles", "social_article":
+            return await SocialPlanTools.call(name, args)
         case "film_recut":
             guard let id = args["film"] as? String else { return ("film_recut 需要 film", true) }
             switch FilmStudio.shared.recut(film: id, titleCard: args["title_card"] as? Bool, grade: args["grade"] as? Bool,

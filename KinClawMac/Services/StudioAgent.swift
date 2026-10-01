@@ -761,7 +761,8 @@ final class StudioAgent: ObservableObject {
                     "film_rescore", "film_review", "film_stop"]
         let pixelle = ["pixelle_status", "pixelle_service", "pixelle_make", "pixelle_rework", "pixelle_wait", "pixelle_cancel",
                        "pixelle_image", "pixelle_voice", "pixelle_templates", "pixelle_voices", "pixelle_runs"]
-        let social = ["social_status", "social_profile", "social_trends", "social_page", "social_card", "social_draft", "social_drafts"]
+        let social = ["social_status", "social_profile", "social_trends", "social_page", "social_card", "social_draft", "social_drafts",
+                      "social_ideas", "social_calendar", "social_breakdown", "social_subtitles", "social_article"]
         // Each other: what the other tabs are doing and have made, and
         // handing the person's request to one of them.
         let team = ["studio_team", "studio_handoff"]
@@ -965,7 +966,20 @@ final class StudioAgent: ObservableObject {
                 用这里的工具：画卡片 social_card，读网页 social_page，热榜 social_trends，账号 social_profile，存草稿 social_draft；要视频可以用 \
                 pixelle_*（解说短视频）。流程：账号画像（social_profile；没有就建一个，和对方一起填，别替对方编）→ 需要时看热榜 → 选题（按 Easel \
                 的七维打分，给两三个方向，等对方挑）→ 文案（按平台写标题备选、正文、话题）→ 卡片（先和对方定一种风格，整组只用这一套；一张一张画，\
-                每张都看回来的图和审查）→ 自检（合规、去 AI 味、每个数字对一遍原文）→ social_draft。事实：从对方自己的看板（例如宇宙看板 \
+                每张都看回来的图和审查）→ 自检（合规、去 AI 味、每个数字对一遍原文）→ social_draft。\
+                选题库、日历和拆解也在标签里给对方看。对方贴来一条爆款或对标的帖子：用 social_breakdown 拆开存下（钩子、结构、为什么火、\
+                能套用的模板、这个账号能做的选题；只拆它有的，不编它没给的数字），选题自动进选题库。定下来的选题用 social_ideas 记、改状态\
+                （待做、进行中、已完成）。排期用 social_calendar：它带着 Easel 的全年节点（节日按当年真实的农历日期，电商大促，行业节点；\
+                星越多流量越大，大节点提前 7–14 天准备），看一眼再给对方排。一个内容发几个平台（一稿多发）：每个平台存一份 social_draft，\
+                都给同一个 master（第一份的文件夹名）；从选题来的给 idea，选题就记下这份草稿。\
+                视频要字幕（对方自己的视频、别处来的；Film 和 Pixelle 的片子自己带字幕）：social_subtitles hear（有稿子就给 script），\
+                逐行对一遍再 burn；双语就每行写上 second。\
+                公众号正文要排版的：先 social_draft 存草稿，再照 gzh-design 的指南（skills/openclaw/gzh-design，先读 SKILL.md 和 \
+                references/theme-index.md，主题和组件在 references/ 里）写整篇 HTML，样式全写在 style 里，用 social_article 存进草稿；\
+                它会顺手改能改的、指出编辑器会弄坏的，给你看手机上的样子。对方在标签里点「复制排版」，自己贴进公众号编辑器。\
+                图表、信息图、思维导图：在 social_card 里用内联 SVG 或 HTML/CSS 自己画（选什么图、数据怎么排，照 chart-visualization、\
+                infographic、mindmap 的指南；它们用的在线接口和 CDN 这里不用），图上的数字一样要出处。\
+                事实：从对方自己的看板（例如宇宙看板 \
                 https://space.localkin.ai，用 social_page 读）或任何来源拿来的数字和说法，必须和原文一字不差，带日期和出处，每一条都写进 \
                 social_draft 的 sources；拿不准的就不用。不夸大，不写末日论，不制造焦虑，不做标题党；照账号画像的语气写，去 AI 味。\
                 各平台：social_draft 的 platform 写平台名（中文、英文、别名都认），它按各平台自己公布的规则查（数字在工具说明里）。要视频的：\

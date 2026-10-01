@@ -8,6 +8,43 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Added — Easel's workbench: 选题库, 内容日历, 爆款拆解, 一稿多发, subtitles, 公众号排版
+
+"你去挖掘一下那个easel项目，似乎他有很多我们没有的功能啊" → "开干吧". The whole
+Easel (ZJU-REAL) had what the tab lacked: the planning around a post, not
+only the post.
+
+- **The tab has four pages** — 草稿 · 选题库 · 日历 · 拆解 — and the agent
+  turns it to the one it has just changed. Kept as files beside the drafts
+  (social/ideas.json, calendar.json, breakdowns/), worked by three tools:
+  `social_ideas` (待做 → 进行中 → 已完成), `social_calendar` and
+  `social_breakdown` (a post that did well taken apart: hook, structure,
+  why it spread, a template, topics for this account — which go into the
+  选题库).
+- **The calendar knows the year.** Easel's table of 节点 — 法定节假日,
+  传统节日, 国际节日, 电商大促, 考试, each with stars and the accounts it
+  suits — put on real dates: 农历 festivals through the system's Chinese
+  calendar (中秋 2026-09-25, 除夕 2026-02-16), "5月第2个周日" counted, a
+  row with only a month shown as that month's theme. The file has several
+  tables with different columns, and each is read by its own header.
+- **一稿多发**: versions of one piece for different platforms share a
+  `master`, and the tab shows them together; a draft made from an idea
+  says so (`idea`) and the idea records it.
+- **Subtitles, on this Mac** (`social_subtitles`, after Easel's
+  auto-subtitle and subtitle-translate): mlx_whisper (medium, already
+  cached) hears the video — told the script, it gets the names right,
+  where without it 米迦勒 was 米加勒 and 审判 was 生胖 — the words' times cut
+  it into lines of 16 characters, the agent corrects them, and ffmpeg burns
+  them in, a translation under each line if wanted.
+- **公众号排版** (`social_article`, after gzh-design — which is AGPL-3.0, so
+  nothing of it is copied: the agent reads its guide and writes the HTML).
+  The article is tidied for WeChat's editor where that is mechanical
+  (div → section, text in `<span leaf="">`, no class or id, links as text,
+  pictures at max-width 100 %), what the editor would destroy is pointed
+  out (`<style>`, position, float, grid, CSS variables, `white-space:pre`),
+  and it is drawn a phone screen at a time. 「复制排版」 in the tab puts it
+  on the pasteboard as rich text, pictures inlined, for the person to paste.
+
 ### Added — tev1 and nimble in the Jev tab
 
 "把这个 tev1 和 nimble 部署到盒子上，然后加入 jev tab 对比用". Ollama 0.35

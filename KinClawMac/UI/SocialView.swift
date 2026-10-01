@@ -20,6 +20,9 @@ struct SocialView: View {
     @State private var copied: String?
     @State private var naming = false
     @State private var account = ""
+    /// 草稿 · 选题库 · 日历 · 拆解 (SocialPlanView.swift). The agent turns it
+    /// to the page it has just changed.
+    @AppStorage(SocialPage.key) private var section = SocialPage.drafts.rawValue
 
     var body: some View {
         GeometryReader { space in
@@ -34,10 +37,16 @@ struct SocialView: View {
                 VStack(spacing: 0) {
                     header
                     Rectangle().fill(Theme.hairline).frame(height: 0.5)
-                    HStack(spacing: 0) {
-                        sidebar.frame(width: 250).background(Theme.sidebar)
-                        Rectangle().fill(Theme.hairline).frame(width: 0.5)
-                        detail.frame(maxWidth: .infinity, maxHeight: .infinity)
+                    switch SocialPage(rawValue: section) ?? .drafts {
+                    case .drafts:
+                        HStack(spacing: 0) {
+                            sidebar.frame(width: 250).background(Theme.sidebar)
+                            Rectangle().fill(Theme.hairline).frame(width: 0.5)
+                            detail.frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
+                    case .ideas: SocialIdeasPage()
+                    case .calendar: SocialCalendarPage()
+                    case .breakdowns: SocialBreakdownsPage()
                     }
                 }
             }
@@ -81,6 +90,11 @@ struct SocialView: View {
                         .help("小红书、抖音、B站、微博、知乎、快手、公众号、视频号、朋友圈、TikTok、X、YouTube Shorts。名字和做法来自 ZJU-REAL/Easel（Apache-2.0），它的指南在 social/guides/easel")
                 }
                 Spacer(minLength: 12)
+                Picker("", selection: $section) {
+                    ForEach(SocialPage.allCases) { page in Text(pageTitle(page)).tag(page.rawValue) }
+                }
+                .pickerStyle(.segmented).labelsHidden().fixedSize()
+                .help("草稿；选题库（待做 · 进行中 · 已完成）；内容日历和全年节点；爆款拆解")
                 if let working = studio.working {
                     ProgressView().controlSize(.small)
                     Text(working).font(.kinCaption).foregroundStyle(.secondary).lineLimit(1)
@@ -140,7 +154,7 @@ struct SocialView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(draft.title).font(.kinLabel).lineLimit(2)
                     Text([draft.platform, when.string(from: draft.created), "\(draft.cards.count) 张"].joined(separator: " · ")
-                         + (draft.video != nil ? " + 视频" : "") + (draft.legacy ? " · 原版 Easel 旧稿" : ""))
+                         + (draft.video != nil ? " + 视频" : "") + (draft.master != nil ? " · 一稿多发" : "") + (draft.legacy ? " · 原版 Easel 旧稿" : ""))
                         .font(.kinCaption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 0)
@@ -186,6 +200,8 @@ struct SocialView: View {
                     VStack(alignment: .leading, spacing: 16) {
                         actions(draft)
                         titles(draft)
+                        if let master = draft.master { versions(of: draft, master: master) }
+                        if let article = draft.article { articleBox(draft, article) }
                         if let video = draft.video { videoBox(video) }
                         if !draft.sources.isEmpty { sources(draft) }
                         if !draft.checks.isEmpty { checks(draft) }
@@ -371,6 +387,67 @@ struct SocialView: View {
                     } label: { Image(systemName: copied == "摘要" ? "checkmark" : "doc.on.doc") }
                         .buttonStyle(.quiet)
                         .help("复制摘要：公众号后台标题下面的那一栏")
+                }
+            }
+        }
+    }
+
+    private func pageTitle(_ page: SocialPage) -> String {
+        let count: Int
+        switch page {
+        case .drafts: count = studio.drafts.count
+        case .ideas: count = studio.ideas.filter { $0.status != .done }.count
+        case .calendar: count = studio.planned.filter { $0.status != .posted && $0.day >= SocialPlanTools.day(Date()) }.count
+        case .breakdowns: count = studio.breakdowns.count
+        }
+        return count > 0 ? "\(page.title) \(count)" : page.title
+    }
+
+    /// A 公众号 article laid out for the editor: copied as rich text, pasted
+    /// there by the person; its screens as a phone shows them.
+    private func articleBox(_ draft: SocialStudio.Draft, _ article: URL) -> some View {
+        let screens = ((try? FileManager.default.contentsOfDirectory(at: SocialArticle.screensFolder(in: draft.folder),
+                                                                     includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.pathExtension == "png" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+        return VStack(alignment: .leading, spacing: 8) {
+            SectionTitle("公众号正文排版", detail: "照 gzh-design 的主题排的，样式都写在元素里")
+            HStack(spacing: 8) {
+                Button {
+                    copied = SocialArticle.copy(article) ? "排版" : nil
+                } label: { Label(copied == "排版" ? "已复制" : "复制排版", systemImage: copied == "排版" ? "checkmark" : "doc.on.clipboard") }
+                    .buttonStyle(.primary)
+                    .help("整篇带格式复制（本机的图会一起带上）：到公众号后台新建图文，在正文里粘贴。标题、摘要在上面单独复制")
+                Button { NSWorkspace.shared.open(draft.folder.appendingPathComponent("article-preview.html")) } label: {
+                    Label("在浏览器里看", systemImage: "safari")
+                }
+                .buttonStyle(.quietFilled)
+                .help("在默认浏览器里打开排好的正文（手机宽度）")
+            }
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(screens, id: \.self) { screen in
+                        StudioPicture(url: screen, largest: 900).frame(width: 276)
+                    }
+                }
+            }
+            .frame(width: 276, height: 460)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Theme.hairline, lineWidth: 0.5))
+        }
+    }
+
+    /// 一稿多发: the same piece written for the other platforms.
+    private func versions(of draft: SocialStudio.Draft, master: String) -> some View {
+        let others = studio.drafts.filter { $0.master == master && $0.id != draft.id }
+        return VStack(alignment: .leading, spacing: 6) {
+            SectionTitle("一稿多发", detail: others.isEmpty ? "「\(master)」只有这一版" : "「\(master)」还有 \(others.count) 版")
+            HStack(spacing: 6) {
+                ForEach(others) { other in
+                    Button { studio.selected = other.id } label: {
+                        Text(other.platform).font(.kinCaption)
+                    }
+                    .buttonStyle(.quietFilled)
+                    .help(other.title)
                 }
             }
         }
