@@ -8,6 +8,27 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Added — Motion: 整场白模, the whole scene as a grey model
+
+「motion一种玩法是变成白模，然后上人物和场景，白模不只是动作的捕捉，还有整个场景」 → a
+fourth route. The reference's movement, camera and layout stay; who and where change.
+
+- **MoGe-2 on the box's ComfyUI** reads every frame's geometry (already installed; detail
+  level 6 by default — 2 min for three seconds, against 6 at level 9, and the two look the
+  same). Its normals are shaded as grey clay here, with Accelerate, for the person to look
+  at; its depth is what H3 follows.
+- **Two references instead of an edited first frame**: who (her anchor, or a full-length
+  portrait drawn from `who`) and where (the place drawn empty from `looks`, the reference's
+  things told object for object). The image editor could not do it: it gave the reference
+  back unchanged, and painted the clay as "a photograph of a grey clay statue".
+- **H3 ref2va + Fun ControlNet over the depth**, MiniMax's six-section full-reference
+  words; stretches of five to ten seconds on H3's 17k+5 grid, each pinned to the last frame
+  of the one before, joined like the other routes. The take is cut to what the reference
+  holds from `start`, and says so before any work.
+- `motion_make` route: "whole" with `looks`, `who`, until: "model" | "still"; the tab has
+  「整场白模 · 换人换景」 in the route menu, the grey model under 「白模」, and both pictures.
+  First test: three seconds of tai chi → an old man in white hanfu in a bamboo courtyard.
+
 ### Added — Easel's workbench: 选题库, 内容日历, 爆款拆解, 一稿多发, subtitles, 公众号排版
 
 "你去挖掘一下那个easel项目，似乎他有很多我们没有的功能啊" → "开干吧". The whole

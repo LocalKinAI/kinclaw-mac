@@ -700,6 +700,26 @@ enum PanelTools {
                 a street. Use until: "plan" to look at the set from above (the \
                 camera's path drawn on it) and its first frame before anything is \
                 filmed; then until: "still"; then motion_continue.
+
+                FOURTH ROUTE — 整场白模, route: "whole": the reference's WHOLE \
+                scene becomes a grey model, not only the body — floor, walls, \
+                every pot and frame (MoGe-2 on the box reads each frame's \
+                geometry) — and other people in another place are filmed over \
+                it: same movement, same camera, same layout, new look. Give \
+                `video` or `url`, `looks` (required: what the reference's place \
+                becomes, OBJECT FOR OBJECT — look at the reference first with \
+                video_frames and name each thing it has: "the white wall is a \
+                bamboo grove, the grey mat is old stone paving, the pot plant on \
+                the left is a stone lantern; soft morning light") and `who` (who \
+                performs, any language; omit for her). Two reference pictures are \
+                drawn (who, full length; the place, empty) and H3 films over the \
+                model's depth with both — sound included. 5–60 s, in stretches \
+                of up to ten seconds joined end to end. About 6 min of model per \
+                ten seconds, 2 min of pictures, ~6 min H3 draft per stretch \
+                (quality "full" four times longer). Use until: "model" to look \
+                at the grey model first (motion_status(take) shows its first \
+                frame; video_frames its video), until: "still" for the two \
+                pictures; then motion_continue.
                 """,
             "inputSchema": [
                 "type": "object",
@@ -714,10 +734,12 @@ enum PanelTools {
                     "seconds": ["type": "number", "description": "How long, 4–120. Default 10."],
                     "title": ["type": "string", "description": "A short title."],
                     "credit": ["type": "string", "description": "Where the movement came from: title, author, address, licence."],
-                    "until": ["type": "string", "description": "\"still\": stop once her first picture is drawn — look at it with motion_status(take), then motion_continue. Worth it before minutes of filming. For the white-model route also \"plan\": stop once the set is built (plan from above + its first frame)."],
+                    "until": ["type": "string", "description": "\"still\": stop once her first picture is drawn — look at it with motion_status(take), then motion_continue. Worth it before minutes of filming. For the white-model route also \"plan\": stop once the set is built (plan from above + its first frame). For the whole-scene route \"model\": stop once the grey model is made; \"still\" there stops once the two reference pictures are drawn."],
                     "spec": ["type": "object", "description": "The third route's blockout set and camera path (see the description). Given, no reference video is used."],
-                    "looks": ["type": "string", "description": "Third route: what the plain shapes become and the light, in English, for re-rendering the first frame as a photograph — e.g. \"the glowing pink balls are red paper lanterns, the long dark-red strips are fabric awnings … A rainy night: the stone paving is wet and mirrors the warm light, no people.\""],
-                    "quality": ["type": "string", "description": "Third route: draft (default, H3's 4-step LoRA) | full (20 steps, about four times longer)."],
+                    "route": ["type": "string", "description": "\"whole\" for the fourth route (整场白模): the reference's whole scene as a grey model, other people in another place filmed over it. Needs `looks`; `who` optional."],
+                    "who": ["type": "string", "description": "Fourth route: who performs, how they look and what they wear, in any language (\"穿白色汉服的白须老者\"). Omit for her (her anchor picture)."],
+                    "looks": ["type": "string", "description": "Third route: what the plain shapes become and the light, in English, for re-rendering the first frame as a photograph — e.g. \"the glowing pink balls are red paper lanterns, the long dark-red strips are fabric awnings … A rainy night: the stone paving is wet and mirrors the warm light, no people.\" Fourth route: what the reference's place becomes, object for object, in any language — the place picture is drawn from it."],
+                    "quality": ["type": "string", "description": "Third and fourth routes: draft (default, H3's 4-step LoRA) | full (20 steps, about four times longer)."],
                     "scene_as_written": ["type": "boolean", "description": "`scene` is already the English the models should read: used as written, not rewritten."],
                     "words": ["type": "string", "description": "The words the video model films from, as written (English), instead of the studio's own (\"… follows the reference movement exactly, slowly … Static camera. Ambient sound only …\")."],
                 ] as [String: Any],
@@ -771,7 +793,7 @@ enum PanelTools {
             "description": "Carry on with a take that stopped — at until: \"still\", after motion_stop, or after an error: what is done stays, the rest is made. `until: \"still\"` stops again once her first picture is drawn.",
             "inputSchema": ["type": "object", "properties": [
                 "take": ["type": "string", "description": "The take's id or title."],
-                "until": ["type": "string", "description": "\"still\" to stop once her first picture is drawn; \"plan\" (white-model route) to stop once the set is built."],
+                "until": ["type": "string", "description": "\"still\" to stop once her first picture is drawn (whole-scene route: the two reference pictures); \"plan\" (white-model route) to stop once the set is built; \"model\" (whole-scene route) once the grey model is made."],
             ] as [String: Any], "required": ["take"]],
         ],
         [
@@ -1784,18 +1806,26 @@ enum PanelTools {
                 case .failure(let failure): return (failure.localizedDescription, true)
                 }
             }
-            // The reference routes: where she is and what she wears is not optional.
-            guard !((args["scene"] as? String) ?? "").trimmingCharacters(in: .whitespaces).isEmpty else {
-                return ("motion_make 需要 scene（她在哪、穿什么）；或者走白模路线，给 spec", true)
-            }
-            // Named wrong, a camera or a place became the default without a
-            // word: it is said, before a download.
             let cameraName = ((args["camera"] as? String) ?? "").trimmingCharacters(in: .whitespaces).lowercased()
-            if !cameraName.isEmpty, cameraName != "skeleton", MotionStage.Camera(rawValue: cameraName) == nil {
-                return ("camera 只能是 skeleton、static、orbit、push", true)
-            }
             let placeName = ((args["place"] as? String) ?? "").trimmingCharacters(in: .whitespaces).lowercased()
-            if !placeName.isEmpty, MotionStage.Place(rawValue: placeName) == nil { return ("place 只能是 park、open", true) }
+            let whole = ((args["route"] as? String) ?? "").trimmingCharacters(in: .whitespaces).lowercased() == "whole" || cameraName == "whole"
+            if whole {
+                // The fourth route: what the place becomes is not optional — said before a download.
+                guard !((args["looks"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    return ("整场白模要 looks：原片的场景变成什么，每样东西对应着说（先 video_frames 看原片有什么）", true)
+                }
+            } else {
+                // The reference routes: where she is and what she wears is not optional.
+                guard !((args["scene"] as? String) ?? "").trimmingCharacters(in: .whitespaces).isEmpty else {
+                    return ("motion_make 需要 scene（她在哪、穿什么）；或者走白模路线，给 spec；或者整场白模，给 route: \"whole\" 和 looks", true)
+                }
+                // Named wrong, a camera or a place became the default without a
+                // word: it is said, before a download.
+                if !cameraName.isEmpty, cameraName != "skeleton", MotionStage.Camera(rawValue: cameraName) == nil {
+                    return ("camera 只能是 skeleton、static、orbit、push", true)
+                }
+                if !placeName.isEmpty, MotionStage.Place(rawValue: placeName) == nil { return ("place 只能是 park、open", true) }
+            }
             if (args["video"] as? String ?? "").isEmpty, let address = (args["url"] as? String)?.trimmingCharacters(in: .whitespaces), !address.isEmpty {
                 do {
                     let info = try await MotionImport.look(address)
@@ -1811,6 +1841,25 @@ enum PanelTools {
             guard let path = (args["video"] as? String)?.trimmingCharacters(in: .whitespaces), !path.isEmpty else { return ("motion_make 需要 video（参考视频的路径）或 url", true) }
             let seconds = (args["seconds"] as? Double) ?? Double((args["seconds"] as? Int) ?? 10)
             let start = (args["start"] as? Double) ?? Double((args["start"] as? Int) ?? 0)
+            if whole {
+                let until = (args["until"] as? String) ?? ""
+                switch await MotionStudio.shared.makeWhole(video: URL(fileURLWithPath: (path as NSString).expandingTildeInPath),
+                                                     title: (args["title"] as? String) ?? "", start: start, seconds: seconds,
+                                                     who: args["who"] as? String, looks: (args["looks"] as? String) ?? "",
+                                                     words: args["words"] as? String, quality: args["quality"] as? String,
+                                                     hold: ["model", "still"].contains(until) ? until : nil, credit: args["credit"] as? String) {
+                case .success(let take):
+                    let stretch = Double(FilmStudio.h3Frames(take.stretch)) / 24
+                    let minutes = take.segments.count * (take.quality == "full" ? 28 : 12) + 2
+                    return ("开始做整场白模：「\(take.title)」\(String(format: "%.1f", take.seconds)) 秒，分 \(take.segments.count) 段（每段 \(String(format: "%.1f", stretch)) 秒），"
+                            + "人物：\(take.who ?? "她")；"
+                            + (take.hold == "model" ? "白模做好就停，motion_status(take) 看白模第一帧，再 motion_continue"
+                               : take.hold == "still" ? "两张参考图画好就停，motion_status(take) 看过再 motion_continue"
+                               : "白模、参考图、H3 一路到底，大约 \(minutes) 分钟")
+                            + "。成片会在 \(take.file.path)", false)
+                case .failure(let failure): return (failure.localizedDescription, true)
+                }
+            }
             switch MotionStudio.shared.make(video: URL(fileURLWithPath: (path as NSString).expandingTildeInPath),
                                             title: (args["title"] as? String) ?? "", start: start, seconds: seconds,
                                             scene: (args["scene"] as? String) ?? "", credit: args["credit"] as? String,
@@ -2026,7 +2075,7 @@ enum PanelTools {
                 return ("motion_continue 需要 take（id 或标题）", true)
             }
             let until = (args["until"] as? String) ?? ""
-            switch MotionStudio.shared.resume(wanted, hold: ["still", "plan"].contains(until) ? until : nil) {
+            switch MotionStudio.shared.resume(wanted, hold: ["still", "plan", "model"].contains(until) ? until : nil) {
             case .success(let take): return ("接着拍「\(take.title)」了。motion_status(wait: true) 跟着", false)
             case .failure(let failure): return (failure.localizedDescription, true)
             }
@@ -2068,8 +2117,8 @@ enum PanelTools {
                 let state: String
                 switch take.state {
                 case .waiting: state = "等着"
-                case .tracking: state = "在提取动作"
-                case .drawing: state = "在画起始画面"
+                case .tracking: state = take.whole == true ? "在做整场白模" : take.built == true ? "在搭白模" : "在提取动作"
+                case .drawing: state = take.whole == true ? "在画参考图" : "在画起始画面"
                 case .filming: state = "在拍，\(take.finished)/\(take.segments.count) 段好了"
                 case .joining: state = "在接起来"
                 case .done: state = "拍好了 → \(take.file.path)"

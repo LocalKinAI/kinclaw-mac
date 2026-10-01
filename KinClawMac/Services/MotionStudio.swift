@@ -82,6 +82,12 @@ final class MotionStudio: ObservableObject {
         var built: Bool?
         var looks: String?
         var quality: String?
+        /// The fourth route (整场白模, `MotionWhole`): the reference's whole scene made a grey
+        /// model on the box, and painted over by H3 from two pictures — `who` (nil: her) and the
+        /// place `looks` describes, object for object. `size` is what it is filmed at.
+        var whole: Bool?
+        var who: String?
+        var size: [Int]?
         var created = Date()
 
         enum State: String, Codable { case waiting, tracking, drawing, filming, joining, done, failed }
@@ -97,6 +103,16 @@ final class MotionStudio: ObservableObject {
         @MainActor func clip(_ n: Int) -> URL { folder.appendingPathComponent(String(format: "seg-%02d.mp4", n)) }
         @MainActor func pose(_ n: Int) -> URL { folder.appendingPathComponent(String(format: "pose-%02d.mp4", n)) }
         @MainActor func last(_ n: Int) -> URL { folder.appendingPathComponent(String(format: "seg-%02d.last.png", n)) }
+        @MainActor var wholeFolder: URL { folder.appendingPathComponent("whole") }
+        @MainActor func wholeSource(_ n: Int) -> URL { wholeFolder.appendingPathComponent(String(format: "source-%02d.mp4", n)) }
+        @MainActor func wholeNormal(_ n: Int) -> URL { wholeFolder.appendingPathComponent(String(format: "normal-%02d.mp4", n)) }
+        @MainActor func wholeDepth(_ n: Int) -> URL { wholeFolder.appendingPathComponent(String(format: "depth-%02d.mp4", n)) }
+        @MainActor func wholeClay(_ n: Int) -> URL { wholeFolder.appendingPathComponent(String(format: "clay-%02d.mp4", n)) }
+        @MainActor var clayFirst: URL { wholeFolder.appendingPathComponent("clay-first.png") }
+        @MainActor var whoPicture: URL { wholeFolder.appendingPathComponent("who.png") }
+        @MainActor var placePicture: URL { wholeFolder.appendingPathComponent("place.png") }
+        /// The depth of segment `n` in the box's ComfyUI input, for H3 to follow.
+        @MainActor func wholeDepthName(_ n: Int) -> String { "kinclaw-motion-\(id.prefix(40))-whole-depth-\(n).mp4" }
         var finished: Int { segments.filter { $0.state == .done }.count }
         /// Frames in one segment: on the video model's 8k+1 grid, at 24 a second.
         var frames: Int { max(1, Int((stretch * 24 / 8).rounded())) * 8 + 1 }
@@ -222,6 +238,61 @@ final class MotionStudio: ObservableObject {
         return .success(take)
     }
 
+    /// Start a take by the fourth route (`MotionWhole`): the reference's whole scene as a grey
+    /// model, painted over by H3 — `who` (empty: her) in the place `looks` describes, the
+    /// reference's things told object for object. Five to sixty seconds, in even stretches of
+    /// five to ten, cut to what the reference holds from `start`.
+    func makeWhole(video: URL, title: String, start: Double, seconds: Double, who: String?, looks: String,
+                   words: String?, quality: String?, hold: String?, credit: String?) async -> Result<Take, FilmStudio.Failure> {
+        guard working == nil else { return .failure(.message("正在拍「\(working!)」，等它拍完")) }
+        guard FilmStudio.shared.shooting == nil else { return .failure(.message("片场正在拍片，两边用的是同一台盒子，等它拍完")) }
+        guard FileManager.default.fileExists(atPath: video.path) else { return .failure(.message("找不到这段视频：\(video.path)")) }
+        if let trouble = CompanionArt.unreachableVolume(Self.root) { return .failure(.message(trouble)) }
+        if BoxServices.ssh.isEmpty { return .failure(.message(MotionStage.Failure.noBox.localizedDescription)) }
+        let looks = looks.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !looks.isEmpty else {
+            return .failure(.message("整场白模要 looks：原片的场景变成什么——每样东西对应着说（墙→竹林，地垫→石板……）"))
+        }
+        let person = who?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if person.isEmpty, CompanionCharacter.shared.anchorURL == nil {
+            return .failure(.message("没有人物：给 who（换上什么人），或者先 character_new 定她的锚图"))
+        }
+        // Stretches on H3's 17k+5 grid, each starting on the last frame of the one before: as
+        // long as asked when the reference holds it, else a little less — said now, not after
+        // the first stretch's minutes.
+        let duration = (try? await AVURLAsset(url: video).load(.duration).seconds) ?? 0
+        let available = Int(((duration - max(start, 0)) * 24).rounded(.down))
+        guard available >= 124 else {
+            return .failure(.message("参考视频从第 \(String(format: "%g", max(start, 0))) 秒起只有 \(String(format: "%.1f", max(0, duration - max(start, 0)))) 秒，"
+                                     + "整场白模一段至少 5.2 秒"))
+        }
+        let wanted = min(Int((min(max(seconds, 5), 60) * 24).rounded()), available)
+        var count = max(1, Int((Double(wanted - 1) / 242).rounded(.up)))
+        var frames = FilmStudio.h3Frames(Double((wanted - 1) / count + 1) / 24)
+        while count * (frames - 1) + 1 > available {
+            if frames - 17 >= 124 { frames -= 17 } else { count -= 1; frames = FilmStudio.h3Frames(Double((wanted - 1) / count + 1) / 24) }
+        }
+        let stamp = Int(Date().timeIntervalSince1970)
+        let name = title.trimmingCharacters(in: .whitespaces).isEmpty ? video.deletingPathExtension().lastPathComponent : title
+        var take = Take(id: "\(Self.slug(name))-\(stamp)", title: name, source: "source." + (video.pathExtension.isEmpty ? "mp4" : video.pathExtension),
+                        credit: credit, start: max(start, 0), seconds: Double(count * (frames - 1) + 1) / 24, scene: looks,
+                        stretch: Double(frames) / 24, segments: (1...count).map { Segment(id: $0) })
+        take.whole = true
+        take.who = person.isEmpty ? nil : person
+        take.looks = looks
+        take.words = words?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? words : nil
+        take.quality = quality == "full" ? "full" : "draft"
+        take.hold = hold
+        do {
+            try FileManager.default.createDirectory(at: take.folder, withIntermediateDirectories: true)
+            try FileManager.default.copyItem(at: video, to: take.reference)
+        } catch { return .failure(.message("存不下参考视频：\(error.localizedDescription)")) }
+        take.state = .tracking
+        save(take)
+        produce(take.id)
+        return .success(take)
+    }
+
     /// Carry on with a take that stopped.
     func resume(_ id: String, hold: String? = nil) -> Result<Take, FilmStudio.Failure> {
         guard working == nil else { return .failure(.message("正在拍「\(working!)」，等它拍完")) }
@@ -259,9 +330,11 @@ final class MotionStudio: ObservableObject {
         if take.built == true {
             lines[1] = "白模：\(take.reference.path)（agent 写的场景清单），\(String(format: "%.1f", take.seconds)) 秒，H3 \(take.quality == "full" ? "20 步" : "4 步草稿")"
         }
-        lines.append("路线：" + (take.built == true ? "提示词白模（Blender 搭景 + 深度 → H3 Fun ControlNet）"
+        lines.append("路线：" + (take.whole == true ? "整场白模（MoGe 把原片整个场景做成白模 → 人物和场景两张参考图 → H3 照着白模拍）"
+                                 : take.built == true ? "提示词白模（Blender 搭景 + 深度 → H3 Fun ControlNet）"
                                  : take.camera.map { "3D，\($0.title)，布景 \((take.place ?? .park).title)" } ?? "骨架（按参考视频的机位拍）"))
-        if let looks = take.looks { lines.append("白模各块变成什么：\(looks)") }
+        if take.whole == true { lines.append("换上的人物：\(take.who ?? "她（锚图）")") }
+        if let looks = take.looks { lines.append(take.whole == true ? "原片场景变成什么：\(looks)" : "白模各块变成什么：\(looks)") }
         lines.append("场景：\(take.scene)")
         if let english = take.sceneEnglish { lines.append("场景（给模型的英文）：\(english)") }
         if let words = take.words { lines.append("拍视频的原话（你给的，照原样）：\(words)") }
@@ -270,7 +343,8 @@ final class MotionStudio: ObservableObject {
                          + (fm.fileExists(atPath: take.clip(segment.id).path) ? " → \(take.clip(segment.id).path)" : ""))
         }
         var pictures: [URL] = []
-        for (label, url) in [("她的起始画面", take.still), ("参考第一帧的姿势", take.sourceFirst), ("3D 布景的第一帧", take.blockout),
+        for (label, url) in [("整场白模第一帧", take.clayFirst), ("人物参考图", take.whoPicture), ("场景参考图", take.placePicture),
+                             ("她的起始画面", take.still), ("参考第一帧的姿势", take.sourceFirst), ("3D 布景的第一帧", take.blockout),
                              ("白模俯视图（镜头轨迹：白点起、琥珀色点止）", take.folder.appendingPathComponent("stage/out/plan.png"))]
         where fm.fileExists(atPath: url.path) {
             lines.append("\(label)：\(url.path)")
@@ -319,6 +393,11 @@ final class MotionStudio: ObservableObject {
             let client = DiffuserClient.shared
             await ComfyStudio.yieldMemory()    // the room ComfyUI's last models are sitting in
             do {
+                if take.whole == true {
+                    try await produceWhole(&take)
+                    save(take)
+                    return
+                }
                 if take.built == true {
                     try await produceBuilt(&take)
                     save(take)
@@ -605,6 +684,127 @@ final class MotionStudio: ObservableObject {
                                   exact: (width: size[0], height: size[1]))
         if let began = since { usual = Date().timeIntervalSince(began) }
         take.segments[0].state = .done
+        take.state = .done
+        take.note = nil
+    }
+
+    /// The fourth route: the whole scene of each stretch a grey model (MoGe on the box), stop at
+    /// "model" if asked; the two pictures, stop at "still" if asked; then H3 over each stretch's
+    /// depth with both pictures as references, each stretch after the first pinned to the last
+    /// frame of the one before; joined. A carried-on take skips what is already made.
+    private func produceWhole(_ take: inout Take) async throws {
+        let fm = FileManager.default
+        try fm.createDirectory(at: take.wholeFolder, withIntermediateDirectories: true)
+        if take.size?.count != 2 {
+            let measured = await MotionWhole.size(of: take.reference)
+            take.size = [measured.width, measured.height]
+            save(take)
+        }
+        let size = (width: take.size?[0] ?? 864, height: take.size?[1] ?? 480)
+        let frames = FilmStudio.h3Frames(take.stretch)          // one stretch, on H3's 17k+5 grid
+        let seed = CompanionCharacter.seed(for: take.id)
+
+        // 1. The whole scene as a grey model, a stretch at a time. Each stretch starts on the last
+        //    frame of the one before, as its film will.
+        for index in take.segments.indices {
+            let number = take.segments[index].id
+            if fm.fileExists(atPath: take.wholeClay(number).path), fm.fileExists(atPath: take.wholeDepth(number).path) { continue }
+            take.state = .tracking; save(take)
+            progress = "盒子上在做整场白模 第 \(number)/\(take.segments.count) 段（MoGe）"
+            since = Date()
+            let from = take.start + Double(index * (frames - 1)) / 24
+            try await MotionWhole.cut(take.reference, from: from, frames: frames, size: size, to: take.wholeSource(number))
+            try await MotionWhole.model(take.wholeSource(number), normal: take.wholeNormal(number), depth: take.wholeDepth(number),
+                                        depthName: take.wholeDepthName(number), id: take.id)
+            progress = "在把白模上色成灰模 第 \(number) 段"
+            let first = index == 0 ? take.clayFirst : take.wholeFolder.appendingPathComponent(String(format: "clay-first-%02d.png", number))
+            try await MotionWhole.clay(from: take.wholeNormal(number), to: take.wholeClay(number), first: first)
+            since = nil
+        }
+        if take.hold == "model" {
+            take.hold = nil
+            take.state = .waiting
+            take.note = "停在白模：motion_status(take) 看白模第一帧（video_frames 看白模视频 \(take.wholeClay(1).path)），没问题就 motion_continue"
+            save(take)
+            return
+        }
+
+        // 2. Who and where, as pictures.
+        if !fm.fileExists(atPath: take.whoPicture.path) {
+            take.state = .drawing; save(take)
+            progress = "在画人物参考图"
+            since = Date()
+            if let who = take.who, !who.isEmpty {
+                try await MotionWhole.drawWho(who, to: take.whoPicture, seed: seed)
+            } else {
+                guard let anchor = CompanionCharacter.shared.anchorURL else { throw FilmStudio.Failure.message("她还没有锚图") }
+                try fm.copyItem(at: anchor, to: take.whoPicture)
+            }
+            since = nil
+        }
+        if !fm.fileExists(atPath: take.placePicture.path) {
+            take.state = .drawing; save(take)
+            progress = "在画场景参考图"
+            since = Date()
+            try await MotionWhole.drawPlace(take.looks ?? take.scene, size: size, to: take.placePicture, seed: seed)
+            since = nil
+        }
+        if take.hold == "still" {
+            take.hold = nil
+            take.state = .waiting
+            take.note = "停在参考图：motion_status(take) 看人物和场景两张参考图，没问题就 motion_continue 开拍"
+            save(take)
+            return
+        }
+
+        // 3. Filmed by H3 over each stretch's depth. The picture services are let go first: the
+        //    draw service once held 84 GB of the box, the editor 73.
+        take.state = .filming; save(take)
+        await BoxServices.shared.stop(.draw)
+        await BoxServices.shared.stop(.edit)
+        try await MotionBuild.ensurePatch()
+        guard await BoxServices.shared.ensure(.comfy) else { throw FilmStudio.Failure.message("盒子上的 ComfyUI 起不来") }
+        let base = BoxServices.base(.comfy)
+        let words: String
+        if let given = take.words, !given.isEmpty {
+            words = given
+        } else {
+            words = await MotionWhole.words(who: take.who ?? "", place: take.looks ?? take.scene,
+                                            seconds: Double(frames) / 24, hers: (take.who ?? "").isEmpty)
+        }
+        for index in take.segments.indices where take.segments[index].state != .done {
+            let number = take.segments[index].id
+            progress = "H3 在按白模拍 第 \(number)/\(take.segments.count) 段（\(take.quality == "full" ? "20 步" : "4 步草稿")）"
+            since = Date()
+            take.segments[index].state = .filming; save(take)
+            // The depth goes up again each time: a restarted box has lost its input folder's state.
+            _ = try await FilmStudio.upload(take.wholeDepth(number), as: take.wholeDepthName(number), to: base)
+            var pins: [(picture: URL, frame: Int)] = []
+            if index > 0 {
+                let before = take.segments[index - 1].id
+                pins = [(picture: try await FilmStudio.lastFrame(of: take.clip(before), to: take.last(before), fresh: true), frame: 0)]
+            }
+            if fm.fileExists(atPath: take.clip(number).path) {
+                try? fm.moveItem(at: take.clip(number), to: take.folder.appendingPathComponent(
+                    String(format: "seg-%02d.take-\(Int(Date().timeIntervalSince1970)).mp4", number)))
+            }
+            try? words.write(to: take.clip(number).appendingPathExtension("txt"), atomically: true, encoding: .utf8)
+            try await FilmStudio.renderH3(prompt: words, references: [take.whoPicture, take.placePicture], seconds: Double(frames) / 24,
+                                          size: CGSize(width: size.width, height: size.height), seed: seed,
+                                          full: take.quality == "full", pins: pins, to: take.clip(number),
+                                          film: "motion-\(take.id)", shot: number, control: take.wholeDepthName(number),
+                                          exact: (width: size.width, height: size.height))
+            if let began = since { usual = Date().timeIntervalSince(began) }
+            take.segments[index].state = .done; save(take)
+        }
+
+        // 4. Joined end to end.
+        take.state = .joining; save(take)
+        progress = "在接起来"
+        if fm.fileExists(atPath: take.file.path) {
+            try? fm.moveItem(at: take.file, to: take.folder.appendingPathComponent("take.cut-\(Int(Date().timeIntervalSince1970)).mp4"))
+        }
+        try await Self.join(take.segments.map { take.clip($0.id) }, to: take.file)
         take.state = .done
         take.note = nil
     }

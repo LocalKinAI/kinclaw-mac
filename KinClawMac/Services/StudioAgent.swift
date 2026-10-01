@@ -880,7 +880,15 @@ final class StudioAgent: ObservableObject {
                 in metres and keep the camera inside the set. Pass `looks` (what each shape becomes, the light) and `words` \
                 (the English H3 films from: the place, the light, how the camera moves, the sound). Use until: "plan" \
                 first and look at the plan and the set's first frame yourself before anything is filmed; people stand \
-                still on this route. Speak the language they write in, and keep it short.
+                still on this route. \
+                The fourth route, 整场白模 (route: "whole"), keeps a reference's movement, camera AND layout and changes \
+                who and where: the whole scene — floor, walls, every object — becomes a grey model on the box, and H3 \
+                films other people in another place over it. Look at the reference first (video_frames) and write `looks` \
+                object for object: each thing it shows, what it becomes ("the white wall is a bamboo grove, the grey mat \
+                is old stone paving…") — the same number of things in the same places, so the model and the picture \
+                agree; `who` is who performs (omit for her). Use until: "model" and look at the grey model's first frame \
+                (motion_status(take)) before the pictures and the filming; about six minutes of model and six of H3 \
+                draft per ten seconds. Speak the language they write in, and keep it short.
                 """
         case .comfy:
             return """

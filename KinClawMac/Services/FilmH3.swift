@@ -314,7 +314,10 @@ extension FilmStudio {
         }
         graph["10"] = node("BasicGuider", ["model": model, "conditioning": conditioning])
 
-        let video = try await comfyResult(graph, node: "15", base: base, what: "H3 镜头", deadline: 3600)
+        // A full shot is twenty steps of minutes each: ten seconds ran 80 minutes, and an hour's
+        // deadline failed it with the picture nearly made (Motion's notebook, 2026-09-28).
+        let deadline = max(3600, Double((full ? 20 : 4) * h3Frames(seconds)) * 1.2 + 900)
+        let video = try await comfyResult(graph, node: "15", base: base, what: "H3 镜头", deadline: deadline)
         try? FileManager.default.removeItem(at: out)
         try video.write(to: out)
     }

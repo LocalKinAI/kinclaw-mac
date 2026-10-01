@@ -22,7 +22,8 @@ struct MotionStudioView: View {
     @State private var credit = ""
     /// "" is the skeleton route, filmed from where the reference was; the
     /// others are `MotionStage.Camera`s — her body in 3D, on a set, walked round —
-    /// and "prompt", the third route: no reference, a set the agent writes from words.
+    /// and "prompt", the third route: no reference, a set the agent writes from words;
+    /// "whole", the fourth: the reference's whole scene a grey model, new people in a new place.
     @AppStorage("kinclaw.motion.camera") private var camera = ""
     @AppStorage("kinclaw.motion.place") private var place = MotionStage.Place.park.rawValue
     @State private var trouble: String?
@@ -91,7 +92,7 @@ struct MotionStudioView: View {
                     Button { selected = take.id } label: {
                         HStack(spacing: 10) {
                             Color.clear.frame(width: 44, height: 44)
-                                .overlay { thumb(take.still) }
+                                .overlay { thumb(take.whole == true ? take.clayFirst : take.still) }
                                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                                 .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Theme.hairline, lineWidth: 0.5))
                             VStack(alignment: .leading, spacing: 3) {
@@ -177,13 +178,20 @@ struct MotionStudioView: View {
                             }
                             Rectangle().fill(Theme.hairline).frame(width: 0.5, height: 16).padding(.horizontal, 4)
                             choice("原视频", "source", take, ready: true)
-                            choice("骨架", "pose", take, ready: FileManager.default.fileExists(atPath: take.pose(1).path))
+                            choice(take.whole == true ? "白模" : "骨架", "pose", take, ready: FileManager.default.fileExists(atPath: model(take).path))
                         }
                         .id(tick)
                     }
                     .frame(maxWidth: .infinity)
                 }
+                if take.whole == true { pictures(take).id(tick) }
                 Grid(alignment: .topLeading, horizontalSpacing: 14, verticalSpacing: 8) {
+                    if take.whole == true {
+                        GridRow {
+                            Text("人物").font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+                            Text(take.who ?? "她（锚图）").font(.kinLabel).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
                     GridRow {
                         Text("场景").font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
                         Text(take.scene).font(.kinLabel).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
@@ -214,13 +222,33 @@ struct MotionStudioView: View {
         let fm = FileManager.default
         let kind = showing[take.id] ?? "take"
         if kind == "source", fm.fileExists(atPath: take.reference.path) { return (take.reference, kind) }
-        if kind == "pose", fm.fileExists(atPath: take.pose(1).path) { return (take.pose(1), kind) }
+        if kind == "pose", fm.fileExists(atPath: model(take).path) { return (model(take), kind) }
         if kind.hasPrefix("seg"), let n = Int(kind.dropFirst(3)), fm.fileExists(atPath: take.clip(n).path) { return (take.clip(n), kind) }
         if fm.fileExists(atPath: take.file.path) { return (take.file, "take") }
         if let latest = take.segments.last(where: { $0.state == .done && fm.fileExists(atPath: take.clip($0.id).path) }) {
             return (take.clip(latest.id), "seg\(latest.id)")
         }
         return nil
+    }
+
+    /// What the movement is followed from, to look at: the skeleton, or on the fourth route
+    /// the whole scene's grey model.
+    private func model(_ take: MotionStudio.Take) -> URL { take.whole == true ? take.wholeClay(1) : take.pose(1) }
+
+    /// The fourth route's two references, once drawn: who, and where.
+    private func pictures(_ take: MotionStudio.Take) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            ForEach([("人物", take.whoPicture), ("场景", take.placePicture)], id: \.0) { label, url in
+                if FileManager.default.fileExists(atPath: url.path) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        thumb(url).frame(height: 180).frame(maxWidth: label == "人物" ? 110 : 330)
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        Text(label).font(.kinCaption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
     }
 
     private func choice(_ title: String, _ kind: String, _ take: MotionStudio.Take, ready: Bool) -> some View {
@@ -282,6 +310,7 @@ struct MotionStudioView: View {
             if let found { licence(found) }
             HStack(alignment: .bottom, spacing: 10) {
                 TextField(camera == "prompt" ? "拍什么地方、镜头怎么走？比如：雨夜的老街，红灯笼，镜头沿街慢慢往前推"
+                          : camera == "whole" ? "换成什么人、在什么地方？比如：穿白色汉服的白须老者，竹林里的石板庭院"
                           : "她在哪、穿什么？比如：清晨起雾的公园，圆形砖地，穿蓝色棉袄、灰色长裤、白布鞋", text: $scene, axis: .vertical)
                     .textFieldStyle(.plain).font(.kinBody).lineLimit(1...3)
                     .padding(.horizontal, 12).padding(.vertical, 8)
@@ -292,6 +321,11 @@ struct MotionStudioView: View {
                         .buttonStyle(.primary).fixedSize()
                         .disabled(studio.working != nil || scene.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         .help("agent 按这句话写白模清单，先搭好给你看俯视图，再拍")
+                } else if camera == "whole" {
+                    Button(studio.working != nil ? "在拍…" : "交给 agent 做整场白模", action: wholeScene)
+                        .buttonStyle(.primary).fixedSize()
+                        .disabled(studio.working != nil || video == nil || scene.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .help(video == nil ? "先选一段参考视频" : "agent 看原片、写人物和场景，先做好白模给你看，再拍")
                 } else {
                 Button(studio.working != nil ? "在拍…" : "开拍", action: go)
                     .buttonStyle(.primary).fixedSize()
@@ -308,14 +342,16 @@ struct MotionStudioView: View {
                         Button { camera = item.rawValue } label: { Label(item.title, systemImage: camera == item.rawValue ? "checkmark" : "") }
                     }
                     Divider()
+                    Button { camera = "whole" } label: { Label("整场白模 · 换人换景", systemImage: camera == "whole" ? "checkmark" : "") }
                     Button { camera = "prompt" } label: { Label("提示词白模 · 不用参考视频", systemImage: camera == "prompt" ? "checkmark" : "") }
                 } label: {
-                    ChipLabel(title: camera.isEmpty ? "骨架 · 原视频的机位" : camera == "prompt" ? "提示词白模" : MotionStage.Camera(rawValue: camera)?.title ?? camera,
+                    ChipLabel(title: camera.isEmpty ? "骨架 · 原视频的机位" : camera == "prompt" ? "提示词白模" : camera == "whole" ? "整场白模"
+                              : MotionStage.Camera(rawValue: camera)?.title ?? camera,
                               symbol: "video", menu: true)
                 }
                 .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
                 .help("机位")
-                if !camera.isEmpty, camera != "prompt" {
+                if !camera.isEmpty, camera != "prompt", camera != "whole" {
                     Menu {
                         ForEach(MotionStage.Place.allCases, id: \.rawValue) { item in
                             Button { place = item.rawValue } label: { Label(item.title, systemImage: place == item.rawValue ? "checkmark" : "") }
@@ -331,6 +367,7 @@ struct MotionStudioView: View {
                 }
             }
             Text(camera == "prompt" ? "不用参考视频：agent 按你这句话写白模清单 → 盒子上的 Blender 搭景、走镜头、渲深度 → 第一帧改画成照片 → H3 照着深度拍（5–15 秒，一个镜头，带声音；画面里的人不动）"
+                 : camera == "whole" ? "原片整个场景做成白模（人、地面、墙、每样摆设）→ agent 按你的话写人物和场景、画两张参考图 → H3 照着白模拍：动作、机位、布局是原片的，人和景换掉（5–60 秒，十秒一段接起来，带声音）"
                  : camera.isEmpty ? "照参考视频的机位拍，动作可以走动、转身"
                  : "三维骨架 → 盒子上的 Blender 搭景、走机位、渲染深度 → 照着深度拍。她可以走动、转身；侧身时单个镜头估不准的几帧会被补上，实在估不稳的会直说")
                 .font(.kinCaption).foregroundStyle(.secondary).lineLimit(2)
@@ -475,6 +512,19 @@ struct MotionStudioView: View {
         ask("用「提示词白模」路线拍一条：\(words)。长度 \(length) 秒。先写白模清单，motion_make 带 until: \"plan\"，搭好给我看俯视图和第一帧。")
     }
 
+    /// The fourth route starts with the agent too: it looks at the reference and says what
+    /// each thing in it becomes.
+    private func wholeScene() {
+        guard let video else { return }
+        let words = scene.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !words.isEmpty else { return }
+        let source = credit.trimmingCharacters(in: .whitespaces)
+        ask("用「整场白模」路线拍一条：参考视频 \(video.path)，从第 \(Int(start)) 秒起 \(Int(seconds)) 秒。换成：\(words)。"
+            + (source.isEmpty ? "" : "出处：\(source)。")
+            + "先用 video_frames 看原片里有什么，写 looks（原片场景里每样东西对应变成什么）和 who，"
+            + "motion_make 带 route: \"whole\"、until: \"model\"，白模做好给我看。")
+    }
+
     private func pick() {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.movie, .mpeg4Movie, .quickTimeMovie]
@@ -509,8 +559,8 @@ struct MotionStudioView: View {
     private func status(_ take: MotionStudio.Take) -> String {
         switch take.state {
         case .waiting: return "等着"
-        case .tracking: return "在提取动作"
-        case .drawing: return "在画起始画面"
+        case .tracking: return take.whole == true ? "在做白模" : take.built == true ? "在搭白模" : "在提取动作"
+        case .drawing: return take.whole == true ? "在画参考图" : "在画起始画面"
         case .filming: return "在拍 \(take.finished)/\(take.segments.count)"
         case .joining: return "在接起来"
         case .done: return "\(Int(take.seconds)) 秒"

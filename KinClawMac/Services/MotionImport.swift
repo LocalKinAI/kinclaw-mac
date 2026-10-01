@@ -71,11 +71,13 @@ enum MotionImport {
     /// Fetch it: picture only, 480 lines at most, an mp4 that needs no merging
     /// (so no ffmpeg) — a skeleton does not need more, and a pose was found in
     /// every frame of a 360-line video with the performer 144 pixels tall.
+    /// H.264 first: a VP9 stream in an mp4 came down once and nothing on the
+    /// Mac could read it (Motion's notebook, 2026-09-29).
     static func fetch(_ info: Info, into folder: URL) async throws -> URL {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let file = folder.appendingPathComponent("\(info.id).mp4")
         if FileManager.default.fileExists(atPath: file.path) { return file }
-        _ = try await run(["-f", "bv*[height<=480][ext=mp4]/b[height<=480][ext=mp4]/bv*[ext=mp4]/b[ext=mp4]",
+        _ = try await run(["-f", "bv*[height<=480][ext=mp4]/b[height<=480][ext=mp4]/bv*[ext=mp4]/b[ext=mp4]", "-S", "vcodec:h264",
                            "--no-playlist", "--no-warnings", "-q", "-o", file.path, info.address])
         guard FileManager.default.fileExists(atPath: file.path) else { throw Failure.refused("下载完了但文件不在：\(file.path)") }
         try? info.credit.write(to: file.appendingPathExtension("txt"), atomically: true, encoding: .utf8)
