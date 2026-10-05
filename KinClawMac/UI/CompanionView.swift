@@ -75,6 +75,15 @@ struct CompanionView: View {
     @AppStorage("kinclaw.voice.tts.speaker") private var voice = "auto"
     @ObservedObject private var ttsVoices = TTSVoices.shared
     @AppStorage("kinclaw.voice.tts.speed") private var speed: Double = 1.0
+    /// Which brain she talks with: the kinclaw agent, or MiniCPM-o in full
+    /// duplex on the box (`OmniCall`) — and whether that one sees the camera.
+    @AppStorage(OmniCall.brainKey) private var brain = "agent"
+    @AppStorage(OmniCall.cameraKey) private var omniCamera = false
+    /// Her face lip-synced on the box (`LiveFace`): one of the three faces, with
+    /// the 2D digital human and the 3D model.
+    @AppStorage(LiveFace.enabledKey) private var liveFaceOn = false
+    @ObservedObject private var liveFace = LiveFace.shared
+    private var hasFace: Bool { avatarBase != nil || liveFaceOn }
 
     @State private var current: URL?
     @State private var previous: URL?
@@ -136,7 +145,7 @@ struct CompanionView: View {
             // the figure and the pictures became the same woman: her cut-out
             // over her own kitchen is one scene, not two subjects competing.
             background
-            LinearGradient(colors: avatarBase == nil
+            LinearGradient(colors: !hasFace
                            ? [.black.opacity(0.15), .black.opacity(0.55)]
                            // A little more scrim behind a figure, so the halo
                            // and the caption stay readable against her.
@@ -149,6 +158,12 @@ struct CompanionView: View {
             // behind it is the picture that follows the conversation.
             if let base = avatarBase {
                 AvatarView(base: base, onReady: onAvatarReady)
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+            if liveFaceOn {
+                LiveFaceView(face: liveFace)
                     .ignoresSafeArea()
                     .allowsHitTesting(false)
                     .transition(.opacity)
@@ -170,7 +185,7 @@ struct CompanionView: View {
                 // thing claiming to be the agent. Tap-to-interrupt
                 // moves onto the face itself, which is where anyone
                 // would reach for it anyway.
-                if avatarBase == nil {
+                if !hasFace {
                     halo
                         .contentShape(Circle().scale(1.3))
                         .onTapGesture {
@@ -531,6 +546,15 @@ struct CompanionView: View {
             .pickerStyle(.inline)
             Divider()
             Button("再听一遍") { onPreviewVoice() }
+            Divider()
+            Picker("大脑", selection: $brain) {
+                Text("kinclaw agent · 能做事").tag("agent")
+                Text("MiniCPM-o 全双工 · 边听边说（盒子）").tag("omni")
+            }
+            .pickerStyle(.inline)
+            if brain == "omni" {
+                Toggle("看着你（摄像头，每秒一帧）", isOn: $omniCamera)
+            }
         } label: {
             HStack(spacing: 5) {
                 Image(systemName: "waveform")
@@ -560,6 +584,23 @@ struct CompanionView: View {
     private var avatarMenu: some View {
         if AvatarStage.source != nil {
             Menu {
+                // Her photograph made to talk on the box: a body rendered once by
+                // Ditto, the mouth by MuseTalk as she speaks (LiveFace).
+                Toggle(isOn: Binding(
+                    get: { liveFaceOn },
+                    set: { on in
+                        if on {
+                            if avatarBase != nil { onAvatarToggle(false) }
+                            if vrmServer.base != nil {
+                                VRMWardrobe.isEnabled = false
+                                vrmServer.stop()
+                            }
+                        }
+                        liveFaceOn = on
+                    }
+                )) {
+                    Label("真人 · 实时口型（盒子）", systemImage: "person.crop.square.filled.and.at.rectangle")
+                }
                 Toggle(isOn: Binding(
                     get: { avatarBase != nil },
                     set: { on in
@@ -569,6 +610,7 @@ struct CompanionView: View {
                             VRMWardrobe.isEnabled = false
                             vrmServer.stop()
                         }
+                        if on { liveFaceOn = false }
                         onAvatarToggle(on)
                     }
                 )) {
@@ -604,11 +646,11 @@ struct CompanionView: View {
                 }
             } label: {
                 HStack(spacing: 5) {
-                    Image(systemName: avatarBase != nil ? "person.wave.2.fill" : "person.wave.2")
-                    Text(avatarBase != nil ? (AvatarStage.chosen?.name ?? "数字人") : "数字人")
+                    Image(systemName: hasFace ? "person.wave.2.fill" : "person.wave.2")
+                    Text(liveFaceOn ? "实时口型" : avatarBase != nil ? (AvatarStage.chosen?.name ?? "数字人") : "数字人")
                 }
                 .font(.system(size: 11, weight: .medium))
-                .foregroundColor(avatarBase != nil ? .cyan.opacity(0.9) : .white.opacity(0.6))
+                .foregroundColor(hasFace ? .cyan.opacity(0.9) : .white.opacity(0.6))
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .background(Capsule().fill(.black.opacity(0.35)))

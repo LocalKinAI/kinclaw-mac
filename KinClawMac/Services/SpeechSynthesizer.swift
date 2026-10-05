@@ -52,6 +52,24 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
     /// sentence nobody is hearing.
     var onStopped: (() -> Void)?
 
+    // MARK: Delayed playback (a face made from the voice, LiveFace)
+    //
+    // Her face on the box is made from each clip as it is handed over and
+    // arrives a moment later, so the sound waits for it: every clip goes to
+    // `onClip` when its turn on the push timeline comes and plays
+    // `playbackDelay` later. The next clip is handed over when the last one's
+    // push slot ends — not when it has finished playing, which would leave a
+    // `playbackDelay` gap between sentences. Zero (the default) is the old
+    // path, untouched.
+    var playbackDelay: TimeInterval = 0
+    /// Delayed playback: the push timeline ran out with nothing queued — the
+    /// face can render the tail of what it has.
+    var onDrained: (() -> Void)?
+    private var scheduled: [AVAudioPlayer] = []
+    private var pushUntil = Date.distantPast
+    private var pushTimer: Timer?
+    private var pushing: Bool { Date() < pushUntil }
+
     override init() {
         super.init()
         // Learn what the TTS server can do before the first reply needs it:
@@ -126,7 +144,8 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
                    self.generation == gen,
                    let player = self.preparedPlayer(data) {
                     self.playQueue.append((player, data))
-                    if self.audioPlayer?.isPlaying != true {
+                    let free = self.playbackDelay > 0 ? !self.pushing : self.audioPlayer?.isPlaying != true
+                    if free {
                         _ = self.playNextClip()
                     }
                 }
@@ -140,7 +159,7 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
     private func finishStreamIfDrained() {
         guard !isStreamingReply, !synthesizing,
               pendingSentences.isEmpty, playQueue.isEmpty,
-              audioPlayer?.isPlaying != true else { return }
+              audioPlayer?.isPlaying != true, scheduled.isEmpty, !pushing else { return }
         isSpeaking = false
         let done = completion
         completion = nil
@@ -269,6 +288,21 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         }
     }
 
+    /// A short line in the voice replies are spoken in, as a WAV, without
+    /// playing it — the companion's 嗯 while the user talks, played on its own
+    /// so that it is not a reply: nothing waits for it and nothing arms the
+    /// barge-in. Nil when it cannot be made.
+    func clip(_ text: String, hostname: String) async -> Data? {
+        let isLocal = hostname == "localhost-kinclaw" || hostname.hasPrefix("localhost")
+        let pref = UserDefaults.standard.string(forKey: "kinclaw.voice.tts.speaker") ?? "auto"
+        let preferred = (pref == "auto" || pref.isEmpty) ? "" : pref
+        let segments = isLocal
+            ? Self.localSegments(text, preferredVoice: preferred)
+            : [TextSegmenter.Segment(text: text, voice: pickServerVoice(forText: text))]
+        guard let first = segments.first else { return nil }
+        return await synthesizeSegment(first, isLocal: isLocal, hostname: hostname)
+    }
+
     /// One segment → one WAV. Returns nil on any failure so the caller can
     /// fall back wholesale.
     private func synthesizeSegment(
@@ -379,6 +413,7 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
     @discardableResult
     private func playNextClip() -> Bool {
         guard !playQueue.isEmpty else { return false }
+        if playbackDelay > 0 { return pushNextClip() }
         let (player, clip) = playQueue.removeFirst()
         player.delegate = self
         audioPlayer = player
@@ -387,6 +422,33 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         guard player.play() else {
             playQueue.removeAll()
             return false
+        }
+        return true
+    }
+
+    /// Delayed playback: hand the clip over now, play it `playbackDelay` later,
+    /// and hand the next one over when this one's slot ends.
+    private func pushNextClip() -> Bool {
+        let (player, clip) = playQueue.removeFirst()
+        player.delegate = self
+        audioPlayer = player
+        onClip?(clip)
+        guard player.play(atTime: player.deviceCurrentTime + playbackDelay) else {
+            playQueue.removeAll()
+            return false
+        }
+        scheduled.append(player)
+        let slot = player.duration
+        pushUntil = Date().addingTimeInterval(slot)
+        pushTimer?.invalidate()
+        pushTimer = Timer.scheduledTimer(withTimeInterval: slot, repeats: false) { [weak self] _ in
+            guard let self else { return }
+            if !self.playQueue.isEmpty {
+                _ = self.pushNextClip()
+            } else {
+                self.onDrained?()
+                self.finishStreamIfDrained()
+            }
         }
         return true
     }
@@ -417,6 +479,11 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         }
         audioPlayer?.stop()
         audioPlayer = nil
+        scheduled.forEach { $0.stop() }
+        scheduled.removeAll()
+        pushTimer?.invalidate()
+        pushTimer = nil
+        pushUntil = .distantPast
         playQueue.removeAll()   // else a barged-in reply resumes mid-sentence
         onStopped?()
         isStreamingReply = false
@@ -516,6 +583,21 @@ extension SpeechSynthesizer: AVAudioPlayerDelegate {
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
+            // Delayed playback: the push timeline starts the next clips; done
+            // is when the last scheduled one has played and nothing is coming.
+            if self.playbackDelay > 0 {
+                self.scheduled.removeAll { $0 === player }
+                guard self.scheduled.isEmpty, self.playQueue.isEmpty, !self.pushing else { return }
+                self.audioPlayer = nil
+                if self.isStreamingReply || self.synthesizing || !self.pendingSentences.isEmpty {
+                    self.finishStreamIfDrained()
+                    return
+                }
+                self.isSpeaking = false
+                self.completion?()
+                self.completion = nil
+                return
+            }
             // A mixed-language reply is several clips; only report "done"
             // after the last one, or voice mode would start listening again
             // while the English half is still queued.

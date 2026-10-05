@@ -746,9 +746,23 @@ private struct VoiceSettingsTab: View {
     @AppStorage("kinclaw.voice.wakeWord") private var wakeWord = ""
     @AppStorage("kinclaw.voice.wakeSessionSeconds") private var wakeSessionSeconds: Double = 45
     @AppStorage(AudioRoute.bargeInKey) private var bargeIn = "auto"
+    @AppStorage(TurnTaker.enabledKey) private var miniTurns = true
+    @ObservedObject private var turnTaker = TurnTaker.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
+            SettingsCard("Mini-turns (companion mode, on the box)") {
+                SettingsRow(label: "Listen like a person") {
+                    HStack(spacing: 8) {
+                        Toggle("", isOn: $miniTurns).labelsHidden().toggleStyle(.switch).controlSize(.small)
+                        Text(!miniTurns ? "off" : turnTaker.connected ? "listening with kin-turn" : (turnTaker.problem ?? "connects when the mic opens"))
+                            .font(.caption).foregroundColor(.secondary).lineLimit(2)
+                    }
+                }
+                SettingsCaption("Two small models on the box (kin-turn, :8104 — start it under Backend → 盒子上的服务) hear the microphone while it is your turn. At a pause, Smart Turn judges whether your sentence is finished: if not, she waits up to 1.8 s instead of answering half a sentence. While you talk, MaAI says when a listener would answer — she nods, and every other time says 嗯 quietly in her own voice. Off, or without the box, the loop works as before: half a second of quiet ends your turn.")
+            }
+
+
             SettingsCard("Interrupting (hands-free and companion mode)") {
                 SettingsRow(label: "Talk over it") {
                     Picker("", selection: $bargeIn) {
@@ -2009,6 +2023,10 @@ private struct BoxServicesCard: View {
                     Spacer()
                     button(service.kind)
                 }
+            }
+            if box.blocked {
+                // Not the box: the app is kept off the local network, and every dot above reads "down".
+                SettingsCaption("⚠︎ " + BoxServices.blockedAdvice)
             }
             if let free = box.memoryFree {
                 SettingsCaption("盒子内存空闲 \(free)%")

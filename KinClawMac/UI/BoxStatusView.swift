@@ -57,6 +57,9 @@ struct BoxStatusChip: View {
 struct BoxDeskView: View {
     @ObservedObject private var watch = ComfyWatch.shared
     @ObservedObject private var services = BoxServices.shared
+    @ObservedObject private var turnTaker = TurnTaker.shared
+    @ObservedObject private var omni = OmniCall.shared
+    @ObservedObject private var liveFace = LiveFace.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -109,6 +112,15 @@ struct BoxDeskView: View {
                         }
                     }
                 }
+                // The companion's two services on the box — 「kinclaw-mac 盒子状态可以看看」.
+                section("陪伴") {
+                    companionRow("小回合（Smart Turn + MaAI）", services.states[.turn],
+                                 detail: turnTaker.connected ? "正在听你说话" : nil)
+                    companionRow("MiniCPM-o 全双工", services.states[.omni],
+                                 detail: omni.state == .live ? (omni.seeing ? "通话中 · 看着你" : "通话中") : nil)
+                    companionRow("实时口型（Ditto + MuseTalk）", services.states[.face],
+                                 detail: liveFace.connected ? (liveFace.talking ? "她在说话" : "在线，待机中") : nil)
+                }
                 section("最近结束") {
                     let ended = Array(box.ended.suffix(6).reversed())
                     if ended.isEmpty {
@@ -138,8 +150,28 @@ struct BoxDeskView: View {
         .frame(width: 440)
         .onAppear {
             watch.watchBox()
+            Task { await services.refresh() }
         }
         .onDisappear { watch.unwatchBox() }
+    }
+
+    private func companionRow(_ title: String, _ state: BoxServices.State?, detail: String?) -> some View {
+        HStack(spacing: 8) {
+            Circle().fill(state == .up ? Theme.good : state == .down ? Color.secondary.opacity(0.5) : Theme.notice)
+                .frame(width: 7, height: 7)
+            Text(title).font(.kinLabel)
+            Spacer(minLength: 8)
+            Text(detail ?? {
+                switch state {
+                case .up: return "在跑"
+                case .down: return "没开（设置 → Backend → 盒子上的服务）"
+                case .starting: return "在起"
+                case .stopping: return "在停"
+                default: return "…"
+                }
+            }())
+            .font(.kinCaption).foregroundStyle(.secondary)
+        }
     }
 
     private static let time: DateFormatter = { let f = DateFormatter(); f.dateFormat = "HH:mm"; return f }()

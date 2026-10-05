@@ -323,6 +323,13 @@ final class VRMStage: ObservableObject {
         else { view.place(placedIn.flatMap(PlateTone.init(measuring:))) }
     }
 
+    /// A small double nod while somebody talks to her — the listener's half of
+    /// a conversation (`TurnTaker`). Written in the stage's pose language: none
+    /// of her stock acts is a nod.
+    func nod() {
+        web?.compose(json: #"{"name":"nod","frames":[{"t":0,"headNod":0},{"t":0.16,"headNod":0.32},{"t":0.34,"headNod":0.04},{"t":0.5,"headNod":0.22},{"t":0.78,"headNod":0}]}"#) { _ in }
+    }
+
     /// The plate she is standing in front of, so the same one is not
     /// measured again on every state change.
     private var placedIn: URL?

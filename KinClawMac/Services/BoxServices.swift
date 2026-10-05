@@ -25,7 +25,7 @@ final class BoxServices: ObservableObject {
     static let binaryKey = "kinclaw.box.diffuser"
     static let defaultBinary = "~/.ollamadiffuser/venv/bin/ollamadiffuser"
 
-    enum Kind: String, CaseIterable { case draw, edit, film, filmHQ, brain, laya, comfy, narrator }
+    enum Kind: String, CaseIterable { case draw, edit, film, filmHQ, brain, laya, comfy, narrator, turn, omni, face }
 
     struct Service: Identifiable, Equatable {
         let kind: Kind
@@ -44,6 +44,9 @@ final class BoxServices: ObservableObject {
         Service(kind: .laya, title: "Laya（打分 / 下棋）", cost: "约 2 GB；第一道题加载 5 秒，之后一道 23 ms"),
         Service(kind: .comfy, title: "ComfyUI", cost: "空闲不占；跑工作流时装着那个工作流的模型，跑完留在内存里直到被让出来"),
         Service(kind: .narrator, title: "电影旁白（Qwen3-TTS 1.7B VoiceDesign）", cost: "约 3 GB；一段 100 字的旁白 9 秒读完。和对话用的快速语音（8101）分开"),
+        Service(kind: .turn, title: "陪伴小回合（Smart Turn + MaAI）", cost: "约 1 GB，只用 CPU；起来要一分钟。判断你说完没有、什么时候该嗯一声"),
+        Service(kind: .face, title: "实时口型（Ditto 身体 + MuseTalk 嘴）", cost: "约 7 GB；起来要半分钟。陪伴里「真人 · 实时口型」，每秒 20 帧"),
+        Service(kind: .omni, title: "MiniCPM-o 全双工（陪伴的另一个大脑）", cost: "通话时约 14 GB，开摄像头约 23 GB，挂断后仍占着；不用就在这里停掉。只听盒子本机，经 ssh 隧道连"),
     ]
 
     enum State: Equatable { case unknown, up, down, starting, stopping }
@@ -103,6 +106,9 @@ final class BoxServices: ObservableObject {
         case .laya:   return "laya_judge.py"               // a script, not a model
         case .comfy:  return "ComfyUI"                     // a program with its own models
         case .narrator: return "qwen3-tts:1.7b-voicedesign" // a kin audio model
+        case .turn:   return "kin-avatar/turn/server.py"   // a script, not a model
+        case .omni:   return "llama-omni-server"           // llama.cpp-omni with MiniCPM-o 4.5 Q8_0
+        case .face:   return "kin-avatar/face/server.py"   // MuseTalk on MLX over a Ditto body
         }
     }
 
@@ -125,6 +131,11 @@ final class BoxServices: ObservableObject {
         case .narrator:
             let set = (UserDefaults.standard.string(forKey: "kinclaw.film.narrator.url") ?? "").trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
             return set.isEmpty ? replacingPort(of: DiffuserClient.videoHost, with: 8102) : set
+        case .turn:   return replacingPort(of: DiffuserClient.videoHost, with: 8104)
+        // Loopback on the box only (its firewall admits nothing else): reached
+        // through OmniCall's ssh tunnel, and looked at over ssh.
+        case .omni:   return replacingPort(of: DiffuserClient.videoHost, with: OmniCall.port)
+        case .face:   return replacingPort(of: DiffuserClient.videoHost, with: LiveFace.port)
         }
     }
 
@@ -172,7 +183,11 @@ final class BoxServices: ObservableObject {
     }
 
     nonisolated private static func answers(_ kind: Kind) async -> Bool {
-        let path = kind == .brain ? "/api/tags" : (kind == .laya || kind == .narrator) ? "/health" : kind == .comfy ? "/system_stats" : "/api/health"
+        if kind == .omni {
+            let (code, _) = await run("curl -sf -m 2 http://127.0.0.1:\(OmniCall.port)/health >/dev/null")
+            return code == 0
+        }
+        let path = kind == .brain ? "/api/tags" : (kind == .laya || kind == .narrator || kind == .turn || kind == .face) ? "/health" : kind == .comfy ? "/system_stats" : "/api/health"
         guard let url = await URL(string: base(kind) + path) else { return false }
         var request = URLRequest(url: url, timeoutInterval: 3)
         request.httpMethod = "GET"
@@ -228,6 +243,27 @@ final class BoxServices: ObservableObject {
                 PATH=/opt/homebrew/bin:/usr/local/bin:$PATH nohup .venv/bin/kin audio serve \(Self.model(.narrator)) \
                 --host 0.0.0.0 --port \(Self.port(.narrator)) > ~/Library/Logs/kinclaw/narrator.log 2>&1 & echo started; }
                 """
+        } else if kind == .omni {
+            command = OmniCall.serveCommand
+        } else if kind == .face {
+            // MuseTalk's own virtualenv, the base clip under looks/; started by
+            // its full path so pgrep can tell it from other server.py.
+            command = """
+                pgrep -f "\(Self.model(.face))" >/dev/null && echo already || { \
+                mkdir -p ~/Library/Logs/kinclaw; cd ~/kin-avatar/face; \
+                PATH=/opt/homebrew/bin:/usr/local/bin:$PATH PORT=\(Self.port(.face)) \
+                nohup ~/kin-avatar/musetalk/.venv/bin/python ~/\(Self.model(.face)) > ~/Library/Logs/kinclaw/face.log 2>&1 & echo started; }
+                """
+        } else if kind == .turn {
+            // The companion's mini-turns: its own virtualenv under ~/kin-avatar/turn
+            // (Smart Turn's ONNX and MaAI's torch on the CPU), started by its full
+            // path so that pgrep can tell it from any other server.py.
+            command = """
+                pgrep -f "\(Self.model(.turn))" >/dev/null && echo already || { \
+                mkdir -p ~/Library/Logs/kinclaw; cd ~/kin-avatar/turn; \
+                PATH=/opt/homebrew/bin:/usr/local/bin:$PATH PORT=\(Self.port(.turn)) \
+                nohup .venv/bin/python ~/\(Self.model(.turn)) > ~/Library/Logs/kinclaw/turn.log 2>&1 & echo started; }
+                """
         } else if kind == .laya {
             // Its own virtualenv under ~/.kinclaw/laya — not the diffusion
             // servers', whose torch and transformers it has no business moving.
@@ -278,6 +314,9 @@ final class BoxServices: ObservableObject {
             : kind == .laya ? "pkill -f laya_judge.py; true"
             : kind == .comfy ? "lsof -nP -iTCP:\(Self.port(.comfy)) -sTCP:LISTEN -t | xargs kill 2>/dev/null; true"
             : kind == .narrator ? "pkill -f \"kin audio serve \(Self.model(.narrator)) \"; true"
+            : kind == .turn ? "pkill -f \"\(Self.model(.turn))\"; true"
+            : kind == .face ? "pkill -f \"\(Self.model(.face))\"; true"
+            : kind == .omni ? "lsof -nP -iTCP:\(OmniCall.port) -sTCP:LISTEN -t | xargs kill 2>/dev/null; true"
             : "pkill -f \"ollamadiffuser run \(Self.model(kind)) \"; true"
         _ = await Self.run(command)
         for _ in 0..<10 {

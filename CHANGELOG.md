@@ -8,6 +8,98 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Added — Companion: mini-turns, the listening half of Griffin
+
+Tavus's Griffin (2026-10-01) decides every few hundred milliseconds whether to stay quiet,
+nod, say 嗯 or take the turn. 「找开源啊，用我们的盒子把他们平替了」: the open half of that,
+for the companion.
+
+- **kin-turn on the box** (~/kin-avatar/turn/server.py, :8104, its own Python 3.12 venv,
+  CPU only): Smart Turn v3.2 (pipecat, BSD-2) and MaAI's Chinese back-channel model (Kyoto
+  University). Streamed a 6 s sentence in real time from this Mac: asked at 「累了吧，」 it
+  answers 0.01 (not finished), at the full stop 0.93, in 60 ms; MaAI rises after
+  「今天过得怎么样？」 and 「累了吧，」, where a listener answers.
+- **`TurnTaker`**: while the microphone is the user's, it streams there (16 kHz mono). At
+  half a second of quiet the recorder asks whether the sentence is finished; if not, it waits
+  up to 1.8 s instead of answering half a sentence. While the user talks she nods (a double
+  nod in the VRM stage's pose language) and every other time says 嗯 / 嗯嗯 / 对 quietly in her
+  own voice, her mouth moving with it — at most once in four seconds, never in the first
+  second and a half; the recorder is told the 嗯 is not the user.
+- Off in Settings → Voice → Mini-turns, or without the box: half a second ends the turn as
+  before. 「陪伴小回合」 is a box service in Settings and in the console's 盒子 panel.
+- **Her other brain: MiniCPM-o 4.5 in full duplex** (`OmniCall`; voice menu → 大脑). A call,
+  not turns: the microphone goes to the box a second at a time through voice processing (the
+  echo canceller, so she does not answer herself) and her voice comes back while you talk —
+  the model decides every second to listen, answer, or stop because you cut in. 「看着你」
+  adds a camera frame a second (448 px JPEG). llama.cpp-omni's plain-HTTP server on the box
+  (:19080, built there), reached through an ssh tunnel because the box's firewall admits
+  nothing else — Jacky's choice, 「走 ssh 隧道吧」. Measured: a second of input in 0.11 s
+  (0.27 s with a frame), first sound 0.6–0.9 s after you stop; 14 GB a call, 23 GB with the
+  camera. Talks only: no tools. Her voice is the model's own (a reference recording changes
+  what she says, not how she sounds). A box service in Settings and in the console.
+  On the Mac mini (USB microphone, built-in speakers) voice processing will not start
+  (avfaudio -10875); the call then goes on without it and the microphone sends silence while
+  she talks through speakers (talk over her with headphones). Jacky, first call:
+  「能说话了，但没我原来那个好，先留着吧」 — kept as the second brain; the agent stays the default.
+- **The box desk shows them**: the titlebar chip's panel has a 陪伴 section — mini-turns
+  listening, MiniCPM-o in a call (and seeing).
+
+### Added — Companion: her photograph, talking (真人 · 实时口型)
+
+「实时聊天」 with a face that really says each word — 「接进陪伴吧」 once Jacky had seen it
+(「不飘了」). A third face in the companion's face menu, beside the 2D digital human and the
+3D model: her photograph, its body rendered once by Ditto (lips closed, a tilt of the head, a
+blink, the camera still), its mouth made by MuseTalk 1.5 on MLX from every sentence she speaks
+— kin-face on the box (:8105, scripts/kin-face), twenty frames a second.
+
+- **`LiveFace`** streams the frames; each of her clips goes there whole the moment its turn
+  comes and her voice plays 0.35 s later (`SpeechSynthesizer.playbackDelay`): the frames for
+  a sentence arrive 0.31 s after it is pushed, so lips and sound meet — the mouth a frame or
+  two ahead, as a person's is. The next sentence is handed over when the last one's push
+  slot ends, so the delay does not open gaps between sentences; a cut-off reply drops what
+  the box has pending, and when nothing more is coming the box renders the tail.
+- **Why the split**: Ditto alone makes the whole face from the voice but manages ten frames a
+  second on the box's GPU (91 ms a frame at best — after its 7×7×7 Conv3d, 543 of 583 ms,
+  was rewritten as seven Conv2d, and after FasterLivePortrait-MLX ran Ditto's own weights);
+  H3 and LTX are a hundred times slower than speech. MuseTalk alone floated over H3's and
+  LTX's moving cameras.
+- A box service in Settings and in the console, and a line in the box desk's 陪伴 section.
+- **Sharp, in the panel's shape** — 「图片太low了」: the first body was 512×512, stretched three
+  times over to fill the companion panel (portrait, 0.78) on a 2× screen. Her photograph was
+  extended by Qwen-Image 2.1 edit into a 1024×1312 portrait (the same woman, the same café,
+  down to her blouse), Ditto rendered the body at that size, and kin-face serves it (`looks/
+  current` → `cafe-hd`). The whole 1.2 GB body must sit in MuseTalk's frame pool
+  (`MT_BG_POOL_BUDGET_MB`): past the default 1 GB the last 52 frames were decoded and
+  re-analysed while she spoke, and the mouth fell 1.6–2.2 s behind; pooled, 0.33 s.
+  The connection retries by itself when the box service restarts.
+- **Fitted, not filled** (「页面显示太大了」): Jacky's companion panel is wide, and a portrait
+  frame filling it was blown up until only a band of her face showed. The whole picture now
+  sits in the panel with dark space beside it, as a video call's.
+- **Only the mouth is MuseTalk's, and sharper** (「还是有点糊，再试试锐化」): its 256 px lower face
+  had been pasted over the whole lower face, cheeks and chin included; the paste mask is now an
+  ellipse round the lips (BiSeNet mouth and lips, reaching down for the jaw), the patch is
+  enlarged with a cubic filter and an unsharp mask, and the body's own skin texture is laid back
+  in the feathered ring — all within the mask's rectangle, or the render thread fell below 20
+  frames a second and the mouth drifted to 0.93 s behind.
+- **Her jaw opens with her mouth** (「对口型不自然」): MuseTalk's crop is centred 24 px lower
+  (its bbox shift — measured here the opposite way round from its authors' account: +24 closed
+  her mouth further), the mask takes the chin below the lips, and the photograph's own held
+  smile was relaxed by Qwen-Image edit (`looks/cafe-relaxed`).
+- **Two bodies, one that listens and one that talks** (「说不上来的感觉」, 「别人是怎么做的」):
+  HeyGen and its kind film a presenter talking and replace only the lips; with one body her
+  head idled while her mouth talked. Ditto now renders a second body from a voice with the six
+  lip keypoints held at the photograph's — her head moves with the words, about 2.5× as much as
+  at rest, her gaze shifts — and kin-face cuts between the two at the frame most like the one
+  that would have come next (a cut costs 1.1 against 0.2 for one frame's step), cross-fades over
+  four frames, and stays in the talking body through the pause between two sentences.
+- **Steady over Wi-Fi**: the Mac and the box were both on Wi-Fi, Ethernet unplugged; frames
+  that left the box 50 ms apart arrived in bursts (gaps to 1.08 s), and when the Wi-Fi fell to
+  about 5 Mbit/s the box went on sending every 154 KB frame and they came in up to 16 s late —
+  lips nowhere near the voice. Frames now carry their slot on the box's clock and are shown at
+  that pace behind a buffer that follows the link (0.08–0.5 s; her voice waits as much longer),
+  every frame is answered, and the box drops frames rather than queue them behind a full link:
+  on the same Wi-Fi 7 % dropped, at most 0.77 s late. A cable on both is the real fix.
+
 ### Fixed — what the Studio agents' notebooks asked for
 
 「给我指定一个使用和改进计划」→「都做吧，开始干」. The plan's improvements, taken from the

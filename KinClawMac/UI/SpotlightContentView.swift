@@ -131,6 +131,15 @@ struct SpotlightContentView: View {
     @StateObject private var bargeIn = BargeInMonitor()
     /// Companion mode: the panel becomes a picture and a voice.
     @State private var companionMode = false
+    /// Her brain in companion mode: "agent" (this panel's voice loop) or
+    /// "omni" — MiniCPM-o in full duplex on the box (`OmniCall`).
+    @AppStorage(OmniCall.brainKey) private var companionBrain = "agent"
+    @AppStorage(OmniCall.cameraKey) private var omniCamera = false
+    @ObservedObject private var omni = OmniCall.shared
+    /// Her face lip-synced on the box (`LiveFace`), chosen in the companion's face menu.
+    @AppStorage(LiveFace.enabledKey) private var liveFaceOn = false
+    @State private var liveFaceAttached = false
+    private var omniActive: Bool { companionMode && companionBrain == "omni" }
     /// Whoever was selected before companion mode swapped in its own
     /// soul; put back on exit.
     @State private var companionRestoreAgent: Agent?
@@ -355,18 +364,19 @@ struct SpotlightContentView: View {
             titlebarHeaderOverlay
             if companionMode {
                 CompanionView(art: companionArt,
-                              isListening: recorder.isRecording,
-                              isThinking: recorder.isTranscribing || isStreaming,
-                              isSpeaking: speaker.isSpeaking,
-                              audioLevel: recorder.audioLevel,
-                              isHearingSpeech: recorder.hearingSpeech,
-                              caption: companionCaption,
-                              problem: companionProblem,
+                              isListening: omniActive ? omni.listening : recorder.isRecording,
+                              isThinking: omniActive ? false : recorder.isTranscribing || isStreaming,
+                              isSpeaking: omniActive ? omni.speaking : speaker.isSpeaking,
+                              audioLevel: omniActive ? omni.level : recorder.audioLevel,
+                              isHearingSpeech: omniActive ? omni.level > 0.15 : recorder.hearingSpeech,
+                              caption: omniActive ? omni.caption : companionCaption,
+                              problem: omniActive ? omni.problem : companionProblem,
                               mood: companionMood,
                               subject: companionSubject,
                               activity: companionActivity,
-                              canBargeIn: bargeInArmed,
-                              onInterrupt: { interruptReply(hot: false) },
+                              // Full duplex: talking over her is how you cut in.
+                              canBargeIn: omniActive ? true : bargeInArmed,
+                              onInterrupt: { if !omniActive { interruptReply(hot: false) } },
                               prompt: companionPrompt,
                               onPromptDecision: { decision in
                                   guard let req = pendingPermission else { return }
@@ -455,6 +465,32 @@ struct SpotlightContentView: View {
         .onChange(of: speaker.isSpeaking) { _, speaking in
             if speaking { armBargeIn() } else { disarmBargeIn() }
         }
+        // Mini-turns hear the microphone only while it is the user's turn.
+        .onChange(of: recorder.isRecording) { _, on in
+            guard companionMode else { return }
+            if on { TurnTaker.shared.listen() } else { TurnTaker.shared.pause() }
+        }
+        .onChange(of: recorder.hearingSpeech) { _, on in
+            TurnTaker.shared.userTalking(on)
+        }
+        // Switching brains mid-visit: the voice loop and the call never share
+        // the microphone.
+        .onChange(of: companionBrain) { _, brain in
+            guard companionMode else { return }
+            if brain == "omni" {
+                voiceMode = false
+                startOmniCall()
+            } else {
+                omni.stop()
+                omni.onClip = nil
+                voiceMode = true
+            }
+        }
+        .onChange(of: omniCamera) { _, on in omni.setCamera(on) }
+        .onChange(of: liveFaceOn) { _, on in
+            guard companionMode else { return }
+            if on { attachLiveFace() } else { detachLiveFace() }
+        }
     }
 
     /// What is stopping the voice loop, if anything. A silent halo with
@@ -532,12 +568,61 @@ struct SpotlightContentView: View {
         withAnimation(.easeOut(duration: 0.25)) { companionMode = true }
         (NSApp.delegate as? AppDelegate)?.spotlightWindow.enterCompanion()
         extendWakeSession()
-        if !voiceMode { voiceMode = true }
-        // Voice mode's own onChange prewarms too, but only on the
-        // transition; entering with it already on still wants the
-        // first sentence to come out at full speed.
-        speaker.prewarm(hostname: hostname)
+        // Mini-turns: the box judges whether you are done before she answers,
+        // and she says 嗯 or nods while you talk (TurnTaker, kin-turn on the box).
+        recorder.turnJudge = { await TurnTaker.shared.isComplete() }
+        TurnTaker.shared.onBackchannel = { say in backchannel(say: say) }
+        if TurnTaker.enabled {
+            TurnTaker.shared.prepareAnswers(with: speaker, hostname: hostname)
+            Task { _ = await BoxServices.shared.ensure(.turn) }
+        }
+        if liveFaceOn { attachLiveFace() }
+        if companionBrain == "omni" {
+            startOmniCall()
+        } else {
+            if !voiceMode { voiceMode = true }
+            // Voice mode's own onChange prewarms too, but only on the
+            // transition; entering with it already on still wants the
+            // first sentence to come out at full speed.
+            speaker.prewarm(hostname: hostname)
+        }
         if companionArt.isEmpty { showingArtPicker = true }
+    }
+
+    /// Her face made on the box from her voice (`LiveFace`): each clip goes there
+    /// whole when its turn comes and plays `voiceDelay` later, so the frames made
+    /// from it are shown in time; the tail is rendered when nothing more is coming,
+    /// and a cut-off reply drops what is pending.
+    private func attachLiveFace() {
+        let face = LiveFace.shared
+        face.connect()
+        Task { _ = await BoxServices.shared.ensure(.face) }
+        speaker.playbackDelay = LiveFace.voiceDelay
+        speaker.onClip = { [weak speaker] data in
+            // The delay of the moment (it follows the Wi-Fi), just before the clip is scheduled.
+            speaker?.playbackDelay = LiveFace.voiceDelay
+            Task { @MainActor in LiveFace.shared.push(data) }
+        }
+        speaker.onStopped = { Task { @MainActor in LiveFace.shared.interrupt() } }
+        speaker.onDrained = { Task { @MainActor in LiveFace.shared.end() } }
+        liveFaceAttached = true
+    }
+
+    private func detachLiveFace() {
+        guard liveFaceAttached else { return }
+        LiveFace.shared.disconnect()
+        speaker.playbackDelay = 0
+        speaker.onDrained = nil
+        speaker.onClip = nil
+        speaker.onStopped = nil
+        liveFaceAttached = false
+    }
+
+    /// The other brain: a full-duplex call with MiniCPM-o on the box. Her voice
+    /// drives whichever face is on, the same way the agent's replies do.
+    private func startOmniCall() {
+        omni.onClip = { data in speaker.onClip?(data) }
+        Task { await omni.start() }
     }
 
     private func exitCompanionMode() {
@@ -553,6 +638,12 @@ struct SpotlightContentView: View {
         speaker.onStopped = nil
         avatarWeb = nil
         avatarServer.stop()
+        recorder.turnJudge = nil
+        TurnTaker.shared.onBackchannel = nil
+        TurnTaker.shared.pause()
+        omni.stop()
+        omni.onClip = nil
+        detachLiveFace()
         endVoiceApproval()
         if recorder.isRecording { recorder.cancelRecording() }
         speaker.stop()
@@ -2757,6 +2848,20 @@ struct SpotlightContentView: View {
     }
 
     private func disarmBargeIn() { bargeIn.stop() }
+
+    /// A listener's answer while you talk (`TurnTaker`): a nod, and every
+    /// other time a quiet 嗯 in her voice that her mouth moves with. Never
+    /// while she is the one talking — and the recorder is told the 嗯 is not
+    /// you, so it neither joins your sentence nor holds your turn open.
+    private func backchannel(say: Bool) {
+        guard companionMode, recorder.isRecording, !speaker.isSpeaking else { return }
+        VRMStage.shared.nod()
+        if say, let answer = TurnTaker.shared.sayAnswer() {
+            recorder.notTheUser(for: answer.seconds + 0.25)
+            // Not into the live face: its timeline is her replies', a beat behind.
+            if !liveFaceOn { speaker.onClip?(answer.data) }
+        }
+    }
 
     /// Feed one text delta to the speaker, draining whole sentences.
     ///

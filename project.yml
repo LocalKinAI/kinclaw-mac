@@ -76,6 +76,8 @@ targets:
         NSMicrophoneUsageDescription: "LocalKin uses your microphone for voice mode — push-to-talk to any agent."
         # Speech recognition (local STT fallback when server unreachable)
         NSSpeechRecognitionUsageDescription: "LocalKin uses on-device speech recognition as a local fallback when remote STT is unavailable."
+        # Camera (companion mode's full-duplex brain, only when "看着你" is on)
+        NSCameraUsageDescription: "LocalKin shows the companion one frame a second from your camera, only while 看着你 is on, so she can see you and what you hold up."
         # Accessibility permission (when invoking local KinClaw computer-use)
         NSAppleEventsUsageDescription: "LocalKin needs Apple Events access to coordinate with the local kinclaw daemon for computer-use tasks."
         ITSAppUsesNonExemptEncryption: false

@@ -42,6 +42,24 @@ class VoiceRecorder: NSObject, ObservableObject {
     var onTranscript: ((String) -> Void)?
     var onNoSpeech: (() -> Void)?  // Called when no speech detected, for voice mode loop
 
+    /// Asked at half a second of quiet after speech: how likely is it that
+    /// the speaker has finished (0…1)? Below one half the recording waits for
+    /// up to 1.8 s of quiet instead — a pause to find a word is not the end
+    /// of a sentence. Nil, or no answer, ends it at half a second as always.
+    /// Set by companion mode when the box's kin-turn is there (`TurnTaker`).
+    var turnJudge: (() async -> Double?)?
+    private var judging = false
+    private var judgedThisPause = false
+    private var quietTicksNeeded = 5
+
+    /// Until then, what the microphone hears is not the user: the companion
+    /// is saying 嗯 while they talk, and that must neither count as their
+    /// speech nor cut short the quiet that ends their turn.
+    private var quietUntil = Date.distantPast
+    func notTheUser(for seconds: TimeInterval) {
+        quietUntil = Date().addingTimeInterval(seconds)
+    }
+
     /// Fired only when a recording was discarded for containing no speech —
     /// not when one failed.
     ///
@@ -69,6 +87,9 @@ class VoiceRecorder: NSObject, ObservableObject {
         storedHostname = hostname
         hotStart = hot
         hasSpeechStarted = false
+        judging = false
+        judgedThisPause = false
+        quietTicksNeeded = 5
 
         #if os(iOS)
         AVAudioSession.sharedInstance().requestRecordPermission { [weak self] granted in
@@ -302,7 +323,9 @@ class VoiceRecorder: NSObject, ObservableObject {
                   recorder.isRecording else { return }
 
             recorder.updateMeters()
-            let avgPower = recorder.averagePower(forChannel: 0)
+            var avgPower = recorder.averagePower(forChannel: 0)
+            // The companion's own 嗯 is in the room, not the user.
+            if Date() < self.quietUntil { avgPower = min(avgPower, -60) }
 
             // averagePower is dB (typically -160 silence → 0 max).
             // Map to 0...1 for UI binding. -60 dB feels like a
@@ -361,6 +384,11 @@ class VoiceRecorder: NSObject, ObservableObject {
                 // this to 0 within a few ticks, since it subtracts twice as
                 // fast as silence adds.
                 silenceCount = max(0, silenceCount - 2)
+                // Talking again: the next pause is a new question for the judge.
+                if silenceCount == 0, !self.judging {
+                    self.judgedThisPause = false
+                    self.quietTicksNeeded = 5
+                }
             } else {
                 // Decay rather than reset. Requiring three *strictly
                 // consecutive* ticks made short words unrecognisable: speech
@@ -374,10 +402,27 @@ class VoiceRecorder: NSObject, ObservableObject {
                 silenceCount += 1
             }
 
-            // 0.5s silence after speech → stop
+            // 0.5s silence after speech → stop (or, with a turn judge, ask
+            // whether the sentence is finished; up to 1.8 s if it is not)
             // 2s pure silence (no speech at all) → stop and retry
-            let silenceThreshold = self.hasSpeechStarted ? 5 : 20
+            let silenceThreshold = self.hasSpeechStarted ? self.quietTicksNeeded : 20
             if silenceCount >= silenceThreshold {
+                if self.judging { return }
+                if self.hasSpeechStarted, let judge = self.turnJudge, !self.judgedThisPause {
+                    self.judging = true
+                    self.judgedThisPause = true
+                    Task { @MainActor in
+                        let done = await judge()
+                        self.judging = false
+                        guard self.isRecording else { return }
+                        if let done, done < 0.5 {
+                            self.quietTicksNeeded = 18
+                        } else {
+                            self.stopRecording()
+                        }
+                    }
+                    return
+                }
                 DispatchQueue.main.async {
                     self.stopRecording()
                 }
