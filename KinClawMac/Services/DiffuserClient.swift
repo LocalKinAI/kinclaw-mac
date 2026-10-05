@@ -314,6 +314,7 @@ final class DiffuserClient: ObservableObject {
                        width: Int = 704, height: Int = 480,
                        seed: Int? = nil, mode: String? = nil, from image: URL? = nil,
                        following control: URL? = nil,
+                       speech: URL? = nil, frames: Int? = nil,
                        lowRAM: Bool? = nil,
                        hq: Bool = false,
                        timeout: TimeInterval = 1800) async throws -> URL {
@@ -364,6 +365,20 @@ final class DiffuserClient: ObservableObject {
                 throw Failure.message("找不到动作参考：\(control.path)")
             }
             files.append((name: "control", url: control))
+        }
+        // Speech makes it audio-to-video: the face says these words (a talking
+        // video, TalkingVideo). Only the q8 pack has the dev transformer the
+        // a2v pipeline guides with, so callers ask for `hq`; the length is the
+        // speech's, in 8k+1 frames, and replaces `seconds`.
+        if let speech {
+            guard FileManager.default.fileExists(atPath: speech.path) else {
+                throw Failure.message("找不到要说的那段声音：\(speech.path)")
+            }
+            files.append((name: "audio", url: speech))
+        }
+        if let frames {
+            fields["frames"] = String(frames)
+            fields.removeValue(forKey: "seconds")
         }
         let (boundary, body) = try Self.multipart(fields: fields, files: files)
 

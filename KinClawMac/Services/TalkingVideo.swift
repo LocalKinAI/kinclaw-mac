@@ -1,0 +1,513 @@
+import AppKit
+import AVFoundation
+import Foundation
+
+/// 说话视频: a photograph saying a script in a voice — what HeyGen sells, made on
+/// the box. 「找开源啊，用我们的盒子把他们平替了」(2026-10-02).
+///
+/// The text is spoken sentence by sentence by the box's voices (one of the voice
+/// server's speakers, or a voice designed from words), packed into pieces of up
+/// to about six seconds, and each piece is filmed from the photograph with its
+/// speech as the soundtrack the face must say:
+///   - H3 (default): the speech anchored in the clip (AddGuide audio) and the
+///     photograph pinned as the first and the last frame, so every piece starts
+///     and ends on the same picture and they join without a jump. 9.7 minutes
+///     for 6.6 s at 640×640 in the four-step draft; lively — she smiles, blinks,
+///     tilts her head.
+///   - LTX-2.3 q8 audio-to-video: steadier and calmer; 7 minutes for 4 s.
+/// The pieces are cut together over the clean speech. Measured on 2026-10-02 with
+/// the companion's portrait: both kept her face through the clip; the voice is
+/// the box's own, so the lips follow what is actually said.
+@MainActor
+final class TalkingVideo: ObservableObject {
+    static let shared = TalkingVideo()
+    static var root: URL { CompanionArt.folder.appendingPathComponent("talking") }
+
+    struct Job: Codable, Identifiable, Equatable {
+        var id: String
+        var title: String
+        var image: String
+        var text: String?
+        var audio: String?
+        var voice: String?
+        var voiceDescription: String?
+        var engine: String
+        var quality: String
+        var look: String?
+        var width: Int
+        var height: Int
+        var state: String            // speaking | held | filming | joining | done | failed
+        var note: String?
+        var pieces: [Piece] = []
+        var started: Date
+        var finished: Date?
+        var output: String?
+
+        struct Piece: Codable, Equatable {
+            var text: String
+            var speech: String       // the piece's speech, 24 kHz mono
+            var seconds: Double
+            var video: String?
+        }
+
+        var folder: URL { URL(fileURLWithPath: image).deletingLastPathComponent() }
+        var spoken: Double { pieces.reduce(0) { $0 + $1.seconds } }
+    }
+
+    @Published private(set) var jobs: [Job] = []
+    private var working: String?
+
+    private init() { load() }
+
+    // MARK: - Asking
+
+    enum Failure: LocalizedError {
+        case message(String)
+        var errorDescription: String? { if case .message(let m) = self { return m }; return nil }
+    }
+
+    /// Start one. Everything given is used as written; what is left out is filled
+    /// in: the companion's voice, H3, the draft, the photograph's own shape.
+    func make(image: URL, text: String?, audio: URL?, voice: String?, voiceDescription: String?,
+              engine: String?, quality: String?, look: String?, shape: String?, title: String?,
+              holdAfterSpeech: Bool) -> Result<Job, Failure> {
+        guard working == nil else { return .failure(.message("正在做「\(working!)」，等它做完（talking_video_status）")) }
+        guard FileManager.default.fileExists(atPath: image.path) else { return .failure(.message("找不到照片：\(image.path)")) }
+        let words = text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !words.isEmpty || audio != nil else { return .failure(.message("要 text（她说什么）或 audio（一段录音）")) }
+        if let audio, !FileManager.default.fileExists(atPath: audio.path) { return .failure(.message("找不到录音：\(audio.path)")) }
+        let engine = (engine ?? "h3").lowercased() == "ltx" ? "ltx" : "h3"
+        if let trouble = CompanionArt.unreachableVolume(Self.root) { return .failure(.message(trouble)) }
+
+        let name = Self.slug(title ?? String(words.prefix(16))) + "-" + String(Int(Date().timeIntervalSince1970))
+        let folder = Self.root.appendingPathComponent(name)
+        do { try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true) } catch {
+            return .failure(.message("建不了文件夹：\(error.localizedDescription)"))
+        }
+        let photo = folder.appendingPathComponent("photo." + (image.pathExtension.isEmpty ? "png" : image.pathExtension.lowercased()))
+        try? FileManager.default.copyItem(at: image, to: photo)
+        let (width, height) = Self.size(of: photo, shape: shape, engine: engine)
+        let job = Job(id: name, title: title ?? String(words.prefix(16)), image: photo.path,
+                      text: words.isEmpty ? nil : words, audio: audio?.path, voice: voice, voiceDescription: voiceDescription,
+                      engine: engine, quality: quality == "full" ? "full" : "draft", look: look,
+                      width: width, height: height, state: "speaking", started: Date())
+        jobs.insert(job, at: 0)
+        save(job)
+        working = job.id
+        Task { await run(job.id, hold: holdAfterSpeech) }
+        return .success(job)
+    }
+
+    /// Film one that stopped after its speech.
+    func resume(_ id: String) -> Result<Job, Failure> {
+        guard working == nil else { return .failure(.message("正在做「\(working!)」，等它做完")) }
+        guard let job = find(id) else { return .failure(.message("没有这个说话视频：\(id)")) }
+        guard job.state == "held" || job.state == "failed", !job.pieces.isEmpty else {
+            return .failure(.message("「\(job.title)」现在是\(job.state)，不用接着拍"))
+        }
+        working = job.id
+        Task { await run(job.id, hold: false) }
+        return .success(job)
+    }
+
+    func find(_ id: String) -> Job? { jobs.first { $0.id == id || $0.title == id } }
+
+    /// One line each, newest first — the answer to talking_video_status.
+    func report(_ id: String? = nil) -> String {
+        let shown = id.flatMap(find).map { [$0] } ?? Array(jobs.prefix(5))
+        guard !shown.isEmpty else { return "还没做过说话视频（talking_video）" }
+        return shown.map(Self.line).joined(separator: "\n")
+    }
+
+    static func line(_ job: Job) -> String {
+        let took = Int((job.finished ?? Date()).timeIntervalSince(job.started))
+        let clock = String(format: "%d:%02d", took / 60, took % 60)
+        let head = "「\(job.title)」\(job.id) · \(job.engine == "ltx" ? "LTX" : "H3\(job.quality == "full" ? " 精细" : "")") · \(job.width)×\(job.height)"
+        switch job.state {
+        case "speaking": return head + "：在配音（\(clock)）"
+        case "held":
+            let files = job.pieces.map(\.speech).joined(separator: "、")
+            return head + "：声音做好了，\(job.pieces.count) 段共 \(String(format: "%.1f", job.spoken)) 秒，停在这里等你听（\(files)）。"
+                + "talking_video_continue 开拍，预计 \(estimate(job)) 分钟"
+        case "filming":
+            let done = job.pieces.filter { $0.video != nil }.count
+            return head + "：在拍第 \(min(done + 1, job.pieces.count))/\(job.pieces.count) 段（\(clock)，全部约 \(estimate(job)) 分钟）"
+        case "joining": return head + "：在拼成一条（\(clock)）"
+        case "done": return head + "：做好了，\(String(format: "%.1f", job.spoken)) 秒，用时 \(clock) → \(job.output ?? "")"
+        default: return head + "：没做成（\(clock)）：\(job.note ?? "")"
+        }
+    }
+
+    /// Minutes, from what was measured: H3 draft about 1.5 a second of speech
+    /// (9.7 for 6.6 s), full about 3.5 times that; LTX q8 about 1.8.
+    static func estimate(_ job: Job) -> Int {
+        let seconds = max(1, job.spoken)
+        let rate = job.engine == "ltx" ? 1.8 : job.quality == "full" ? 5.2 : 1.5
+        return Int((seconds * rate * Double(job.width * job.height) / 409_600).rounded(.up))
+    }
+
+    // MARK: - Doing
+
+    private func run(_ id: String, hold: Bool) async {
+        defer { working = nil }
+        guard var job = find(id) else { return }
+        do {
+            if job.pieces.isEmpty {
+                job.state = "speaking"
+                update(job)
+                job.pieces = try await speak(job)
+                if hold {
+                    job.state = "held"
+                    update(job)
+                    return
+                }
+            }
+            job.state = "filming"
+            job.note = nil
+            update(job)
+            for index in job.pieces.indices where job.pieces[index].video == nil {
+                let out = job.folder.appendingPathComponent(String(format: "piece-%02d.mp4", index + 1))
+                if job.engine == "ltx" {
+                    try await filmLTX(job, job.pieces[index], to: out)
+                } else {
+                    try await filmH3(job, job.pieces[index], index: index, to: out)
+                }
+                job.pieces[index].video = out.path
+                update(job)
+            }
+            job.state = "joining"
+            update(job)
+            let out = job.folder.appendingPathComponent("talk.mp4")
+            try await join(job, to: out)
+            job.output = out.path
+            job.state = "done"
+            job.finished = Date()
+            update(job)
+        } catch {
+            job.state = "failed"
+            job.note = error.localizedDescription
+            job.finished = Date()
+            update(job)
+        }
+    }
+
+    // MARK: Speech
+
+    /// The words, a sentence at a time, packed into pieces of at most 6.4 s —
+    /// just under H3's 158 frames — or the recording, cut at its quietest places.
+    private func speak(_ job: Job) async throws -> [Job.Piece] {
+        if let audio = job.audio {
+            let samples = try Self.read(URL(fileURLWithPath: audio))
+            return try Self.cut(samples, into: job.folder)
+        }
+        let sentences = Self.sentences(job.text ?? "")
+        var made: [(text: String, samples: [Float])] = []
+        for (i, sentence) in sentences.enumerated() {
+            guard let data = await Self.voice(sentence, voice: job.voice, description: job.voiceDescription) else {
+                throw Failure.message("第 \(i + 1) 句配不出音：「\(sentence)」——盒子上的语音服务（8101，或旁白 8102）在不在？")
+            }
+            let file = job.folder.appendingPathComponent(String(format: "line-%02d.wav", i + 1))
+            try data.write(to: file)
+            made.append((sentence, try Self.read(file)))
+        }
+        // Pack whole sentences, with a short breath between them.
+        let breath = [Float](repeating: 0, count: Int(0.18 * Self.rate))
+        var pieces: [Job.Piece] = []
+        var text = "", samples: [Float] = []
+        func flush() throws {
+            guard !samples.isEmpty else { return }
+            let file = job.folder.appendingPathComponent(String(format: "speech-%02d.wav", pieces.count + 1))
+            try Self.write(samples, to: file)
+            pieces.append(Job.Piece(text: text, speech: file.path, seconds: Double(samples.count) / Self.rate))
+            text = ""; samples = []
+        }
+        for line in made {
+            let next = samples.isEmpty ? line.samples : samples + breath + line.samples
+            if !samples.isEmpty, Double(next.count) / Self.rate > 6.4 { try flush() }
+            samples = samples.isEmpty ? line.samples : samples + breath + line.samples
+            text += line.text
+        }
+        try flush()
+        return pieces
+    }
+
+    /// A voice id from the voice server (`/synthesize`, the companion's own
+    /// request), or a voice designed from words by the film narrator service.
+    private static func voice(_ text: String, voice: String?, description: String?) async -> Data? {
+        if let description, !description.isEmpty {
+            let chinese = text.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) }
+            let narrator = FilmStudio.Narrator(speaker: "", language: chinese ? "zh" : "en", instruct: nil, voice: description)
+            return await FilmStudio.readVoiceover(text, narrator: narrator)
+        }
+        let chosen = UserDefaults.standard.string(forKey: "kinclaw.backend.tts") ?? ""
+        let base = chosen.isEmpty ? "http://localhost:8001" : chosen.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let url = URL(string: base + "/synthesize") else { return nil }
+        let usual = UserDefaults.standard.string(forKey: "kinclaw.voice.tts.speaker") ?? ""
+        let speaker = voice ?? ((usual.isEmpty || usual == "auto") ? "vivian" : usual)
+        var request = URLRequest(url: url, timeoutInterval: 60)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["text": text, "speaker": speaker, "language": "", "speed": 1.0])
+        for _ in 0..<2 {
+            if let (data, response) = try? await URLSession.shared.data(for: request),
+               (response as? HTTPURLResponse)?.statusCode == 200, data.count > 44 {
+                return WAVTrim.trim(data)
+            }
+        }
+        return nil
+    }
+
+    static func sentences(_ text: String) -> [String] {
+        var out: [String] = [], current = ""
+        for ch in text {
+            if ch == "\n" { if !current.trimmingCharacters(in: .whitespaces).isEmpty { out.append(current) }; current = ""; continue }
+            current.append(ch)
+            if "。！？!?；;…".contains(ch) || (ch == "." && current.count > 12) {
+                out.append(current); current = ""
+            }
+        }
+        if !current.trimmingCharacters(in: .whitespaces).isEmpty { out.append(current) }
+        return out.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    }
+
+    // MARK: Filming
+
+    private func filmH3(_ job: Job, _ piece: Job.Piece, index: Int, to out: URL) async throws {
+        let base = BoxServices.base(.comfy)
+        guard await BoxServices.shared.ensure(.comfy) else { throw Failure.message("盒子上的 ComfyUI 不在") }
+        let photo = try await FilmStudio.upload(URL(fileURLWithPath: job.image), as: "kinclaw-talking-\(job.id).png", to: base)
+        let speech = try await FilmStudio.upload(URL(fileURLWithPath: piece.speech), as: "kinclaw-talking-\(job.id)-\(index + 1).wav", to: base)
+        let full = job.quality == "full"
+        let frames = FilmStudio.h3Frames(piece.seconds + 0.25)
+        let behaviour = job.look.map { "\($0). " } ?? ""
+        let prompt = behaviour + "The person in the picture looks into the camera and says: \"\(piece.text)\". "
+            + "Natural expressions that follow the words, blinking, small head movements, lips moving with the speech. Static camera."
+        func n(_ type: String, _ inputs: [String: Any]) -> [String: Any] { ["class_type": type, "inputs": inputs] }
+        var graph: [String: Any] = [
+            "1": n("UNETLoader", ["unet_name": "minimax_h3_ref2va_pruned_int8_convrot.safetensors", "weight_dtype": "default"]),
+            "2": n("CLIPLoader", ["clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors", "type": "minimax", "device": "default"]),
+            "3": n("VAELoader", ["vae_name": "minimax_h3_video_vae_fp16.safetensors"]),
+            "4": n("VAELoader", ["vae_name": "minimax_h3_audio_vae_fp32.safetensors"]),
+            "100": n("LoadImage", ["image": photo]),
+            "101": n("LoadAudio", ["audio": speech]),
+            "6": n("MiniMaxH3ReferenceToVideo", ["prompt": prompt, "clip": ["2", 0], "vae": ["3", 0], "audio_vae": ["4", 0],
+                                                 "width": job.width, "height": job.height, "length": frames,
+                                                 "ref_image_size": "match", "ref_images.ref_image_0": ["100", 0]]),
+            // The words at the start, and the photograph first and last.
+            "300": n("MiniMaxH3AddGuide", ["positive": ["6", 0], "latent": ["6", 1], "vae": ["3", 0], "audio_vae": ["4", 0],
+                                           "image": ["100", 0], "audio": ["101", 0], "frame_idx": 0]),
+            "301": n("MiniMaxH3AddGuide", ["positive": ["300", 0], "latent": ["6", 1], "vae": ["3", 0], "audio_vae": ["4", 0],
+                                           "image": ["100", 0], "frame_idx": -1]),
+            "7": n("RandomNoise", ["noise_seed": 7 + index]),
+            "8": n("KSamplerSelect", ["sampler_name": "res_multistep"]),
+            "12": n("VAEDecode", ["vae": ["3", 0], "samples": ["11", 0]]),
+            "13": n("VAEDecodeAudio", ["vae": ["4", 0], "samples": ["11", 0]]),
+            "14": n("CreateVideo", ["images": ["12", 0], "audio": ["13", 0], "fps": 24.0]),
+            "15": n("SaveVideo", ["video": ["14", 0], "filename_prefix": "video/kinclaw-talking", "format": "auto", "codec": "auto"]),
+        ]
+        var model: [Any] = ["1", 0]
+        if !full {
+            graph["5"] = n("LoraLoaderModelOnly", ["lora_name": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+                                                    "strength_model": 1.0, "model": ["1", 0]])
+            model = ["5", 0]
+        }
+        if await FilmStudio.boxHas("KinClawPytorchAttention", at: base) {
+            graph["24"] = n("KinClawPytorchAttention", ["model": model])
+            model = ["24", 0]
+        }
+        graph["9"] = n("BasicScheduler", ["scheduler": "simple", "steps": full ? 20 : 4, "denoise": 1.0, "model": model])
+        graph["10"] = n("BasicGuider", ["model": model, "conditioning": ["301", 0]])
+        graph["11"] = n("SamplerCustomAdvanced", ["noise": ["7", 0], "guider": ["10", 0], "sampler": ["8", 0],
+                                                  "sigmas": ["9", 0], "latent_image": ["6", 1]])
+        let what = "说话视频 \(index + 1)/\(job.pieces.count)"
+        let video = try await FilmStudio.comfyResult(graph, node: "15", base: base, what: what,
+                                                     deadline: full ? 7200 : 3600)
+        try? FileManager.default.removeItem(at: out)
+        try video.write(to: out)
+    }
+
+    private func filmLTX(_ job: Job, _ piece: Job.Piece, to out: URL) async throws {
+        let behaviour = job.look.map { "\($0). " } ?? ""
+        let prompt = behaviour + "The person in the picture talks to the camera, saying: \"\(piece.text)\". "
+            + "Natural expressions, blinking, small head movements. Static camera."
+        // LTX wants 8k+1 frames at 24 fps; the speech decides how many.
+        let frames = max(25, Int((piece.seconds * 24 / 8).rounded(.up)) * 8 + 1)
+        try await DiffuserClient.shared.generateVideo(prompt: prompt, to: out, width: job.width, height: job.height,
+                                                      seed: 7, from: URL(fileURLWithPath: job.image),
+                                                      speech: URL(fileURLWithPath: piece.speech), frames: frames,
+                                                      hq: true, timeout: 3600)
+    }
+
+    // MARK: Joining
+
+    /// The pieces one after another over the clean speech. H3 pieces run whole —
+    /// each ends on the photograph, which is what makes the joins seamless — so
+    /// each piece's speech is padded with silence to its clip; LTX pieces are
+    /// cut to their speech.
+    private func join(_ job: Job, to out: URL) async throws {
+        let composition = AVMutableComposition()
+        guard let videoTrack = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid),
+              let audioTrack = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
+        else { throw Failure.message("拼不起来") }
+        var at = CMTime.zero
+        var soundtrack: [Float] = []
+        for piece in job.pieces {
+            guard let path = piece.video else { throw Failure.message("有一段没拍出来") }
+            let asset = AVURLAsset(url: URL(fileURLWithPath: path))
+            guard let source = try await asset.loadTracks(withMediaType: .video).first else { throw Failure.message("\(path) 里没有画面") }
+            let length = try await asset.load(.duration)
+            let keep = job.engine == "ltx" ? CMTimeMinimum(length, CMTime(seconds: piece.seconds + 0.1, preferredTimescale: 600)) : length
+            try videoTrack.insertTimeRange(CMTimeRange(start: .zero, duration: keep), of: source, at: at)
+            if at == .zero { videoTrack.preferredTransform = try await source.load(.preferredTransform) }
+            at = at + keep
+            var speech = try Self.read(URL(fileURLWithPath: piece.speech))
+            let room = Int(keep.seconds * Self.rate)
+            if speech.count < room { speech += [Float](repeating: 0, count: room - speech.count) }
+            soundtrack += speech.prefix(room)
+        }
+        let track = job.folder.appendingPathComponent("soundtrack.wav")
+        try Self.write(soundtrack, to: track)
+        let sound = AVURLAsset(url: track)
+        if let source = try await sound.loadTracks(withMediaType: .audio).first {
+            let length = try await sound.load(.duration)
+            try audioTrack.insertTimeRange(CMTimeRange(start: .zero, duration: CMTimeMinimum(length, at)), of: source, at: .zero)
+        }
+        try? FileManager.default.removeItem(at: out)
+        guard let export = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetHighestQuality) else {
+            throw Failure.message("导不出来")
+        }
+        export.outputURL = out
+        export.outputFileType = .mp4
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in export.exportAsynchronously { done.resume() } }
+        guard export.status == .completed else {
+            throw Failure.message("导出失败：\(export.error?.localizedDescription ?? "不知道为什么")")
+        }
+    }
+
+    // MARK: - Sound files
+
+    static let rate = 24_000.0
+
+    /// Any audio file as mono float samples at 24 kHz.
+    static func read(_ url: URL) throws -> [Float] {
+        let file = try AVAudioFile(forReading: url)
+        let source = file.processingFormat
+        guard let input = AVAudioPCMBuffer(pcmFormat: source, frameCapacity: AVAudioFrameCount(file.length)) else { return [] }
+        try file.read(into: input)
+        guard let target = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: 1, interleaved: false),
+              let converter = AVAudioConverter(from: source, to: target) else { return [] }
+        converter.downmix = true
+        let capacity = AVAudioFrameCount(Double(input.frameLength) * rate / source.sampleRate) + 1024
+        guard let output = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return [] }
+        var fed = false
+        var error: NSError?
+        converter.convert(to: output, error: &error) { _, status in
+            if fed { status.pointee = .endOfStream; return nil }
+            fed = true
+            status.pointee = .haveData
+            return input
+        }
+        if let error { throw error }
+        guard let channel = output.floatChannelData else { return [] }
+        return Array(UnsafeBufferPointer(start: channel[0], count: Int(output.frameLength)))
+    }
+
+    /// 16-bit mono WAV at 24 kHz.
+    static func write(_ samples: [Float], to url: URL) throws {
+        var pcm = Data(capacity: samples.count * 2)
+        for s in samples {
+            var v = Int16(max(-1, min(1, s)) * 32767).littleEndian
+            withUnsafeBytes(of: &v) { pcm.append(contentsOf: $0) }
+        }
+        var header = Data()
+        func put32(_ v: UInt32) { var x = v.littleEndian; withUnsafeBytes(of: &x) { header.append(contentsOf: $0) } }
+        func put16(_ v: UInt16) { var x = v.littleEndian; withUnsafeBytes(of: &x) { header.append(contentsOf: $0) } }
+        let r = UInt32(rate)
+        header.append(contentsOf: Array("RIFF".utf8)); put32(UInt32(36 + pcm.count))
+        header.append(contentsOf: Array("WAVE".utf8))
+        header.append(contentsOf: Array("fmt ".utf8)); put32(16); put16(1); put16(1); put32(r); put32(r * 2); put16(2); put16(16)
+        header.append(contentsOf: Array("data".utf8)); put32(UInt32(pcm.count))
+        try (header + pcm).write(to: url)
+    }
+
+    /// A recording cut into pieces of about six seconds at its quietest moments.
+    static func cut(_ samples: [Float], into folder: URL) throws -> [Job.Piece] {
+        let target = Int(6.0 * rate), window = Int(0.1 * rate)
+        var pieces: [Job.Piece] = [], start = 0
+        while start < samples.count {
+            var end = min(samples.count, start + target)
+            if samples.count - start > Int(6.6 * rate) {
+                // The quietest 100 ms between 4.5 and 6.4 s in.
+                var best = end, quietest = Float.greatestFiniteMagnitude
+                var at = start + Int(4.5 * rate)
+                while at + window < min(samples.count, start + Int(6.4 * rate)) {
+                    let energy = samples[at..<(at + window)].reduce(0) { $0 + $1 * $1 }
+                    if energy < quietest { quietest = energy; best = at + window / 2 }
+                    at += window / 2
+                }
+                end = best
+            } else {
+                end = samples.count
+            }
+            let file = folder.appendingPathComponent(String(format: "speech-%02d.wav", pieces.count + 1))
+            try write(Array(samples[start..<end]), to: file)
+            pieces.append(Job.Piece(text: "", speech: file.path, seconds: Double(end - start) / rate))
+            start = end
+        }
+        return pieces
+    }
+
+    // MARK: - Small things
+
+    /// H3 at about 0.41 MP in the photograph's shape (or the one asked for);
+    /// LTX the same, both in multiples of 32.
+    static func size(of photo: URL, shape: String?, engine: String) -> (Int, Int) {
+        var aspect = 1.0
+        if let image = NSImage(contentsOf: photo), image.size.height > 0 { aspect = image.size.width / image.size.height }
+        switch shape {
+        case "square": aspect = 1
+        case "portrait": aspect = 9.0 / 16
+        case "landscape": aspect = 16.0 / 9
+        default: break
+        }
+        let area = 409_600.0
+        let height = (area / aspect).squareRoot()
+        let round = { (v: Double) in max(256, Int((v / 32).rounded()) * 32) }
+        return (round(height * aspect), round(height))
+    }
+
+    static func slug(_ text: String) -> String {
+        let kept = text.map { $0.isLetter || $0.isNumber ? $0 : "-" }
+        let joined = String(kept).split(separator: "-").joined(separator: "-")
+        return joined.isEmpty ? "talk" : String(joined.prefix(24))
+    }
+
+    private func update(_ job: Job) {
+        if let index = jobs.firstIndex(where: { $0.id == job.id }) { jobs[index] = job }
+        save(job)
+    }
+
+    private func save(_ job: Job) {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes]
+        encoder.dateEncodingStrategy = .iso8601
+        if let data = try? encoder.encode(job) { try? data.write(to: job.folder.appendingPathComponent("job.json")) }
+    }
+
+    /// What is on disk, so a relaunch still knows its jobs; one that was
+    /// running when the app went away is marked so.
+    private func load() {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let folders = (try? FileManager.default.contentsOfDirectory(at: Self.root, includingPropertiesForKeys: nil)) ?? []
+        jobs = folders.compactMap { folder -> Job? in
+            guard let data = try? Data(contentsOf: folder.appendingPathComponent("job.json")),
+                  var job = try? decoder.decode(Job.self, from: data) else { return nil }
+            if ["speaking", "filming", "joining"].contains(job.state) {
+                job.state = "failed"
+                job.note = "app 重启时还没做完；talking_video_continue 从没拍的那段接着拍"
+            }
+            return job
+        }.sorted { $0.started > $1.started }
+    }
+}

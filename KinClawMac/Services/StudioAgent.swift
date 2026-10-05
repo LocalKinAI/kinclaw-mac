@@ -736,7 +736,9 @@ final class StudioAgent: ObservableObject {
     /// (`--mcp-stdio --tools`). Montage's work is the bridge's; the Comfy
     /// tools are there for YuE2 songs, as they are for Pixelle's and Easel's.
     var panelTools: [String] {
-        let studio = ["panel_show", "box_services", "image_generate", "video_generate", "video_status"]
+        let studio = ["panel_show", "box_services", "image_generate", "video_generate", "video_status",
+                      // A photograph saying a script (TalkingVideo): a presenter, a greeting, a 口播.
+                      "talking_video", "talking_video_status", "talking_video_continue"]
         let comfy = ["comfy_templates", "comfy_run", "comfy_import", "comfy_status", "comfy_stop"]
         let film = ["film_guide", "film_make", "film_status", "film_shot", "film_edit", "film_cast", "film_continue",
                     "film_frames", "film_count", "film_fix_picture", "film_grade", "film_reshoot", "film_recut",
@@ -752,7 +754,7 @@ final class StudioAgent: ObservableObject {
         case .film: return film + comfy + studio + team + ["studio_note"]
         case .motion: return ["motion_find", "motion_make", "motion_status", "motion_stop", "motion_continue", "video_frames"] + studio + team + ["studio_note"]
         case .comfy: return comfy + ["video_frames"] + studio + team + ["studio_note"]
-        case .montage: return comfy + team + ["studio_note"]
+        case .montage: return comfy + ["talking_video", "talking_video_status", "talking_video_continue"] + team + ["studio_note"]
         case .pixelle: return pixelle + comfy + ["video_frames"] + studio + team + ["studio_note"]
         // A post may carry a video: Pixelle's, made or found, from here too.
         case .social: return social + pixelle + comfy + ["video_frames"] + studio + team + ["studio_note"]

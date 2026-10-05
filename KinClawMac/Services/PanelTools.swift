@@ -407,6 +407,57 @@ enum PanelTools {
             ],
         ],
         [
+            "name": "talking_video",
+            "description": """
+                A photograph speaking a script — a talking-head video, made on the \
+                user's own box (what HeyGen sells). `image`: a picture of one person, \
+                face visible. `text`: what they say, any length — spoken a sentence \
+                at a time and filmed in pieces of up to about 6 seconds — or `audio`: \
+                a recording to lip-sync instead. The voice: `voice`, one of the box \
+                voice server's speakers (vivian, serena, uncle_fu, dylan, eric, ryan, \
+                aiden, ono_anna, sohee; default: the companion's own), or \
+                `voice_description`, a voice designed from words, in the language of \
+                the text ("二十多岁的女生，声音温柔清亮，语速不快"). `engine`: "h3" \
+                (default; about 1.5 minutes per second of speech in the draft; lively \
+                — smiles, blinks, head and shoulders move; every piece starts and ends \
+                on the photograph, so the pieces join without a jump) or "ltx" \
+                (steadier and calmer, about 2 minutes per second). `quality: "full"` \
+                is H3's 20-step model, about 3.5 times as long. `look`: how they \
+                behave, in words. `shape`: square | portrait | landscape (default: \
+                the photograph's). `stop_after: "speech"` makes the voice first and \
+                stops so it can be listened to (talking_video_status names the \
+                files), then talking_video_continue films it. Runs in the background \
+                — say how long, and follow it with talking_video_status.
+                """,
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "image": ["type": "string", "description": "Path of the photograph."],
+                    "text": ["type": "string", "description": "What they say."],
+                    "audio": ["type": "string", "description": "Path of a recording to lip-sync instead of text."],
+                    "voice": ["type": "string", "description": "A speaker of the box voice server."],
+                    "voice_description": ["type": "string", "description": "A voice designed from words."],
+                    "engine": ["type": "string", "description": "h3 (default) | ltx"],
+                    "quality": ["type": "string", "description": "draft (default) | full — H3 only"],
+                    "look": ["type": "string", "description": "How they behave while talking."],
+                    "shape": ["type": "string", "description": "square | portrait | landscape"],
+                    "title": ["type": "string", "description": "A name for it."],
+                    "stop_after": ["type": "string", "description": "speech: stop once the voice is made."],
+                ],
+                "required": ["image"],
+            ],
+        ],
+        [
+            "name": "talking_video_status",
+            "description": "How the talking videos are going (talking_video): the newest few, or the one named — piece by piece, with the files.",
+            "inputSchema": ["type": "object", "properties": ["name": ["type": "string", "description": "The job's name or title."]]],
+        ],
+        [
+            "name": "talking_video_continue",
+            "description": "Film a talking video that stopped after its speech (stop_after: \"speech\"), or one that failed, from the first piece not yet filmed.",
+            "inputSchema": ["type": "object", "properties": ["name": ["type": "string", "description": "The job's name or title."]], "required": ["name"]],
+        ],
+        [
             "name": "film_make",
             "description": """
                 Make a short film on the user's own machines: shots drawn and \
@@ -1764,6 +1815,27 @@ enum PanelTools {
             }
             let kind = StudioNotebook.Kind(rawValue: (args["kind"] as? String) ?? "") ?? .lesson
             return StudioNotebook.add(place, kind, text)
+        case "talking_video":
+            guard let image = (args["image"] as? String).map({ ($0 as NSString).expandingTildeInPath }) else { return ("talking_video 要 image（照片路径）", true) }
+            let result = TalkingVideo.shared.make(
+                image: URL(fileURLWithPath: image), text: args["text"] as? String,
+                audio: (args["audio"] as? String).map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) },
+                voice: args["voice"] as? String, voiceDescription: args["voice_description"] as? String,
+                engine: args["engine"] as? String, quality: args["quality"] as? String, look: args["look"] as? String,
+                shape: args["shape"] as? String, title: args["title"] as? String,
+                holdAfterSpeech: (args["stop_after"] as? String) == "speech")
+            switch result {
+            case .success(let job): return ("开始做「\(job.title)」（\(job.id)，\(job.engine == "ltx" ? "LTX" : "H3")，\(job.width)×\(job.height)）：先配音，再一段一段拍。talking_video_status 看进度，做好的在 \(job.folder.path)", false)
+            case .failure(let failure): return (failure.localizedDescription, true)
+            }
+        case "talking_video_status":
+            return (TalkingVideo.shared.report(args["name"] as? String), false)
+        case "talking_video_continue":
+            guard let name = args["name"] as? String else { return ("talking_video_continue 要 name", true) }
+            switch TalkingVideo.shared.resume(name) {
+            case .success(let job): return ("接着拍「\(job.title)」，预计 \(TalkingVideo.estimate(job)) 分钟。talking_video_status 看进度", false)
+            case .failure(let failure): return (failure.localizedDescription, true)
+            }
         case "film_make":    return filmMake(args)
         case "film_shot":
             guard let film = args["film"] as? String, let shot = FilmTools.int(args["shot"]) else { return ("film_shot 需要 film 和 shot", true) }

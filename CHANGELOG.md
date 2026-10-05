@@ -100,6 +100,26 @@ blink, the camera still), its mouth made by MuseTalk 1.5 on MLX from every sente
   every frame is answered, and the box drops frames rather than queue them behind a full link:
   on the same Wi-Fi 7 % dropped, at most 0.77 s late. A cable on both is the real fix.
 
+### Added — 说话视频: a photograph saying a script (HeyGen, on the box)
+
+`talking_video` (every Studio agent has it, with `talking_video_status` and
+`talking_video_continue`; `TalkingVideo`): a picture of one person and what they say, or a
+recording to lip-sync. Spoken a sentence at a time by the box's voices — a speaker of the
+voice server, or `voice_description`, a voice designed from words by the narrator model —
+and packed into pieces of up to 6.4 s, each filmed from the photograph with its speech as
+the soundtrack the face must say, then cut together over the clean speech.
+
+- **H3** (default): the speech anchored in the clip (AddGuide audio) and the photograph
+  pinned as the first and the last frame, so every piece starts and ends on the same picture
+  and they join without a jump — and the camera cannot wander off (it did, unpinned: the
+  first test pushed in and the café behind her changed). Draft 4 steps, about 1.5 minutes a
+  second of speech at 640×640 (9.7 min for 6.6 s); `quality: "full"` is the 20-step model.
+- **LTX-2.3 q8 audio-to-video** (`engine: "ltx"`): steadier, calmer, about 2 minutes a
+  second (435 s for 4 s). Only the q8 pack has the dev transformer its a2v needs; the
+  length is passed as 8k+1 frames (left out, it made 4 s of a 6 s sentence).
+- `stop_after: "speech"` stops once the voice is made, to be listened to first. Jobs keep a
+  job.json in companion/talking/<name>/ and survive a relaunch.
+
 ### Fixed — what the Studio agents' notebooks asked for
 
 「给我指定一个使用和改进计划」→「都做吧，开始干」. The plan's improvements, taken from the
