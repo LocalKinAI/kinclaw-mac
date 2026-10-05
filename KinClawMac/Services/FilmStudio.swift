@@ -267,6 +267,13 @@ final class FilmStudio: ObservableObject {
         var titleCard: Bool?
         var finishGrade: Bool?
         var upscale: Bool?
+        /// The music's level in dB over the studio's own, and how far it dips under a speaking
+        /// voice (nil: 0 and 6.3) — 「配乐要够大声，旁白时只让开几 dB」 (2026-09-27).
+        var musicDB: Double?
+        var duckDB: Double?
+        /// The narration burnt in as subtitles, a clause a line; nil is on when there is
+        /// narration — 「片子要有字幕」 (2026-09-27). The film without them is film.clean.mp4.
+        var subtitles: Bool?
         /// 快速出图: its pictures through ComfyUI in eight steps (the Pruna
         /// LoRA) rather than twenty-five; nil follows the tab's switch.
         var fastDraw: Bool?
@@ -1060,7 +1067,7 @@ final class FilmStudio: ObservableObject {
                         let stage = film.shots[index].state == .drawing ? "出图/改图服务" : "出片服务"
                         film.shots[index].state = .waiting
                         film.state = .failed
-                        film.note = "\(stage)连不上（\(error.localizedDescription)）。服务起来后接着拍：film_reshoot 不带 shot，或片场里点「接着拍」"
+                        film.note = Self.unreachable(stage, error) + "。好了以后接着拍：film_reshoot 不带 shot，或片场里点「接着拍」"
                         save(film)
                         return
                     }
@@ -1444,7 +1451,7 @@ final class FilmStudio: ObservableObject {
                 }
                 if Self.isUnreachable(error) {
                     film.shots[index].state = .waiting
-                    return stopped("盒子上的 ComfyUI 或出图服务连不上（\(error.localizedDescription)）。起来后「接着拍」")
+                    return stopped(Self.unreachable("盒子上的 ComfyUI 或出图服务", error) + "。好了以后「接着拍」")
                 }
                 film.shots[index].note = error.localizedDescription
                 update(&film, index, .failed)
@@ -1477,7 +1484,7 @@ final class FilmStudio: ObservableObject {
                 }
                 if Self.isUnreachable(error) {
                     film.shots[index].state = .waiting
-                    return stopped("盒子上的出片服务连不上（\(error.localizedDescription)）。起来后「接着拍」")
+                    return stopped(Self.unreachable("盒子上的出片服务", error) + "。好了以后「接着拍」")
                 }
                 film.shots[index].note = error.localizedDescription
                 update(&film, index, .failed)
@@ -2260,8 +2267,16 @@ final class FilmStudio: ObservableObject {
     /// line is simply left unsaid.
     private func speak(_ film: Film, _ shot: Shot) async {
         guard film.voiceover == nil, let line = shot.narration, !line.isEmpty,
-              !FileManager.default.fileExists(atPath: film.voice(shot.id).path),
-              let audio = await Self.synthesize(line, tongue: film.tongue, narrator: film.narrator) else { return }
+              !FileManager.default.fileExists(atPath: film.voice(shot.id).path) else { return }
+        // A voice made from a description is the film narrator's (the box's voice design);
+        // the chat voice cannot read in it.
+        let made: Data?
+        if let narrator = film.narrator, narrator.voice != nil {
+            made = await Self.readVoiceover(line, narrator: narrator)
+        } else {
+            made = await Self.synthesize(line, tongue: film.tongue, narrator: film.narrator)
+        }
+        guard let audio = made else { return }
         try? audio.write(to: film.voice(shot.id), options: .atomic)
     }
 
@@ -2346,12 +2361,19 @@ final class FilmStudio: ObservableObject {
 
     /// Cut a film again from what is on disk — the shots, the voice-over, the
     /// music — without making anything. For when a piece was put in by hand.
-    func recut(film id: String, titleCard: Bool? = nil, grade: Bool? = nil, upscale: Bool? = nil) -> Result<Film, Failure> {
+    func recut(film id: String, titleCard: Bool? = nil, grade: Bool? = nil, upscale: Bool? = nil, title: String? = nil,
+               musicDB: Double? = nil, duckDB: Double? = nil, subtitles: Bool? = nil) -> Result<Film, Failure> {
         guard shooting == nil else { return .failure(.message("片场正在拍「\(shooting!)」，等它拍完")) }
         guard var film = films.first(where: { $0.id == id || $0.title == id }) else { return .failure(.message("没有这部片子：\(id)")) }
         if let titleCard { film.titleCard = titleCard }
         if let grade { film.finishGrade = grade }
         if let upscale { film.upscale = upscale }
+        // A new name goes on the film itself: written into film.json by hand, the one in
+        // memory put the old one back at the next save (Film's notebook, 2026-09-26).
+        if let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty { film.title = title }
+        if let musicDB { film.musicDB = max(-20, min(12, musicDB)) }
+        if let duckDB { film.duckDB = max(0, min(24, duckDB)) }
+        if let subtitles { film.subtitles = subtitles }
         let done = film.shots.filter { $0.state == .done }
         guard !done.isEmpty else { return .failure(.message("还没有拍好的镜头")) }
         let stamp = Int(Date().timeIntervalSince1970)
@@ -2381,7 +2403,8 @@ final class FilmStudio: ObservableObject {
     /// elsewhere under the film instead of composing one — a YuE2 song, say,
     /// with a voice and words, made through the Comfy tools — and with
     /// `voice: false` the narrator stays as it is and only the music changes.
-    func rescore(film id: String, music: Bool = true, musicFile: URL? = nil, voice: Bool = true) -> Result<Film, Failure> {
+    func rescore(film id: String, music: Bool = true, musicFile: URL? = nil, voice: Bool = true,
+                 voiceDescription: String? = nil, voiceover: String? = nil, noMusic: Bool = false) -> Result<Film, Failure> {
         guard shooting == nil else { return .failure(.message("片场正在拍「\(shooting!)」，等它拍完")) }
         guard var film = films.first(where: { $0.id == id || $0.title == id }) else {
             return .failure(.message("没有这部片子：\(id)"))
@@ -2399,7 +2422,29 @@ final class FilmStudio: ObservableObject {
         work = Task { @MainActor in
             defer { shooting = nil; work = nil }
             let seconds = Double(done.count) * (film.engine == .h3 ? Self.h3Seconds(film.seconds) : film.seconds)
-            if voice {
+            let described = voiceDescription?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+            let written = voiceover?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+            if described != nil || written != nil {
+                // The voice as described and the words as written, used as given: told 「沉重」,
+                // the writer had made it 「温厚、克制的哀思」 and added a lamp to the narration that
+                // the picture did not have (Film's notebook, 2026-09-26).
+                if let described {
+                    film.narrator = Narrator(speaker: "", language: film.narrator?.language
+                                             ?? (described.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) } ? "zh" : "en"),
+                                             instruct: nil, voice: described)
+                }
+                if let written { film.voiceover = written }
+                film.sounded = true
+                try? fm.moveItem(at: film.voiceoverFile, to: film.folder.appendingPathComponent("voiceover.take-\(stamp).wav"))
+                if film.voiceover != nil { await readVoiceover(&film) }
+                for shot in done where film.voiceover == nil {
+                    if Task.isCancelled { break }
+                    try? fm.moveItem(at: film.voice(shot.id), to: film.folder.appendingPathComponent(String(format: "shot-%02d.take-\(stamp).wav", shot.id)))
+                    film.note = "旁白：第 \(shot.id) 镜"
+                    save(film)
+                    await speak(film, shot)
+                }
+            } else if voice {
                 film.note = "定旁白的声音和配乐"
                 save(film)
                 let plan = await Self.planSound(film, seconds: seconds)
@@ -2417,7 +2462,13 @@ final class FilmStudio: ObservableObject {
                     await speak(film, shot)
                 }
             }
-            try? fm.moveItem(at: film.music, to: film.folder.appendingPathComponent("music.take-\(stamp).wav"))
+            // The music it has is set aside only for a new one: `music: false` once meant no music
+            // at all, and a narration redone that way came back without its 37-minute score
+            // (Film's notebook, 2026-09-26). Now false keeps it; `noMusic` leaves it out.
+            if musicFile != nil || (music && !noMusic) {
+                try? fm.moveItem(at: film.music, to: film.folder.appendingPathComponent("music.take-\(stamp).wav"))
+            }
+            if noMusic { film.withMusic = false }
             if let musicFile {
                 do {
                     try Self.copyAudio(musicFile, to: film.music)
@@ -2426,12 +2477,12 @@ final class FilmStudio: ObservableObject {
                 } catch {
                     film.note = "这首放不进来（\(musicFile.lastPathComponent)）：\(error.localizedDescription)"
                 }
-            } else if music {
+            } else if music, !noMusic {
                 await makeMusic(&film, seconds: seconds)
             }
             try? fm.moveItem(at: film.file, to: film.folder.appendingPathComponent("film.cut-\(stamp).mp4"))
             do {
-                try await assemble(&film, music: music || musicFile != nil)
+                try await assemble(&film, music: !noMusic)
                 film.state = .done
                 if film.note?.hasPrefix("旁白") == true || film.note == "定旁白的声音和配乐" { film.note = nil }
             } catch {
@@ -2465,11 +2516,14 @@ final class FilmStudio: ObservableObject {
 
     /// Carry on with a film that stopped: everything not finished is tried
     /// again, finished shots are left alone, and it is cut at the end.
-    func resume(film id: String, hold: String? = nil) -> Result<Film, Failure> {
+    func resume(film id: String, hold: String? = nil, fastDraw: Bool? = nil) -> Result<Film, Failure> {
         guard shooting == nil else { return .failure(.message("片场正在拍「\(shooting!)」，等它拍完")) }
         guard var film = films.first(where: { $0.id == id || $0.title == id }) else {
             return .failure(.message("没有这部片子：\(id)"))
         }
+        // Changed on the way: told "no fast pictures" after the sets were drawn, a film had to be
+        // started over and its sets were lost (Film's notebook, 2026-09-26).
+        if let fastDraw { film.fastDraw = fastDraw }
         guard film.shots.contains(where: { $0.state != .done }) else {
             return .failure(.message("「\(film.title)」的镜头都拍好了；要重拍哪个，给 shot"))
         }
@@ -2488,6 +2542,12 @@ final class FilmStudio: ObservableObject {
     }
 
     /// The service is not there, as opposed to having refused the work.
+    /// What to say when the box could not be reached: macOS's Local Network permission when that
+    /// is what it was (`BoxServices.localNetworkBlocked`), else what could not be reached.
+    static func unreachable(_ what: String, _ error: Error) -> String {
+        BoxServices.localNetworkBlocked(error) ? BoxServices.blockedAdvice : "\(what)连不上（\(error.localizedDescription)）"
+    }
+
     static func isUnreachable(_ error: Error) -> Bool {
         if let url = error as? URLError {
             return [.cannotConnectToHost, .cannotFindHost, .networkConnectionLost, .notConnectedToInternet,
@@ -2526,8 +2586,22 @@ final class FilmStudio: ObservableObject {
     /// `ending`: the last shot fades to black, its sound with it, over this
     /// many seconds. A film used to stop on a bright frame mid-breath, the
     /// music already gone ("加上片尾淡出吧").
+    /// Where a stretch of narration went in the cut: from `start`, `length` seconds of it,
+    /// read at `pace` of its file's speed — what the subtitles are timed by. `shot` is its
+    /// place among the clips; nil for the one continuous voice-over.
+    struct Spoken {
+        let file: URL
+        let start: Double
+        let length: Double
+        let pace: Double
+        let shot: Int?
+    }
+
+    @discardableResult
     static func cut(_ clips: [URL], voices: [URL] = [], voiceover: URL? = nil, music: URL? = nil,
-                    fade: Double = 0.4, ending: Double = 1.2, to out: URL) async throws {
+                    musicDB: Double = 0, duckDB: Double = 6.3,
+                    fade: Double = 0.4, ending: Double = 1.2, to out: URL) async throws -> [Spoken] {
+        var placed: [Spoken] = []
         let composition = AVMutableComposition()
         let video = (0..<2).compactMap { _ in composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) }
         let audio = (0..<2).compactMap { _ in composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) }
@@ -2590,6 +2664,7 @@ final class FilmStudio: ObservableObject {
                     narration.scaleTimeRange(CMTimeRange(start: start, duration: take), toDuration: use)
                 }
                 spoken.append(CMTimeRange(start: start, duration: use))
+                placed.append(Spoken(file: voiceover!, start: CMTimeGetSeconds(start), length: CMTimeGetSeconds(use), pace: squeeze, shot: nil))
                 let end = CMTimeAdd(start, use)
                 for (index, span) in spans.enumerated() where CMTimeCompare(span.range.start, end) < 0 { level[index] = 0.35 }
             }
@@ -2607,6 +2682,7 @@ final class FilmStudio: ObservableObject {
             guard CMTimeCompare(use, .zero) > 0 else { continue }
             try? narration?.insertTimeRange(CMTimeRange(start: .zero, duration: use), of: line, at: start)
             spoken.append(CMTimeRange(start: start, duration: use))
+            placed.append(Spoken(file: voices[index], start: CMTimeGetSeconds(start), length: CMTimeGetSeconds(use), pace: 1, shot: index))
             quiet = CMTimeAdd(CMTimeAdd(start, use), CMTime(seconds: 0.2, preferredTimescale: 600))
             level[index] = 0.32
         }
@@ -2688,7 +2764,9 @@ final class FilmStudio: ObservableObject {
                 // At 0.12 under speech the music sat 16.5 dB below the voice —
                 // there, but not heard ("音乐声音有点小"). 0.30 puts it about 9 dB
                 // under a speaking voice, where documentaries keep a music bed.
-                let full: Float = 0.62, dipped: Float = 0.30
+                // `musicDB` raises or lowers both; `duckDB` is the dip under speech (6.3 dB is 0.30/0.62).
+                let full = Float(min(1, 0.62 * pow(10, musicDB / 20)))
+                let dipped = Float(Double(full) * pow(10, -duckDB / 20))
                 func t(_ s: Double) -> CMTime { CMTime(seconds: s, preferredTimescale: 600) }
                 let total = CMTimeGetSeconds(end)
                 var now = entry, current: Float = 0
@@ -2740,6 +2818,7 @@ final class FilmStudio: ObservableObject {
         } else {
             try FileManager.default.moveItem(at: partial, to: out)
         }
+        return placed
     }
 
     // MARK: - A storyboard from one sentence

@@ -16,13 +16,14 @@ take them away without touching ComfyUI itself (measured 2026-09-29, M3 Ultra, C
 |---|---|---|
 | `kinclaw_nodes/__init__.py` | `~/ComfyUI/custom_nodes/kinclaw_nodes/__init__.py` | `KinClawCLIPLoaderGPU` (a plain bf16/fp16 text encoder kept on the GPU) and `KinClawPytorchAttention` (PyTorch attention for the one model passing through; every other workflow keeps the default) |
 | `dequant_te.py` | run once with ComfyUI's venv | an `int8_convrot` text encoder written out as plain bf16, un-rotated with comfy_kitchen's own dequantizer |
+| `kinclaw_nodes/progress.py` | beside `__init__.py` | not a node: the box's progress desk — `GET /kinclaw/progress[?prompt_id=]` (whose job runs, which node and step, for how long; the queue in order; how the last jobs ended, an interruption with who and why) and `POST /kinclaw/interrupt {prompt_id, by, why}` |
 
 Install or update from this Mac, then restart ComfyUI (the console's 盒子 panel) so it loads the nodes:
 
 ```sh
 cd scripts/comfy
 ssh jackysub@192.168.0.21 'mkdir -p ~/ComfyUI/custom_nodes/kinclaw_nodes ~/.kinclaw/comfy'
-scp kinclaw_nodes/__init__.py jackysub@192.168.0.21:ComfyUI/custom_nodes/kinclaw_nodes/
+scp kinclaw_nodes/__init__.py kinclaw_nodes/progress.py jackysub@192.168.0.21:ComfyUI/custom_nodes/kinclaw_nodes/
 scp dequant_te.py jackysub@192.168.0.21:.kinclaw/comfy/
 ssh jackysub@192.168.0.21 'cd ~/ComfyUI && T=models/text_encoders && venv/bin/python ~/.kinclaw/comfy/dequant_te.py \
   $T/minimax_music3_text_encoder_pruned_int8_convrot.safetensors $T/minimax_music3_text_encoder_bf16_dequant.safetensors'
@@ -31,3 +32,13 @@ ssh jackysub@192.168.0.21 'cd ~/ComfyUI && T=models/text_encoders && venv/bin/py
 The conversion takes seconds and writes 16.7 GB. Film (`FilmSound.composeMiniMax`, `FilmStudio.renderH3`),
 Motion's `scripts/prompt3d/h3run.py` and OpenMontage's `minimax_music` / `h3_video` use the nodes when the box
 has them and the stock graph when it does not.
+
+**The progress desk** (2026-09-30). Every Studio tab and every OpenMontage tool queues on this one ComfyUI, and
+each could see only its own job, and only that it was "running": a score waited 58 minutes behind another
+session's H3 test without knowing it, a picture ran twenty minutes with no way to tell slow from stuck, a score
+was cut off halfway twice in one day with no word of who or why. `progress.py` watches ComfyUI's own events on
+their way out (every client's, whoever queued the job) and the requests that queue or stop jobs on their way in;
+it changes nothing ComfyUI does. Whose a job is comes from its client id, the names it saves under, its nodes,
+and where it was sent from. The app reads it in `ComfyWatch` (the Film and Motion tabs' second line, film_status,
+motion_status, comfy_status, pixelle_status, studio_team), the OpenMontage bridge in `job` and `wait`.
+

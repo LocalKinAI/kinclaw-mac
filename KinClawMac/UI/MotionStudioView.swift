@@ -9,6 +9,7 @@ import UniformTypeIdentifiers
 /// as the reference lasts. See `MotionStudio` for how and why.
 struct MotionStudioView: View {
     @ObservedObject private var studio = MotionStudio.shared
+    @ObservedObject private var box = ComfyWatch.shared
     @ObservedObject private var character = CompanionCharacter.shared
     @ObservedObject private var finder = MotionFinder.shared
     /// An agent with the motion tools, docked under the tab. See `StudioAgent`.
@@ -143,7 +144,11 @@ struct MotionStudioView: View {
                 if studio.working == take.id {
                     HStack(spacing: 12) {
                         ProgressView().controlSize(.small)
-                        Text((studio.progress ?? "在准备…") + clock()).font(.kinLabel).lineLimit(2)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text((studio.progress ?? "在准备…") + clock()).font(.kinLabel).lineLimit(2)
+                            // Where the job stands on the shared box: queue, node, step.
+                            if let line = box.now { Text(line).font(.kinCaption).foregroundStyle(.secondary).lineLimit(1) }
+                        }
                         Spacer(minLength: 8)
                         Button("停") { studio.stop() }.buttonStyle(.quiet)
                             .help("停下这一段。已经拍好的段留着，之后点「接着拍」继续")
@@ -238,10 +243,11 @@ struct MotionStudioView: View {
     /// The fourth route's two references, once drawn: who, and where.
     private func pictures(_ take: MotionStudio.Take) -> some View {
         HStack(alignment: .top, spacing: 14) {
-            ForEach([("人物", take.whoPicture), ("场景", take.placePicture)], id: \.0) { label, url in
+            ForEach([("人物", take.whoPicture), ("场景", take.placePicture), ("第一帧", take.firstPicture)], id: \.0) { label, url in
                 if FileManager.default.fileExists(atPath: url.path) {
                     VStack(alignment: .leading, spacing: 4) {
                         thumb(url).frame(height: 180).frame(maxWidth: label == "人物" ? 110 : 330)
+                            .help(label == "第一帧" ? "白模第一帧 + 人物 + 场景合成的，钉在第 1 段的第 0 帧，压住远景" : "")
                             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                         Text(label).font(.kinCaption).foregroundStyle(.secondary)
                     }

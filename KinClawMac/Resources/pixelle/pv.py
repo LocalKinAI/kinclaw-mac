@@ -450,8 +450,9 @@ def cmd_rework(args):
     motion = job.get("scene_motion")          # left out: every scene keeps the motion it had
     if motion is not None and motion not in ("none", "pan", "ltx"):
         raise Failure("scene_motion is none (still), pan or ltx; leave it out to keep each scene's motion")
-    if not job.get("revoice") and motion is None and not job.get("bgm_path"):
-        raise Failure("nothing to redo: revoice true (one narrator), scene_motion none|pan|ltx and/or a new bgm_path")
+    if not job.get("revoice") and motion is None and not job.get("bgm_path") and not job.get("redraw"):
+        raise Failure("nothing to redo: revoice true (one narrator), scene_motion none|pan|ltx, redraw [scenes] "
+                      "and/or a new bgm_path")
     sb = json.loads(box_bytes("output/%s/storyboard.json" % job["source"]).decode())
     frames = sb.get("frames", [])
     n = len(frames)
@@ -460,11 +461,25 @@ def cmd_rework(args):
     chosen = [int(x) for x in (job.get("scenes") or range(1, n + 1))]
     if any(not 1 <= x <= n for x in chosen):
         raise Failure("scenes are numbered 1..%d" % n)
+    redraw = sorted(set(int(x) for x in (job.get("redraw") or [])))
+    if any(not 1 <= x <= n for x in redraw):
+        raise Failure("redraw: scenes are numbered 1..%d" % n)
+    if job.get("image_prompts"):
+        words = job["image_prompts"]
+        if isinstance(words, list):              # one per scene in redraw, in its order
+            if len(words) != len(redraw):
+                raise Failure("image_prompts has %d entries but redraw has %d scenes" % (len(words), len(redraw)))
+            words = dict(zip(redraw, words))
+        job["image_prompts"] = {str(int(k)): str(v) for k, v in words.items() if v}
+        if any(int(k) not in redraw for k in job["image_prompts"]):
+            raise Failure("image_prompts are for the scenes in redraw")
+    if redraw:
+        job["redraw"] = redraw
     if motion == "ltx":
         ltx = ltx_health()
         if ltx:
             raise Failure("scene_motion ltx needs LTX on the box's :8001, which %s (the app starts it; or use pan)" % ltx)
-    seconds = 20 + (45 if job.get("revoice") else 0)
+    seconds = 20 + (45 if job.get("revoice") else 0) + 50 * len(redraw)
     for f in frames:
         length = float(f.get("duration") or 6.0)
         if motion == "ltx" and f["index"] + 1 in chosen:
@@ -480,6 +495,7 @@ def cmd_rework(args):
         json.dump(dict(job, title=title), f, ensure_ascii=False, indent=2)
     out({"task_id": task, "source": job["source"], "title": title, "scenes": n,
          "moving": sorted(chosen) if motion in ("pan", "ltx") else [],
+         "redrawn": redraw,
          "motion": motion or "kept (each scene moves as it did)", "revoice": bool(job.get("revoice")),
          "estimate": "about %d min%s" % (max(1, round(seconds / 60)),
                                           " (LTX ≈3 min a scene)" if motion == "ltx" else ""),

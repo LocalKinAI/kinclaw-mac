@@ -943,6 +943,8 @@ final class ComfyStudio: NSObject, ObservableObject {
         working = "在跑"
         let socket = watch(id)
         defer { socket?.cancel(with: .normalClosure, reason: nil) }
+        ComfyWatch.shared.began(id, what: template.title, base: Self.base)
+        defer { ComfyWatch.shared.ended(id) }
         // Done when the history has it. Video workflows run for many minutes.
         var outputs: [[String: Any]] = []
         var status = ""
@@ -961,9 +963,14 @@ final class ComfyStudio: NSObject, ObservableObject {
                 }
             }
             if status == "error" {
-                let messages = (state?["messages"] as? [[Any]] ?? []).compactMap { $0.count > 1 ? $0[1] as? [String: Any] : nil }
+                let raw = state?["messages"] as? [[Any]] ?? []
+                let messages = raw.compactMap { $0.count > 1 ? $0[1] as? [String: Any] : nil }
                 let error = messages.compactMap { $0["exception_message"] as? String }.first ?? "看盒子上的 ~/Library/Logs/kinclaw/comfy.log"
-                note = "ComfyUI 跑出错了：" + error.prefix(300)
+                if raw.contains(where: { $0.first as? String == "execution_interrupted" }) {
+                    note = await ComfyWatch.reason(id, what: "这个工作流", base: Self.base) ?? "在盒子上被打断了"
+                } else {
+                    note = "ComfyUI 跑出错了：" + error.prefix(300)
+                }
             }
             break
         }
@@ -1041,8 +1048,12 @@ final class ComfyStudio: NSObject, ObservableObject {
     func stop() {
         guard work != nil else { return }
         work?.cancel()
+        let running = promptID
         Task {
-            if let url = URL(string: Self.base + "/interrupt") {
+            // This job only, saying who and why — not whatever else happens to be running.
+            if let running {
+                await ComfyWatch.interrupt(running, base: Self.base, by: "KinClaw Comfy 标签", why: "在标签里停下了")
+            } else if let url = URL(string: Self.base + "/interrupt") {
                 var request = URLRequest(url: url, timeoutInterval: 5)
                 request.httpMethod = "POST"
                 _ = try? await URLSession.shared.data(for: request)

@@ -1,0 +1,88 @@
+diff --git a/lib/checkpoint.py b/lib/checkpoint.py
+index f0cc4b9..34c2872 100644
+--- a/lib/checkpoint.py
++++ b/lib/checkpoint.py
+@@ -14,7 +14,7 @@ from typing import Any, Optional
+ 
+ import jsonschema
+ 
+-from schemas.artifacts import ARTIFACT_NAMES, validate_artifact
++from schemas.artifacts import ARTIFACT_NAMES, load_schema, validate_artifact
+ 
+ # All known stages across all pipelines (used only for artifact name lookup).
+ ALL_KNOWN_STAGES = frozenset([
+@@ -121,6 +121,15 @@ def _load_checkpoint_schema() -> dict[str, Any]:
+         return json.load(f)
+ 
+ 
++def _all_errors(schema: dict, data: Any) -> list[str]:
++    """Every way `data` fails `schema`, each with where it is — not only the first.
++    One at a time cost an agent six round trips for one short checkpoint, an enum
++    at a time (KinClaw, 2026-09-28)."""
++    validator = jsonschema.validators.validator_for(schema)(schema)
++    errors = sorted(validator.iter_errors(data), key=lambda e: [str(p) for p in e.absolute_path])
++    return [f"{'/'.join(str(p) for p in e.absolute_path) or '(top)'}: {e.message}" for e in errors]
++
++
+ def _validate_artifacts_for_stage(
+     stage: str,
+     status: str,
+@@ -142,19 +151,18 @@ def _validate_artifacts_for_stage(
+             f"canonical artifact {required_artifact!r}"
+         )
+ 
++    problems: list[str] = []
+     for artifact_name, artifact_data in artifacts.items():
+         if artifact_name not in ARTIFACT_NAMES:
+             continue
+         if not isinstance(artifact_data, dict):
+-            raise CheckpointValidationError(
+-                f"Artifact {artifact_name!r} must be a JSON object matching its schema"
+-            )
+-        try:
+-            validate_artifact(artifact_name, artifact_data)
+-        except Exception as exc:
+-            raise CheckpointValidationError(
+-                f"Artifact {artifact_name!r} failed schema validation: {exc}"
+-            ) from exc
++            problems.append(f"{artifact_name}: must be a JSON object matching its schema")
++            continue
++        problems += [f"{artifact_name}/{problem}" for problem in _all_errors(load_schema(artifact_name), artifact_data)]
++    if problems:
++        raise CheckpointValidationError(
++            f"Artifacts failed schema validation ({len(problems)} problems, all listed):\n- " + "\n- ".join(problems)
++        )
+ 
+ 
+ def validate_checkpoint(checkpoint: dict[str, Any]) -> None:
+@@ -185,10 +193,11 @@ def validate_checkpoint(checkpoint: dict[str, Any]) -> None:
+ 
+     _validate_artifacts_for_stage(stage, status, artifacts)
+ 
+-    try:
+-        jsonschema.validate(instance=checkpoint, schema=_load_checkpoint_schema())
+-    except jsonschema.ValidationError as exc:
+-        raise CheckpointValidationError(f"Checkpoint failed schema validation: {exc.message}") from exc
++    problems = _all_errors(_load_checkpoint_schema(), checkpoint)
++    if problems:
++        raise CheckpointValidationError(
++            f"Checkpoint failed schema validation ({len(problems)} problems, all listed):\n- " + "\n- ".join(problems)
++        )
+ 
+ 
+ def _checkpoint_path(pipeline_dir: Path, project_id: str, stage: str) -> Path:
+@@ -437,6 +446,14 @@ def write_checkpoint(
+     metadata: Optional[dict] = None,
+ ) -> Path:
+     """Write a checkpoint file for a pipeline stage."""
++    # The projects folder, not a project's: given the project's own folder, every
++    # checkpoint went into projects/<id>/<id>/ and the board saw none (KinClaw, 2026-09-28).
++    pipeline_dir = Path(pipeline_dir)
++    if pipeline_dir.name == project_id or (pipeline_dir / PROJECT_MARKER_FILENAME).exists():
++        raise CheckpointValidationError(
++            f"pipeline_dir is the project's own folder ({pipeline_dir}), not the folder that holds it: "
++            f"pass Path('projects') — the checkpoints belong in projects/{project_id}/."
++        )
+     # Backfill identity fields from the project marker so omitted kwargs
+     # cannot bypass either gate enforcement or style validation.
+     marker = None

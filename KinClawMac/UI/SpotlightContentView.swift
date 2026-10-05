@@ -1031,10 +1031,13 @@ struct SpotlightContentView: View {
         ZStack {
             // Centred in the window, clear of the traffic lights on the
             // left and kept as clear on the right so it stays centred.
+            // In the Studio the box's status sits on the right (`BoxStatusChip`): the bar keeps clear
+            // of it on both sides, so it stays centred.
             ModeBar(mode: $mode)
-                .padding(.horizontal, 92)
+                .padding(.horizontal, ModeGroup.of(mode) == .studio ? 92 + 190 : 92)
             HStack(spacing: 12) {
                 Spacer()
+                if ModeGroup.of(mode) == .studio { BoxStatusChip() }
                 Button { drawers.toggleShell() } label: {
                     Image(systemName: "apple.terminal")
                         .font(.system(size: 12))

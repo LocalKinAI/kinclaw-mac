@@ -8,6 +8,47 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Fixed — what the Studio agents' notebooks asked for
+
+「给我指定一个使用和改进计划」→「都做吧，开始干」. The plan's improvements, taken from the
+「问题（给开发者）」 the Studio agents wrote in their notebooks:
+
+- **The box shows its work.** A progress desk on the box's ComfyUI (scripts/comfy/kinclaw_nodes/
+  progress.py) sees every client's job: whose, what, which node and step, for how long; the queue
+  in order; how the last jobs ended, an interruption with who and why. `ComfyWatch` puts it under
+  the Film and Motion tabs' progress and into film_status, motion_status, comfy_status,
+  pixelle_status and studio_team; the OpenMontage bridge into `job` and `wait`. The app stops
+  only its own job now — a waiting one is taken out of the queue — and says who and why; a
+  score is stopped on the box when the film is stopped.
+- **Kept off the local network, said so.** "Offline" from a request to the box while this Mac is
+  online is macOS's Local Network permission: the box panel, box_services and the Film and Motion
+  notes say where to turn it on, instead of "the services are down".
+- **Film:** subtitles burnt in by default when there is narration (a clause a line; film.clean.mp4
+  kept), `music_db` and `duck_db` for the music under the voice, `title` on film_recut,
+  `voice_description` and `voiceover` on film_rescore (used as written), `music: false` keeping the
+  music it has — it used to throw away a 37-minute score — and `fast_draw` on film_continue. The
+  writer of H3's words is told to describe a shot's place only as its set picture shows it:
+  landmarks named from the film's place sent H3's camera looking for them.
+- **Pixelle:** `redraw` draws only the scenes whose picture is wrong again (new words in
+  `image_prompts`), the rest kept; pixelle_wait with a task follows it on the box after the tab
+  has moved on to another.
+- **Montage:** `music_extend` makes a short score as long as the film; the bridge answers every
+  call on its own thread (a long run held every other call for minutes) and has `wait`;
+  checkpoints list every schema problem at once (patches/checkpoint-all-errors.patch).
+- **Motion:** motion_status(wait) waits for a real change — a frame counter is not one. The
+  whole-scene route composes its first frame (the grey model's, painted as the person and the
+  place by Qwen-Image 2.1) and pins it: the far background, which the depth leaves free, moved
+  half as much on 8 Form Tai Chi. motion_continue `first_words` composes it again.
+- **Downloads** Jacky approved: H3's 8-step LoRA, ACE-Step 1.5 XL Turbo and Stable Audio 3
+  Medium, on the box.
+- **H3 in eight steps, a switch left off.** 「把8步上了看看吧」: full quality can run lightx2v's
+  Ref2V Turbo 8-step LoRA (euler, flow shifts 6/3) instead of twenty steps of the base model —
+  `kinclaw.film.h3.eightstep` for Film and Motion, `H3_EIGHT_STEP=1` for OpenMontage, used only
+  when the box has the LoRA. On the whole-scene Tai Chi take (864×480, 158 frames, same seed and
+  first frame) it took 17 minutes against 36 with the same moves and framing, but the static
+  gravel and wall flickered three to five times as much frame to frame and the hands came out
+  dark; flow shift 12 instead of 6 changed little (16 minutes, a tenth less flicker).
+
 ### Added — Motion: 整场白模, the whole scene as a grey model
 
 「motion一种玩法是变成白模，然后上人物和场景，白模不只是动作的捕捉，还有整个场景」 → a

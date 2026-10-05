@@ -1,0 +1,58 @@
+--- a/api/schemas/video.py	2026-09-30 21:49:01
++++ b/api/schemas/video.py
+@@ -195,6 +195,8 @@
+     motion_prompts: Optional[List[str]] = Field(None, description="ltx: one per scene (see VideoGenerateRequest)")
+     scenes: Optional[List[int]] = Field(None, description="Which scenes move (1-based); default all")
+     motion_smooth: Optional[bool] = Field(None, description="ltx: RIFE twice the frames (default true)")
++    redraw: Optional[List[int]] = Field(None, description="LocalKin: scenes (1-based) whose picture is drawn again; the rest keep theirs")
++    image_prompts: Optional[Dict[str, str]] = Field(None, description="LocalKin: new picture words for scenes in redraw, by scene number ('6': '...'); left out, the same words with a new seed")
+     bgm_path: Optional[str] = Field(None, description="Music (default: the source's); '' for none")
+     bgm_volume: Optional[float] = Field(None, ge=0.0, le=1.0, description="Music volume (default: the source's)")
+     bgm_mode: Optional[Literal["loop", "once"]] = Field(None, description="default: the source's")
+--- a/pixelle_video/services/localkin_motion.py
++++ b/pixelle_video/services/localkin_motion.py
+@@ -549,7 +549,44 @@
+         if motion is None and frame.clip_path and os.path.exists(frame.clip_path) and was in ("ltx", "pan"):
+             kept[frame.index] = (frame.clip_path, was)
+         frame.video_segment_path = frame.clip_path = frame.motion = None
++
++    # Scenes whose picture is drawn again — with new words when given — and composed again, the
++    # rest kept as they were: one bad picture had meant drawing the whole video again, behind the
++    # other tabs' ComfyUI jobs (Pixelle's notebook, 2026-09-28).
++    redraw = sorted(set(getattr(request, "redraw", None) or []))
++    if any(not 1 <= s <= n for s in redraw):
++        raise ValueError(f"redraw: scenes are numbered 1..{n}")
++    words = {int(k): v for k, v in (getattr(request, "image_prompts", None) or {}).items() if v}
++    if any(k not in redraw for k in words):
++        raise ValueError("image_prompts are for the scenes in redraw")
++    if redraw:
++        import random
++        media = core.media
+ 
++        async def reseeded(*args, **kwargs):       # the same words again draw a different picture
++            fresh = random.randint(1, 2**31 - 1)
++            kwargs.setdefault("seed", fresh)
++            # The box's Qwen workflow seeds its noise from the scene number ($index.noise_seed):
++            # with only `seed` changed, scene 1 came back byte for byte the same.
++            if "index" in kwargs:
++                kwargs["index"] = fresh
++            return await media(*args, **kwargs)
++
++        core.media = reseeded
++        try:
++            for k, number in enumerate(redraw):
++                frame = sb.frames[number - 1]
++                report("processing_frame", 0.02 + 0.06 * k / len(redraw), frame_current=number, frame_total=n,
++                       action="redraw")
++                if number in words:
++                    frame.image_prompt = words[number]
++                frame.image_path = frame.composed_image_path = None
++                await core.frame_processor._step_generate_media(frame, sb.config)
++                await core.frame_processor._step_compose_frame(frame, sb, sb.config)
++                kept.pop(frame.index, None)            # a kept moving clip showed the old picture
++        finally:
++            core.media = media
++
+     if request.revoice:
+         for key, value in (("tts_instruct", request.tts_instruct), ("voice_id", request.tts_voice),
+                            ("tts_url", request.tts_url), ("tts_speed", request.tts_speed),

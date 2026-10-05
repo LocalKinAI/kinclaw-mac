@@ -637,6 +637,7 @@ enum PanelTools {
                 "properties": [
                     "film": ["type": "string", "description": "The film's id or title."],
                     "stop_after": ["type": "string", "description": "\"sets\" | \"frames\": stop again there. Omit to run to the end."],
+                    "fast_draw": ["type": "boolean", "description": "Change 快速出图 for the rest of this film: false draws what is still to be drawn at full quality (25 steps), true fast (8 steps). What is drawn stays."],
                 ],
                 "required": ["film"],
             ],
@@ -738,6 +739,7 @@ enum PanelTools {
                     "spec": ["type": "object", "description": "The third route's blockout set and camera path (see the description). Given, no reference video is used."],
                     "route": ["type": "string", "description": "\"whole\" for the fourth route (整场白模): the reference's whole scene as a grey model, other people in another place filmed over it. Needs `looks`; `who` optional."],
                     "who": ["type": "string", "description": "Fourth route: who performs, how they look and what they wear, in any language (\"穿白色汉服的白须老者\"). Omit for her (her anchor picture)."],
+                    "first_words": ["type": "string", "description": "Fourth route: the English for composing the first frame from the grey model (image 1) and the person (image 2), used as written instead of the studio's own — say the pose (\"feet apart, both hands held forward at chest height\"), where the figure stands, what the set becomes."],
                     "looks": ["type": "string", "description": "Third route: what the plain shapes become and the light, in English, for re-rendering the first frame as a photograph — e.g. \"the glowing pink balls are red paper lanterns, the long dark-red strips are fabric awnings … A rainy night: the stone paving is wet and mirrors the warm light, no people.\" Fourth route: what the reference's place becomes, object for object, in any language — the place picture is drawn from it."],
                     "quality": ["type": "string", "description": "Third and fourth routes: draft (default, H3's 4-step LoRA) | full (20 steps, about four times longer)."],
                     "scene_as_written": ["type": "boolean", "description": "`scene` is already the English the models should read: used as written, not rewritten."],
@@ -793,7 +795,8 @@ enum PanelTools {
             "description": "Carry on with a take that stopped — at until: \"still\", after motion_stop, or after an error: what is done stays, the rest is made. `until: \"still\"` stops again once her first picture is drawn.",
             "inputSchema": ["type": "object", "properties": [
                 "take": ["type": "string", "description": "The take's id or title."],
-                "until": ["type": "string", "description": "\"still\" to stop once her first picture is drawn (whole-scene route: the two reference pictures); \"plan\" (white-model route) to stop once the set is built; \"model\" (whole-scene route) once the grey model is made."],
+                "until": ["type": "string", "description": "\"still\" to stop once her first picture is drawn (whole-scene route: the two reference pictures and the composed first frame); \"plan\" (white-model route) to stop once the set is built; \"model\" (whole-scene route) once the grey model is made."],
+                "first_words": ["type": "string", "description": "Whole-scene route: compose the first frame again from these words (English; say the pose) — the old one is set aside."],
             ] as [String: Any], "required": ["take"]],
         ],
         [
@@ -1075,11 +1078,13 @@ enum PanelTools {
         [
             "name": "pixelle_rework",
             "description": """
-                Remake a finished Pixelle video from its own pictures — nothing is drawn again, the original stays, the \
-                result is a new video: `revoice` reads the whole narration again in one take (one narrator; a video \
-                made line by line has a different voice in every scene), and/or `motion` makes the scenes move (pan: \
-                seconds; ltx: about 3 minutes a scene). Say how long before calling it and wait for a yes. Answers at \
-                once with a task id; follow it with pixelle_wait.
+                Remake a finished Pixelle video from its own pictures — the original stays, the result is a new \
+                video: `revoice` reads the whole narration again in one take (one narrator; a video made line by \
+                line has a different voice in every scene), `motion` makes the scenes move (pan: seconds; ltx: about \
+                3 minutes a scene), and `redraw` draws only the scenes whose picture is wrong again (about 50 s \
+                each), with new picture words in `image_prompts` when given — every other scene keeps its picture. \
+                Say how long before calling it and wait for a yes. Answers at once with a task id; follow it with \
+                pixelle_wait.
                 """,
             "inputSchema": ["type": "object", "properties": [
                 "run": ["type": "string", "description": "Which video: its folder (20260928_093131_db14-… or just 20260928_093131_db14) or title. Default the newest."],
@@ -1094,6 +1099,8 @@ enum PanelTools {
                 "smooth": ["type": "boolean", "description": "ltx scenes, kept or new: RIFE doubles the frames first. Default true."],
                 "bgm_path": ["type": "string", "description": "Music (default: as before): a name in the box's data/bgm/ or a sound file on this Mac (a YuE2 song), copied there first; \"\" for none. Changing only the music is a rework too."],
                 "bgm_volume": ["type": "number", "description": "Default: as before."],
+                "redraw": ["type": "array", "items": ["type": "integer"], "description": "Scenes (1-based) whose picture is drawn again and its card composed again; the rest keep theirs."],
+                "image_prompts": ["type": "object", "description": "New picture words for scenes in redraw, by scene number: {\"6\": \"…\"} (English, as pixelle_make's). Left out, a scene is drawn again from the same words with a new seed."],
             ] as [String: Any]],
         ],
         [
@@ -1311,24 +1318,31 @@ enum PanelTools {
         ],
         [
             "name": "film_recut",
-            "description": "Cut a film again from the files it has — shots, voice-over, music — without making anything new, and finish it: the title over the last shot, one warm grade, the picture doubled (each on unless turned off, here or in film_make). Use after a shot, the narration or the music was replaced by hand, or to change the finishing.",
+            "description": "Cut a film again from the files it has — shots, voice-over, music — without making anything new, and finish it: the title over the last shot, one warm grade, the picture doubled, the narration as subtitles (each on unless turned off, here or in film_make). Use after a shot, the narration or the music was replaced by hand, to rename the film, to change how loud the music is, or to change the finishing. Every setting here is kept for later cuts.",
             "inputSchema": ["type": "object", "properties": [
                 "film": ["type": "string", "description": "The film's id or title."],
+                "title": ["type": "string", "description": "A new name for the film — the title card shows it (\"歌者 · 刘欢 1963–2026\")."],
                 "title_card": ["type": "boolean", "description": "The film's title over its last shot. Kept for later cuts."],
                 "grade": ["type": "boolean", "description": "One warm grade over every shot. Kept for later cuts."],
                 "upscale": ["type": "boolean", "description": "The picture doubled (the longer side at most 1920). Kept for later cuts."],
+                "subtitles": ["type": "boolean", "description": "The narration burnt in as subtitles, a clause a line (on by default when there is narration; the film without them is kept as film.clean.mp4)."],
+                "music_db": ["type": "number", "description": "The music louder (+) or quieter (−) than the studio's level, in dB: +3 is clearly louder, +6 much louder."],
+                "duck_db": ["type": "number", "description": "How far the music dips while the narrator speaks, in dB (default 6.3). 3 keeps the music up under the voice; 10 pushes it well back."],
             ] as [String: Any], "required": ["film"]],
         ],
         [
             "name": "film_rescore",
-            "description": "Give a finished film a fitting narrator and background music without filming anything: the writer picks a voice from the box's TTS (and how it should read — grave, warm…) and describes the music; every voice-over line is read again in that voice, the music is made on the box and laid under the film, lower while the narrator speaks; then it is cut again. Old voice files and cut are kept aside. `music: false` does the voice only. `music_file` lays a song you already have under the film instead of making music — a YuE2 song (a voice and words: comfy_run, template audio_yue2_text2music, or audio_yue2_music_cover for a cover) — and with `voice: false` only the music changes.",
+            "description": "Give a finished film a fitting narrator and background music without filming anything: the writer picks a voice from the box's TTS (and how it should read — grave, warm…) and describes the music; every voice-over line is read again in that voice, the music is made on the box and laid under the film, lower while the narrator speaks; then it is cut again. Old voice files and cut are kept aside. `music: false` keeps the music the film has (the voice only is redone); `no_music` leaves the music out. `voice_description` changes only the narrator's voice, the words staying — the voice as described, used as written; `voiceover` gives new words. `music_file` lays a song you already have under the film instead of making music — a YuE2 song (a voice and words: comfy_run, template audio_yue2_text2music, or audio_yue2_music_cover for a cover) — and with `voice: false` only the music changes.",
             "inputSchema": [
                 "type": "object",
                 "properties": [
                     "film": ["type": "string", "description": "The film's id or title."],
-                    "music": ["type": "boolean", "description": "Default true."],
+                    "music": ["type": "boolean", "description": "Default true: new music. false keeps the music the film has."],
+                    "no_music": ["type": "boolean", "description": "Leave the music out of the film altogether."],
                     "music_file": ["type": "string", "description": "A sound file on this Mac (flac, mp3, wav…) to use as the film's music, e.g. the YuE2 song comfy_run brought back."],
                     "voice": ["type": "boolean", "description": "Default true: choose and read the narrator again. false keeps the narration as it is."],
+                    "voice_description": ["type": "string", "description": "The narrator's voice in words, used as written (the box's voice design): \"低沉厚重的老年男声，语速缓慢，沉重\". The narration's words stay; only the voice changes. Works for one continuous voice-over and for lines shot by shot."],
+                    "voiceover": ["type": "string", "description": "New words for the continuous narration, read as written (with voice_description, or the narrator it has)."],
                 ],
                 "required": ["film"],
             ],
@@ -1780,13 +1794,18 @@ enum PanelTools {
             }
         case "film_continue":
             guard let film = args["film"] as? String else { return ("film_continue 需要 film", true) }
-            switch FilmStudio.shared.resume(film: film, hold: FilmStudio.hold(args["stop_after"])) {
+            switch FilmStudio.shared.resume(film: film, hold: FilmStudio.hold(args["stop_after"]), fastDraw: args["fast_draw"] as? Bool) {
             case .success(let made):
                 return ("接着拍「\(made.title)」了" + (made.hold.map { "，会停在\($0 == "sets" ? "布景" : "首帧")" } ?? "，一直拍到剪好")
                         + "。film_status 看进度", false)
             case .failure(let failure): return (failure.localizedDescription, true)
             }
-        case "film_status":  return await filmStatus(args)
+        case "film_status":
+            let (said, failed) = await filmStatus(args)
+            let film = FilmStudio.shared
+            // While the tab works, where its job stands on the shared box: queue, node, step.
+            guard film.shooting != nil || film.revising != nil || film.writing != nil else { return (said, failed) }
+            return (said + "\n" + (ComfyWatch.shared.now.map { $0 + "\n" } ?? "") + (await ComfyWatch.summary(base: ComfyStudio.base)), failed)
         case "film_reshoot": return filmReshoot(args)
         case "motion_make":
             var args = args
@@ -1847,7 +1866,8 @@ enum PanelTools {
                                                      title: (args["title"] as? String) ?? "", start: start, seconds: seconds,
                                                      who: args["who"] as? String, looks: (args["looks"] as? String) ?? "",
                                                      words: args["words"] as? String, quality: args["quality"] as? String,
-                                                     hold: ["model", "still"].contains(until) ? until : nil, credit: args["credit"] as? String) {
+                                                     hold: ["model", "still"].contains(until) ? until : nil, credit: args["credit"] as? String,
+                                                     firstWords: args["first_words"] as? String) {
                 case .success(let take):
                     let stretch = Double(FilmStudio.h3Frames(take.stretch)) / 24
                     let minutes = take.segments.count * (take.quality == "full" ? 28 : 12) + 2
@@ -2075,7 +2095,8 @@ enum PanelTools {
                 return ("motion_continue 需要 take（id 或标题）", true)
             }
             let until = (args["until"] as? String) ?? ""
-            switch MotionStudio.shared.resume(wanted, hold: ["still", "plan", "model"].contains(until) ? until : nil) {
+            switch MotionStudio.shared.resume(wanted, hold: ["still", "plan", "model"].contains(until) ? until : nil,
+                                              firstWords: args["first_words"] as? String) {
             case .success(let take): return ("接着拍「\(take.title)」了。motion_status(wait: true) 跟着", false)
             case .failure(let failure): return (failure.localizedDescription, true)
             }
@@ -2105,8 +2126,12 @@ enum PanelTools {
                 return (studio.describe(take), false)
             }
             if args["wait"] as? Bool == true {
-                // Until a take moves on, or as long as a tool may wait.
-                func now() -> String { (studio.progress ?? "") + studio.takes.prefix(8).map { "\($0.state)\($0.finished)" }.joined() }
+                // Until a take moves on, or as long as a tool may wait. A counter in the
+                // progress ("在渲染深度 12/124") is not a move: compared without its numbers,
+                // the wait had ended at once and an agent took half a minute for twenty.
+                func now() -> String {
+                    (studio.progress ?? "").filter { !$0.isNumber } + studio.takes.prefix(8).map { "\($0.state)\($0.finished)\($0.note ?? "")" }.joined()
+                }
                 let before = now()
                 for _ in 0..<polls where studio.progress != nil || studio.working != nil {
                     try? await Task.sleep(nanoseconds: 2_000_000_000)
@@ -2126,7 +2151,12 @@ enum PanelTools {
                 }
                 return "「\(take.title)」\(take.id)：\(Int(take.seconds)) 秒，\(state)"
             }
-            return ((studio.progress.map { "正在：\($0)\n" } ?? "") + lines.joined(separator: "\n"), false)
+            var doing = studio.progress.map { "正在：\($0)" + (studio.since.map { "（这一步已 \(ComfyWatch.clock(Date().timeIntervalSince($0)))）" } ?? "") + "\n" } ?? ""
+            if studio.working != nil {
+                // Where its job stands on the shared box, step by step.
+                doing += (ComfyWatch.shared.now.map { $0 + "\n" } ?? "") + (await ComfyWatch.summary(base: ComfyStudio.base)) + "\n"
+            }
+            return (doing + lines.joined(separator: "\n"), false)
         case "comfy_templates":
             let comfy = ComfyStudio.shared
             if comfy.templates.isEmpty { await comfy.refresh() }
@@ -2258,7 +2288,8 @@ enum PanelTools {
                     if !ComfyStudio.shared.running { break }
                 }
             }
-            return (comfyReport() + (ComfyStudio.shared.running ? "" : "\n" + Self.pictures(ComfyStudio.shared.runs.first?.outputs ?? []).joined(separator: "\n")), false)
+            let box = ComfyStudio.shared.running ? "\n" + (ComfyWatch.shared.now.map { $0 + "\n" } ?? "") + (await ComfyWatch.summary(base: ComfyStudio.base)) : ""
+            return (comfyReport() + box + (ComfyStudio.shared.running ? "" : "\n" + Self.pictures(ComfyStudio.shared.runs.first?.outputs ?? []).joined(separator: "\n")), false)
         case "comfy_stop":
             guard ComfyStudio.shared.running else { return ("ComfyUI 没在跑", false) }
             ComfyStudio.shared.stop()
@@ -2290,18 +2321,30 @@ enum PanelTools {
         case "film_recut":
             guard let id = args["film"] as? String else { return ("film_recut 需要 film", true) }
             switch FilmStudio.shared.recut(film: id, titleCard: args["title_card"] as? Bool, grade: args["grade"] as? Bool,
-                                           upscale: args["upscale"] as? Bool) {
-            case .success(let film): return ("在重新剪「\(film.title)」", false)
+                                           upscale: args["upscale"] as? Bool, title: args["title"] as? String,
+                                           musicDB: FilmTools.number(args["music_db"]), duckDB: FilmTools.number(args["duck_db"]),
+                                           subtitles: args["subtitles"] as? Bool) {
+            case .success(let film):
+                let levels = [film.musicDB.map { String(format: "配乐 %+.0f dB", $0) }, film.duckDB.map { String(format: "旁白时让开 %.1f dB", $0) }]
+                    .compactMap { $0 }
+                return ("在重新剪「\(film.title)」" + (levels.isEmpty ? "" : "（" + levels.joined(separator: "，") + "）")
+                        + ((film.subtitles ?? true) ? "，有旁白就烧字幕" : "，不加字幕") + "。film_status 看进度", false)
             case .failure(let failure): return (failure.localizedDescription, true)
             }
         case "film_rescore":
             guard let id = args["film"] as? String else { return ("film_rescore 需要 film", true) }
             let song = (args["music_file"] as? String).map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
             let voice = args["voice"] as? Bool ?? true
-            switch FilmStudio.shared.rescore(film: id, music: args["music"] as? Bool ?? true, musicFile: song, voice: voice) {
+            let described = (args["voice_description"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+            let written = (args["voiceover"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+            let noMusic = args["no_music"] as? Bool ?? false
+            switch FilmStudio.shared.rescore(film: id, music: args["music"] as? Bool ?? true, musicFile: song, voice: voice,
+                                             voiceDescription: described, voiceover: written, noMusic: noMusic) {
             case .success(let film):
-                let what = [voice ? "重新配音" : nil, song.map { "配上「\($0.lastPathComponent)」" }
-                            ?? ((args["music"] as? Bool ?? true) ? "重新配乐" : nil)].compactMap { $0 }.joined(separator: "、")
+                let reading = described.map { "用「\($0.prefix(30))」的声音重念旁白" } ?? written.map { _ in "照新稿重念旁白" }
+                    ?? (voice ? "重新配音" : nil)
+                let what = [reading, noMusic ? "去掉配乐" : song.map { "配上「\($0.lastPathComponent)」" }
+                            ?? ((args["music"] as? Bool ?? true) ? "重新配乐" : "配乐不动")].compactMap { $0 }.joined(separator: "、")
                 return ("在给「\(film.title)」\(what)，完成后重新剪。film_status 看进度", false)
             case .failure(let failure): return (failure.localizedDescription, true)
             }
@@ -2496,6 +2539,7 @@ enum PanelTools {
             return "\(service.kind.rawValue)（\(service.title)）：\(word) · \(BoxServices.model(service.kind)) · \(BoxServices.base(service.kind).replacingOccurrences(of: "http://", with: ""))"
         }
         if let free = box.memoryFree { lines.append("盒子内存空闲 \(free)%") }
+        if box.blocked { lines.insert("⚠︎ " + BoxServices.blockedAdvice, at: 0) }
         if let note = box.note { lines.append("⚠︎ \(note)") }
         return (lines.joined(separator: "\n"), box.note != nil && action != "status")
     }

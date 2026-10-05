@@ -15,6 +15,7 @@ import SwiftUI
 /// wall of small print above the shots.
 struct FilmStudioView: View {
     @ObservedObject private var studio = FilmStudio.shared
+    @ObservedObject private var box = ComfyWatch.shared
     @ObservedObject private var character = CompanionCharacter.shared
     /// The director under the tab, with the film tools. See `StudioAgent`.
     @ObservedObject private var agent = StudioAgent.film
@@ -309,7 +310,11 @@ struct FilmStudioView: View {
                 } else {
                     ProgressView().controlSize(.small)
                 }
-                Text(doing(film)).font(.kinLabel).lineLimit(1)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(doing(film)).font(.kinLabel).lineLimit(1)
+                    // Where the job stands on the shared box: queue, node, step.
+                    if let line = box.now { Text(line).font(.kinCaption).foregroundStyle(.secondary).lineLimit(1) }
+                }
                 Spacer(minLength: 8)
                 Button("停") { studio.stop() }
                     .buttonStyle(.quiet)

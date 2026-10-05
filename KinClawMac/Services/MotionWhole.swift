@@ -155,6 +155,8 @@ enum MotionWhole {
         guard (response as? HTTPURLResponse)?.statusCode == 200, let id = answer["prompt_id"] as? String else {
             throw FilmStudio.Failure.message("ComfyUI 不接这个\(what)：\(String(data: data, encoding: .utf8)?.prefix(300) ?? "")")
         }
+        ComfyWatch.shared.began(id, what: what, base: base)
+        defer { ComfyWatch.shared.ended(id) }
         do {
             let deadline = Date().addingTimeInterval(seconds)
             while Date() < deadline {
@@ -165,7 +167,11 @@ enum MotionWhole {
                       let entry = history[id] as? [String: Any] else { continue }
                 let status = entry["status"] as? [String: Any]
                 if status?["status_str"] as? String == "error" {
-                    let messages = (status?["messages"] as? [[Any]] ?? []).compactMap { $0.count > 1 ? $0[1] as? [String: Any] : nil }
+                    let raw = status?["messages"] as? [[Any]] ?? []
+                    if raw.contains(where: { $0.first as? String == "execution_interrupted" }) {
+                        throw FilmStudio.Failure.message(await ComfyWatch.reason(id, what: what, base: base) ?? "\(what)在盒子上被打断了")
+                    }
+                    let messages = raw.compactMap { $0.count > 1 ? $0[1] as? [String: Any] : nil }
                     throw FilmStudio.Failure.message("\(what)出错：" + (messages.compactMap { $0["exception_message"] as? String }.first ?? "看盒子上的 comfy.log").prefix(300))
                 }
                 guard status?["completed"] as? Bool == true else { continue }
@@ -185,11 +191,7 @@ enum MotionWhole {
             }
             throw FilmStudio.Failure.message("\(what)跑了 \(Int(seconds / 60)) 分钟还没好")
         } catch {
-            if Task.isCancelled, let stop = URL(string: base + "/interrupt") {
-                var request = URLRequest(url: stop, timeoutInterval: 5)
-                request.httpMethod = "POST"
-                _ = try? await URLSession.shared.data(for: request)
-            }
+            if Task.isCancelled { await ComfyWatch.interrupt(id, base: base, by: "KinClaw Motion（\(what)）", why: "在 app 里停下了") }
             throw error
         }
     }
@@ -364,6 +366,20 @@ enum MotionWhole {
         try fm.moveItem(at: made, to: file)
         try? fm.moveItem(at: URL(fileURLWithPath: made.path + ".txt"), to: note)
         if !fm.fileExists(atPath: note.path) { try? words.write(to: note, atomically: true, encoding: .utf8) }
+    }
+
+    /// The first frame's words, for the image editor given the grey model's first frame (image 1)
+    /// and the person (image 2): the composition and pose held, the place told in words — given
+    /// the place picture too, it moved the figure to the side and changed the pose (2026-09-30).
+    static func firstWords(who: String, place: String, hers: Bool, given: String?) async -> String {
+        if let given, !given.isEmpty { return given }
+        let person = hers ? "the woman in image 2: her exact face, hair and clothes"
+            : "the person in image 2: " + inner(await FilmStudio.english(who, as: whoRole))
+        let where_ = inner(await FilmStudio.english(place, as: placeRole))
+        return "Keep the exact composition of image 1: the same camera, the same horizon, the figure where it stands, at the "
+            + "same size, in exactly the same pose — the same stance, the same arm and leg positions. Turn image 1 into a "
+            + "photograph. The grey figure becomes \(person). The grey set becomes the place: \(where_). Natural light. "
+            + "Photorealistic."
     }
 
     /// H3's words when the agent gave none: MiniMax's full-reference form, six sections, the

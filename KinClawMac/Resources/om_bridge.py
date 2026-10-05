@@ -21,7 +21,9 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+import urllib.request
 import uuid
 
 ROOT = os.path.realpath(os.path.expanduser("~/OpenMontage"))
@@ -61,6 +63,16 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {
             "id": {"type": "string"},
             "tail": {"type": "integer", "default": 4000, "description": "Characters of output from the end."}}},
+    },
+    {
+        "name": "wait",
+        "description": "Wait for a background job to finish — instead of a run that only sleeps — up to "
+                       "timeout_seconds (at most 900), then say how it stands, as job does. Other calls go on "
+                       "meanwhile.",
+        "inputSchema": {"type": "object", "required": ["id"], "properties": {
+            "id": {"type": "string"},
+            "timeout_seconds": {"type": "integer", "default": 600},
+            "tail": {"type": "integer", "default": 4000}}},
     },
     {
         "name": "read",
@@ -158,6 +170,50 @@ def job_state(job, tail):
     return meta, state, ran, log
 
 
+def clock(seconds):
+    s = max(0, int(round(seconds or 0)))
+    return f"{s // 3600}:{s % 3600 // 60:02d}:{s % 60:02d}" if s >= 3600 else f"{s // 60}:{s % 60:02d}"
+
+
+def box_line():
+    """What the box's ComfyUI is doing — whose job, which node and step, what waits behind it,
+    the last interruption — from KinClaw's progress desk (kinclaw-mac/scripts/comfy). A job
+    here waiting on ComfyUI says nothing while it waits: a score sat 58 minutes behind
+    someone else's H3 test without a word (Montage's notebook, 2026-09-28)."""
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:8188/kinclaw/progress", timeout=3) as response:
+            box = json.load(response)
+    except Exception:
+        return ""
+
+    def title(j):
+        kind = j.get("what") or "一个工作流"
+        return f"{j['tab']} 的{kind}" if j.get("tab") else kind
+
+    def doing(j):
+        out = j.get("node_class") or "准备中"
+        if (j.get("max") or 0) > 1:
+            out += f" 第 {int(j.get('value') or 0)}/{int(j['max'])} 步"
+        return out + (f"，已 {clock(j['for_s'])}" if j.get("for_s") else "")
+
+    running, pending = box.get("running") or [], box.get("pending") or []
+    lines = []
+    if not running and not pending:
+        lines.append("盒子的 ComfyUI：空着")
+    else:
+        if running:
+            lines.append("盒子的 ComfyUI 在跑：" + "；".join(f"{title(j)}（{doing(j)}）" for j in running))
+        if pending:
+            lines.append(f"排队 {len(pending)} 个：" + "、".join(
+                title(j) + (f"（等了 {clock(j['waiting_s'])}）" if j.get("waiting_s") else "") for j in pending[:4]))
+    stop = next((e for e in reversed(box.get("ended") or []) if e.get("end") == "interrupted"
+                 and box.get("now", 0) - e.get("at", 0) < 1800), None)
+    if stop:
+        who = stop.get("by") or "，".join(x for x in (stop.get("stop_program"), stop.get("stop_from")) if x) or "没人留话"
+        lines.append(f"最近半小时有任务被打断：{who}" + (f"（{stop['why']}）" if stop.get("why") else ""))
+    return "\n".join(lines)
+
+
 def job(args):
     tail = int(args.get("tail") or 4000)
     if not args.get("id"):
@@ -175,7 +231,25 @@ def job(args):
     if not found:
         return text(f"no job {args['id']}", True)
     meta, state, ran, log = found
-    return text(f"{meta['id']} · {state} · {ran / 60:.1f} min\n{meta['command']}\n---\n{log}")
+    box = box_line() if state == "running" else ""
+    return text(f"{meta['id']} · {state} · {ran / 60:.1f} min\n{meta['command']}\n---\n{log}" + (f"\n---\n{box}" if box else ""))
+
+
+def wait(args):
+    """A job, waited on: answers when it finishes or the time is up, whichever comes first."""
+    limit = max(5, min(int(args.get("timeout_seconds") or 600), 900))
+    deadline = time.time() + limit
+    while time.time() < deadline:
+        found = job_state(args["id"], 0)
+        if not found:
+            return text(f"no job {args['id']}", True)
+        if found[1] != "running":
+            break
+        time.sleep(5)
+    answer = job({"id": args["id"], "tail": args.get("tail") or 4000})
+    if time.time() >= deadline:
+        answer["content"][0]["text"] = f"still running after {limit} s of waiting\n" + answer["content"][0]["text"]
+    return answer
 
 
 def read(args):
@@ -252,7 +326,7 @@ def listing(args):
     return text("\n".join(rows) or "(empty)")
 
 
-CALLS = {"run": run, "start": start, "job": job, "read": read, "look": look, "write": write, "list": listing}
+CALLS = {"run": run, "start": start, "job": job, "wait": wait, "read": read, "look": look, "write": write, "list": listing}
 
 
 def answer(message):
@@ -281,7 +355,20 @@ def answer(message):
     return {"jsonrpc": "2.0", "id": ident, "result": result}
 
 
+_out = threading.Lock()
+
+
+def send(reply):
+    if reply is None:
+        return
+    with _out:
+        sys.stdout.write(json.dumps(reply, ensure_ascii=False) + "\n")
+        sys.stdout.flush()
+
+
 def main():
+    # Each tool call on its own thread, answered when it is done: a long run (waiting on a score)
+    # held every write and job behind it for minutes (Montage's notebook, 2026-09-27).
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -290,10 +377,10 @@ def main():
             message = json.loads(line)
         except ValueError:
             continue
-        reply = answer(message)
-        if reply is not None:
-            sys.stdout.write(json.dumps(reply, ensure_ascii=False) + "\n")
-            sys.stdout.flush()
+        if message.get("method") == "tools/call":
+            threading.Thread(target=lambda m=message: send(answer(m)), daemon=True).start()
+        else:
+            send(answer(message))
 
 
 if __name__ == "__main__":

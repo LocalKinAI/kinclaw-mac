@@ -18,6 +18,9 @@ scaled-dot-product attention (PyTorch 2.14's Metal flash kernel) instead of
 ComfyUI's default on a Mac, sub-quadratic. Only that model: every other
 workflow keeps the default. H3, 640x640, 124 frames, 4 steps: 75.6 -> 68.3 s
 a step (2026-09-29).
+
+progress.py — not a node: what this ComfyUI is doing, for every tab and tool
+that shares it (GET /kinclaw/progress, POST /kinclaw/interrupt).
 """
 import torch
 
@@ -98,3 +101,9 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "KinClawCheckpointLoaderGPU": "Load Checkpoint, text encoder on the GPU (KinClaw)",
     "KinClawPytorchAttention": "PyTorch attention, this model (KinClaw)",
 }
+
+try:
+    from . import progress as _progress
+    _progress.install()
+except Exception as error:      # the nodes above still load
+    print(f"[kinclaw_nodes] progress watch not installed: {error}")

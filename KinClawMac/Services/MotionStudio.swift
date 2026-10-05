@@ -88,6 +88,8 @@ final class MotionStudio: ObservableObject {
         var whole: Bool?
         var who: String?
         var size: [Int]?
+        /// The words the first frame is composed from, as written (nil: the studio's own).
+        var firstWords: String?
         var created = Date()
 
         enum State: String, Codable { case waiting, tracking, drawing, filming, joining, done, failed }
@@ -111,6 +113,8 @@ final class MotionStudio: ObservableObject {
         @MainActor var clayFirst: URL { wholeFolder.appendingPathComponent("clay-first.png") }
         @MainActor var whoPicture: URL { wholeFolder.appendingPathComponent("who.png") }
         @MainActor var placePicture: URL { wholeFolder.appendingPathComponent("place.png") }
+        /// The first frame composed from the grey model, who and where — pinned at frame 0.
+        @MainActor var firstPicture: URL { wholeFolder.appendingPathComponent("first.png") }
         /// The depth of segment `n` in the box's ComfyUI input, for H3 to follow.
         @MainActor func wholeDepthName(_ n: Int) -> String { "kinclaw-motion-\(id.prefix(40))-whole-depth-\(n).mp4" }
         var finished: Int { segments.filter { $0.state == .done }.count }
@@ -243,7 +247,8 @@ final class MotionStudio: ObservableObject {
     /// reference's things told object for object. Five to sixty seconds, in even stretches of
     /// five to ten, cut to what the reference holds from `start`.
     func makeWhole(video: URL, title: String, start: Double, seconds: Double, who: String?, looks: String,
-                   words: String?, quality: String?, hold: String?, credit: String?) async -> Result<Take, FilmStudio.Failure> {
+                   words: String?, quality: String?, hold: String?, credit: String?,
+                   firstWords: String? = nil) async -> Result<Take, FilmStudio.Failure> {
         guard working == nil else { return .failure(.message("正在拍「\(working!)」，等它拍完")) }
         guard FilmStudio.shared.shooting == nil else { return .failure(.message("片场正在拍片，两边用的是同一台盒子，等它拍完")) }
         guard FileManager.default.fileExists(atPath: video.path) else { return .failure(.message("找不到这段视频：\(video.path)")) }
@@ -281,6 +286,7 @@ final class MotionStudio: ObservableObject {
         take.who = person.isEmpty ? nil : person
         take.looks = looks
         take.words = words?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? words : nil
+        take.firstWords = firstWords?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? firstWords : nil
         take.quality = quality == "full" ? "full" : "draft"
         take.hold = hold
         do {
@@ -293,10 +299,18 @@ final class MotionStudio: ObservableObject {
         return .success(take)
     }
 
-    /// Carry on with a take that stopped.
-    func resume(_ id: String, hold: String? = nil) -> Result<Take, FilmStudio.Failure> {
+    /// Carry on with a take that stopped. `firstWords`, on the fourth route, composes its first
+    /// frame again from these words (the one there is set aside) before anything is filmed.
+    func resume(_ id: String, hold: String? = nil, firstWords: String? = nil) -> Result<Take, FilmStudio.Failure> {
         guard working == nil else { return .failure(.message("正在拍「\(working!)」，等它拍完")) }
         guard var take = takes.first(where: { $0.id == id || $0.title == id }) else { return .failure(.message("没有这一条：\(id)")) }
+        if let words = firstWords?.trimmingCharacters(in: .whitespacesAndNewlines), !words.isEmpty, take.whole == true {
+            take.firstWords = words
+            let fm = FileManager.default
+            if fm.fileExists(atPath: take.firstPicture.path) {
+                try? fm.moveItem(at: take.firstPicture, to: take.wholeFolder.appendingPathComponent("first.before-\(Int(Date().timeIntervalSince1970)).png"))
+            }
+        }
         for index in take.segments.indices where take.segments[index].state != .done {
             take.segments[index].state = .waiting
             take.segments[index].note = nil
@@ -344,6 +358,7 @@ final class MotionStudio: ObservableObject {
         }
         var pictures: [URL] = []
         for (label, url) in [("整场白模第一帧", take.clayFirst), ("人物参考图", take.whoPicture), ("场景参考图", take.placePicture),
+                             ("合成的第一帧（钉在第 0 帧）", take.firstPicture),
                              ("她的起始画面", take.still), ("参考第一帧的姿势", take.sourceFirst), ("3D 布景的第一帧", take.blockout),
                              ("白模俯视图（镜头轨迹：白点起、琥珀色点止）", take.folder.appendingPathComponent("stage/out/plan.png"))]
         where fm.fileExists(atPath: url.path) {
@@ -503,7 +518,7 @@ final class MotionStudio: ObservableObject {
                 take.state = .failed
                 take.note = Task.isCancelled ? "停下了。「接着拍」从这一段继续"
                     : FilmStudio.isUnreachable(error)
-                    ? "盒子上的服务连不上（\(error.localizedDescription)）。起来之后点「接着拍」"
+                    ? FilmStudio.unreachable("盒子上的服务", error) + "。好了以后点「接着拍」"
                     : error.localizedDescription
                 for index in take.segments.indices where take.segments[index].state == .filming { take.segments[index].state = .waiting }
             }
@@ -749,10 +764,30 @@ final class MotionStudio: ObservableObject {
             try await MotionWhole.drawPlace(take.looks ?? take.scene, size: size, to: take.placePicture, seed: seed)
             since = nil
         }
+        // The first frame, composed: the grey model's first frame painted as the person and the place
+        // (Qwen-Image 2.1, the person's picture beside it). Pinned at frame 0 it holds the far
+        // background, which the depth leaves free: on 8 Form Tai Chi the background moved half as much
+        // (2026-09-30). Given the place picture as well, the edit lost the layout — so the place is told.
+        if !fm.fileExists(atPath: take.firstPicture.path) {
+            take.state = .drawing; save(take)
+            progress = "在合成第一帧（白模 + 人物 + 场景）"
+            since = Date()
+            do {
+                let instruction = await MotionWhole.firstWords(who: take.who ?? "", place: take.looks ?? take.scene,
+                                                               hers: (take.who ?? "").isEmpty, given: take.firstWords)
+                try await FilmStudio.repaint(take.clayFirst, like: [take.whoPicture], instruction: instruction, seed: seed,
+                                             to: take.firstPicture, tag: "motion-\(take.id.prefix(30))-first", fast: false)
+                try? instruction.write(to: take.firstPicture.appendingPathExtension("txt"), atomically: true, encoding: .utf8)
+            } catch {
+                take.note = "第一帧没合成出来（\(error.localizedDescription)）：第 1 段不钉第一帧，远景会漂一些"
+            }
+            since = nil
+        }
         if take.hold == "still" {
             take.hold = nil
             take.state = .waiting
-            take.note = "停在参考图：motion_status(take) 看人物和场景两张参考图，没问题就 motion_continue 开拍"
+            take.note = "停在参考图和第一帧：motion_status(take) 看人物、场景和合成的第一帧（人、站位、姿势要和白模一样）。"
+                + "第一帧不对：motion_continue 带 first_words 重画（写明姿势）；没问题就 motion_continue 开拍"
             save(take)
             return
         }
@@ -780,7 +815,9 @@ final class MotionStudio: ObservableObject {
             // The depth goes up again each time: a restarted box has lost its input folder's state.
             _ = try await FilmStudio.upload(take.wholeDepth(number), as: take.wholeDepthName(number), to: base)
             var pins: [(picture: URL, frame: Int)] = []
-            if index > 0 {
+            if index == 0, fm.fileExists(atPath: take.firstPicture.path) {
+                pins = [(picture: take.firstPicture, frame: 0)]
+            } else if index > 0 {
                 let before = take.segments[index - 1].id
                 pins = [(picture: try await FilmStudio.lastFrame(of: take.clip(before), to: take.last(before), fresh: true), frame: 0)]
             }

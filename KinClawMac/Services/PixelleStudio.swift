@@ -284,6 +284,24 @@ final class PixelleStudio: ObservableObject {
 
     func isFollowing(_ task: String) -> Bool { following == task && follower != nil }
 
+    /// Wait for a task straight on the box, by its id (pv.py wait) — for one the tab no longer
+    /// follows. Done, its files come back and it is listed like any other.
+    func waitOnBox(_ task: String, seconds: Int) async -> (String, Bool) {
+        let result = await pv(["wait", task, "--timeout", String(seconds), "--every", "6"], timeout: TimeInterval(seconds + 180))
+        let progress = result.out.split(separator: "\n").map(String.init)
+            .filter { $0.trimmingCharacters(in: .whitespaces).hasPrefix("[") }.suffix(12)
+        if result.ok, let answer = Self.lastJSON(result.out) as? [String: Any], let folder = answer["folder"] as? String {
+            reload(select: URL(fileURLWithPath: folder).lastPathComponent)
+            var lines = Array(progress) + [Self.describe(answer)]
+            if let sheet = answer["sheet"] as? String { lines.append("image://\(sheet)") }
+            return (lines.joined(separator: "\n"), false)
+        }
+        if result.ok, result.out.contains("still ") {
+            return ((Array(progress) + ["task \(task) 还在盒子上做。再调 pixelle_wait（带 task）接着等"]).joined(separator: "\n"), false)
+        }
+        return ((Array(progress) + ["task \(task)：\(Self.complaint(result))"]).joined(separator: "\n"), true)
+    }
+
     private func followLoop(_ task: String) async {
         defer {
             if following == task { following = nil; follower = nil }
@@ -584,6 +602,8 @@ enum PixelleTools {
             let found = PixelleStudio.scan(PixelleStudio.root)
             var lines = [studio.serviceLine]
             if let comfy = studio.comfy { lines.append("ComfyUI（和 Film、Comfy、Montage 标签共用）：\(comfy)") }
+            // Whose job holds the shared box now, at which step, and what waits behind it.
+            lines.append(await ComfyWatch.summary(base: ComfyStudio.base))
             if let voices = studio.voices { lines.append("配音：\(voices)（8102 按描述造声音，8101 预设声音）") }
             lines += studio.jobLines
             let others = studio.boxJobs.filter { $0.status == "running" || $0.status == "pending" }
@@ -658,6 +678,14 @@ enum PixelleTools {
             if let prompts = args["motion_prompts"] as? [Any] { spec["motion_prompts"] = prompts.map(FilmTools.text) }
             if let scenes = args["scenes"] as? [Any] { spec["scenes"] = scenes.compactMap(FilmTools.int) }
             if let smooth = args["smooth"] as? Bool { spec["motion_smooth"] = smooth }
+            // Scenes drawn again, with new picture words when given: one bad picture no longer
+            // means the whole video drawn again.
+            if let redraw = args["redraw"] as? [Any] { spec["redraw"] = redraw.compactMap(FilmTools.int) }
+            if let words = args["image_prompts"] as? [String: Any] {
+                spec["image_prompts"] = words.mapValues(FilmTools.text)
+            } else if let words = args["image_prompts"] as? [Any] {
+                spec["image_prompts"] = words.map(FilmTools.text)
+            }
             if let bgm = args["bgm_path"] as? String {
                 if (bgm as NSString).lastPathComponent == PixelleStudio.forbiddenMusic {
                     return ("default.mp3 不能用：它是 OC ReMix 改编的《最终幻想 IX》Melodies of Life，有版权", true)
@@ -665,8 +693,8 @@ enum PixelleTools {
                 spec["bgm_path"] = bgm
             }
             if let volume = FilmTools.number(args["bgm_volume"]) { spec["bgm_volume"] = volume }
-            guard revoice || motion != nil || spec["bgm_path"] != nil else {
-                return ("没什么可重做的：revoice true（整篇一次念完、一个人）、motion none|pan|ltx，或者换一首 bgm_path", true)
+            guard revoice || motion != nil || spec["bgm_path"] != nil || !((spec["redraw"] as? [Int]) ?? []).isEmpty else {
+                return ("没什么可重做的：revoice true（整篇一次念完、一个人）、motion none|pan|ltx、redraw 重画哪几场，或者换一首 bgm_path", true)
             }
             if studio.job?.state == .running, let busy = studio.job {
                 return ("已经有一个在做：「\(busy.title)」task \(busy.id)（\(busy.progress)）。等它做完（pixelle_wait），或者 pixelle_cancel", true)
@@ -682,10 +710,12 @@ enum PixelleTools {
                     NotificationCenter.default.post(name: .kinclawShowPanel, object: nil, userInfo: ["mode": "pixelle", "raise": false])
                 }
                 let moving = (answer["moving"] as? [Any] ?? []).compactMap(FilmTools.int)
+                let redrawn = (answer["redrawn"] as? [Any] ?? []).compactMap(FilmTools.int)
                 var lines = ["开始重做「\(run.title)」（\(run.boxFolder)）：task \(answer["task_id"] as? String ?? "")，"
                              + (revoice ? "整篇重新一次念完（一个人）" : "旁白不变")
                              + (moving.isEmpty ? (motion == nil ? "，画面照原来的样子" : "，全部静止")
                                                 : "，第 \(moving.map(String.init).joined(separator: "、")) 场会动（\(motion ?? "")）")
+                             + (redrawn.isEmpty ? "" : "，重画第 \(redrawn.map(String.init).joined(separator: "、")) 场的图")
                              + ((spec["bgm_path"] as? String).map { "，配乐换成 \(($0 as NSString).lastPathComponent)" } ?? "")
                              + "。\(answer["estimate"] as? String ?? "")"]
                 lines.append("原来那支不动，做好的是一支新的。跟着看：pixelle_wait。")
@@ -697,15 +727,20 @@ enum PixelleTools {
             guard let task = (wanted?.isEmpty == false ? wanted : nil) ?? studio.job?.id else {
                 return ("没有在做的视频", false)
             }
+            let limit = min(540, max(20, PanelTools.patience - 20))
+            // A task the tab has moved on from — another was started since — is waited for on the box,
+            // by its id: it had been "lost" while it was still running there (Pixelle's notebook, 2026-09-28).
+            if studio.job?.id != task { return await studio.waitOnBox(task, seconds: Int(limit)) }
             // Done already: said at once. Otherwise followed, if nobody is.
             if !(studio.job?.id == task && studio.job?.state == .done), !studio.isFollowing(task) { studio.follow(task) }
             let seen = studio.job?.state == .running ? (studio.job?.lines.count ?? 0) : 0
-            let limit = min(540, max(20, PanelTools.patience - 20))
             let started = Date()
             while studio.job?.id == task, studio.job?.state == .running, Date().timeIntervalSince(started) < limit {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
             }
-            guard let job = studio.job, job.id == task else { return ("跟丢了 \(task)：pixelle_status 看看", true) }
+            guard let job = studio.job, job.id == task else {
+                return await studio.waitOnBox(task, seconds: max(20, Int(limit - Date().timeIntervalSince(started))))
+            }
             let progress = job.lines.count > seen ? Array(job.lines[seen...].suffix(12)) : []
             switch job.state {
             case .running:

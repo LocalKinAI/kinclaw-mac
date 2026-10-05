@@ -31,6 +31,14 @@ extension FilmStudio {
     }
 
     static let h3MegapixelsKey = "kinclaw.film.h3.megapixels"
+    /// Full quality in eight steps: lightx2v's Ref2V Turbo 8-step 768p LoRA, euler, flow shifts 6/3 (their
+    /// settings for the 8-step 768p models) instead of twenty steps of the base model — used when the box
+    /// has the LoRA and this is on. Off by default: on Motion's whole-scene take (864×480, 158 frames) it took
+    /// 17 minutes against 36 with the same moves and framing, but static ground and walls flickered three to
+    /// five times as much frame to frame, and hands came out dark (2026-09-30). See `renderH3`.
+    static let h3EightStepKey = "kinclaw.film.h3.eightstep"
+    static let eightStepLoRA = "minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors"
+    static var eightStepOn: Bool { UserDefaults.standard.object(forKey: h3EightStepKey) as? Bool ?? false }
 
     // MARK: - Casting
 
@@ -186,6 +194,9 @@ extension FilmStudio {
             - Where a shot has "counts", say each exact number ("exactly five round loaves") and never more or \
             fewer; the set already holds that many — they stay as they are, and the camera holds still, because a \
             moving camera finds more of them.
+            - "Where" is for you, not for the prompts: describe each shot's place only as its set picture shows \
+            it. Landmarks that are not in the picture ("seven mountains, the throne mountain in the middle") make \
+            H3 turn the camera to look for them, and the people go out of the frame.
             - Everything belongs to the time and place of the story: nothing modern, no text on screen.
             - Nobody speaks (the narration is added later as a voice-over); overall_soundscape is the place's \
             own sound; non_diegetic_music is none.
@@ -248,17 +259,20 @@ extension FilmStudio {
         let scale = (megapixels * 1_000_000 / Double(size.width * size.height)).squareRoot()
         let width = exact?.width ?? max(256, Int((Double(size.width) * scale / 32).rounded()) * 32)
         let height = exact?.height ?? max(256, Int((Double(size.height) * scale / 32).rounded()) * 32)
+        // Full quality: eight steps with the Turbo 8-step LoRA when the box has it, else twenty of the base model.
+        let eight = full ? (eightStepOn ? await boxHas("LoraLoaderModelOnly", offering: eightStepLoRA, at: base) : false) : false
+        let steps = eight ? 8 : full ? 20 : 4
         var graph: [String: Any] = [
             "1": node("UNETLoader", ["unet_name": "minimax_h3_ref2va_pruned_int8_convrot.safetensors", "weight_dtype": "default"]),
             "2": node("CLIPLoader", ["clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors", "type": "minimax", "device": "default"]),
             "3": node("VAELoader", ["vae_name": "minimax_h3_video_vae_fp16.safetensors"]),
             "4": node("VAELoader", ["vae_name": "minimax_h3_audio_vae_fp32.safetensors"]),
-            "5": node("LoraLoaderModelOnly", ["lora_name": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+            "5": node("LoraLoaderModelOnly", ["lora_name": eight ? eightStepLoRA : "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
                                               "strength_model": 1, "model": ["1", 0]]),
             "7": node("RandomNoise", ["noise_seed": seed]),
-            "8": node("KSamplerSelect", ["sampler_name": "res_multistep"]),
-            "9": node("BasicScheduler", ["scheduler": "simple", "steps": full ? 20 : 4, "denoise": 1,
-                                         "model": full ? ["1", 0] : ["5", 0]]),
+            "8": node("KSamplerSelect", ["sampler_name": eight ? "euler" : "res_multistep"]),
+            "9": node("BasicScheduler", ["scheduler": "simple", "steps": steps, "denoise": 1,
+                                         "model": full && !eight ? ["1", 0] : ["5", 0]]),
             "11": node("SamplerCustomAdvanced", ["noise": ["7", 0], "guider": ["10", 0], "sampler": ["8", 0],
                                                  "sigmas": ["9", 0], "latent_image": ["6", 1]]),
             "12": node("VAEDecode", ["samples": ["11", 0], "vae": ["3", 0]]),
@@ -294,7 +308,7 @@ extension FilmStudio {
                                                             "vae": ["3", 0], "audio_vae": ["4", 0], "image": ["\(200 + i)", 0]])
             conditioning = ["\(300 + i)", 0]
         }
-        var model: [Any] = full ? ["1", 0] : ["5", 0]
+        var model: [Any] = full && !eight ? ["1", 0] : ["5", 0]
         if let control {
             graph["20"] = node("ModelPatchLoader", ["name": MotionBuild.patch])
             graph["21"] = node("LoadVideo", ["file": control])
@@ -303,7 +317,13 @@ extension FilmStudio {
                                                                "strength": 1.0, "start_percent": 0.0, "end_percent": 1.0,
                                                                "control_video": ["22", 0]])
             model = ["23", 0]
-            graph["9"] = node("BasicScheduler", ["scheduler": "simple", "steps": full ? 20 : 4, "denoise": 1, "model": model])
+            graph["9"] = node("BasicScheduler", ["scheduler": "simple", "steps": steps, "denoise": 1, "model": model])
+        }
+        // The 8-step LoRA's flow shifts, video 6 and audio 3; the scheduler reads them off the model.
+        if eight {
+            graph["25"] = node("MiniMaxH3SigmaShift", ["model": model, "shift_video": 6.0, "shift_audio": 3.0])
+            model = ["25", 0]
+            graph["9"] = node("BasicScheduler", ["scheduler": "simple", "steps": steps, "denoise": 1, "model": model])
         }
         // PyTorch's own attention for this model (KinClaw's node on the box)
         // instead of ComfyUI's sub-quadratic default on a Mac: 75.6 → 68.3 s a
@@ -316,7 +336,7 @@ extension FilmStudio {
 
         // A full shot is twenty steps of minutes each: ten seconds ran 80 minutes, and an hour's
         // deadline failed it with the picture nearly made (Motion's notebook, 2026-09-28).
-        let deadline = max(3600, Double((full ? 20 : 4) * h3Frames(seconds)) * 1.2 + 900)
+        let deadline = max(3600, Double(steps * h3Frames(seconds)) * 1.2 + 900)
         let video = try await comfyResult(graph, node: "15", base: base, what: "H3 镜头", deadline: deadline)
         try? FileManager.default.removeItem(at: out)
         try video.write(to: out)
@@ -337,6 +357,9 @@ extension FilmStudio {
         guard (response as? HTTPURLResponse)?.statusCode == 200, let id = answer["prompt_id"] as? String else {
             throw Failure.message("ComfyUI 不接这个\(what)：\(String(data: data, encoding: .utf8)?.prefix(300) ?? "")")
         }
+        // Where it stands on the shared box — queue, node, step — for the tabs and the agents.
+        ComfyWatch.shared.began(id, what: what, base: base)
+        defer { ComfyWatch.shared.ended(id) }
         do {
             let deadline = Date().addingTimeInterval(seconds)
             while Date() < deadline {
@@ -347,7 +370,11 @@ extension FilmStudio {
                       let entry = history[id] as? [String: Any] else { continue }
                 let status = entry["status"] as? [String: Any]
                 if status?["status_str"] as? String == "error" {
-                    let messages = (status?["messages"] as? [[Any]] ?? []).compactMap { $0.count > 1 ? $0[1] as? [String: Any] : nil }
+                    let raw = status?["messages"] as? [[Any]] ?? []
+                    if raw.contains(where: { $0.first as? String == "execution_interrupted" }) {
+                        throw Failure.message(await ComfyWatch.reason(id, what: what, base: base) ?? "\(what)在盒子上被打断了")
+                    }
+                    let messages = raw.compactMap { $0.count > 1 ? $0[1] as? [String: Any] : nil }
                     throw Failure.message("\(what)出错：" + (messages.compactMap { $0["exception_message"] as? String }.first ?? "看盒子上的 comfy.log").prefix(300))
                 }
                 guard status?["completed"] as? Bool == true else { continue }
@@ -364,11 +391,7 @@ extension FilmStudio {
             }
             throw Failure.message("\(what)跑了 \(Int(seconds / 60)) 分钟还没好")
         } catch {
-            if Task.isCancelled, let stop = URL(string: base + "/interrupt") {
-                var request = URLRequest(url: stop, timeoutInterval: 5)
-                request.httpMethod = "POST"
-                _ = try? await URLSession.shared.data(for: request)
-            }
+            if Task.isCancelled { await ComfyWatch.interrupt(id, base: base, by: "KinClaw（\(what)）", why: "在 app 里停下了") }
             throw error
         }
     }

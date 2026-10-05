@@ -11,6 +11,8 @@ models already there instead of paid APIs:
 | `tools/graphics/qwen_image.py` | `~/OpenMontage/tools/graphics/` | `qwen_image` — Qwen-Image 2.1, text-to-image and edit with reference pictures |
 | `tools/video/h3_video.py` | `~/OpenMontage/tools/video/` | `h3_video` — MiniMax H3 ref2va, cast portraits as references, first frame pinned, `hold` |
 | `tools/audio/minimax_music.py` | `~/OpenMontage/tools/audio/` | `minimax_music` — MiniMax Music 3 |
+| `tools/audio/music_extend.py` | `~/OpenMontage/tools/audio/` | `music_extend` — a score made as long as the film: loops back where the music matches itself (one or two seams, crossfaded), keeps its own ending unless `exact` |
+| `patches/checkpoint-all-errors.patch` | `git apply` in `~/OpenMontage` | `lib/checkpoint.py`: every schema problem listed at once (not one per try), and a project folder passed as `pipeline_dir` refused instead of nesting the checkpoints |
 | `skills/minimax-h3-local/SKILL.md` | `~/OpenMontage/.agents/skills/minimax-h3-local/` | how to film with them (the pinned-first-frame method) |
 
 OpenMontage finds tools by walking its `tools` package, so copying a file in is all it takes. `.env` on the box sets

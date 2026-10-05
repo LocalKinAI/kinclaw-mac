@@ -16,6 +16,7 @@ Measured on the box (M3 Ultra): a 5.2 s shot at 928×544, 4-step LoRA, about
 
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,9 @@ _ENCODER = "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
 _VIDEO_VAE = "minimax_h3_video_vae_fp16.safetensors"
 _AUDIO_VAE = "minimax_h3_audio_vae_fp32.safetensors"
 _LORA = "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"
+# Full quality in eight steps, when the box has it: lightx2v's Ref2V Turbo 8-step 768p LoRA, euler, flow
+# shifts 6/3 — instead of twenty steps of the base model.
+_LORA8 = "minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors"
 
 
 def frames_for(seconds: float) -> int:
@@ -109,7 +113,7 @@ class H3Video(BaseTool):
             "megapixels": {"type": "number", "default": 0.5, "description": "0.5 → 928×544 at 16:9; 0.98 is H3's 768p but takes 2–3× as long."},
             "width": {"type": "integer"},
             "height": {"type": "integer"},
-            "full_quality": {"type": "boolean", "default": False, "description": "20 steps without the 4-step LoRA: cleaner, ~5× slower."},
+            "full_quality": {"type": "boolean", "default": False, "description": "Cleaner: 8 steps with the 8-step LoRA when the box has it (~2× slower than the draft), else 20 steps without a LoRA (~5× slower)."},
             "seed": {"type": "integer", "description": "Random if omitted"},
             "output_path": {"type": "string", "description": "Where to save the MP4 (with sound)"},
             "timeout_seconds": {"type": "integer", "default": 3600},
@@ -139,7 +143,21 @@ class H3Video(BaseTool):
 
     def estimate_runtime(self, inputs: dict[str, Any]) -> float:
         base = 580.0 * (frames_for(float(inputs.get("duration", 5.2))) / 124)
-        return base * (5 if inputs.get("full_quality") else 1) * max(1.0, float(inputs.get("megapixels", 0.5)) / 0.5) ** 1.5
+        slower = (2 if self._eight_step() else 5) if inputs.get("full_quality") else 1
+        return base * slower * max(1.0, float(inputs.get("megapixels", 0.5)) / 0.5) ** 1.5
+
+    def _eight_step(self) -> bool:
+        """Whether full quality runs in eight steps: asked for (H3_EIGHT_STEP=1 — off by default: 2× faster but
+        static areas flickered 3–5× more in the first test, 2026-09-30) and the box has the LoRA."""
+        if os.environ.get("H3_EIGHT_STEP") != "1":
+            return False
+        if getattr(self, "_eight_known", None) is None:
+            try:
+                _, missing = self._client.check_models([_LORA8])
+                self._eight_known = not missing
+            except Exception:
+                self._eight_known = False
+        return self._eight_known
 
     def execute(self, inputs: dict[str, Any]) -> ToolResult:
         first = inputs.get("reference_image_path")
@@ -159,6 +177,8 @@ class H3Video(BaseTool):
                                  inputs.get("width"), inputs.get("height"))
         length = frames_for(float(inputs.get("duration", 5.2)))
         full = bool(inputs.get("full_quality"))
+        eight = full and self._eight_step()
+        steps = 8 if eight else 20 if full else 4
         if first and first not in references:
             references = references + [str(first)]
 
@@ -176,16 +196,16 @@ class H3Video(BaseTool):
                 pins.append((str(extra["image_path"]), int(frame)))
 
         stem = output_path.stem
-        model = ["1", 0] if full else ["5", 0]
+        model = ["1", 0] if full and not eight else ["5", 0]
         graph: dict[str, Any] = {
             "1": node("UNETLoader", {"unet_name": _MODEL, "weight_dtype": "default"}),
             "2": node("CLIPLoader", {"clip_name": _ENCODER, "type": "minimax", "device": "default"}),
             "3": node("VAELoader", {"vae_name": _VIDEO_VAE}),
             "4": node("VAELoader", {"vae_name": _AUDIO_VAE}),
-            "5": node("LoraLoaderModelOnly", {"lora_name": _LORA, "strength_model": 1, "model": ["1", 0]}),
+            "5": node("LoraLoaderModelOnly", {"lora_name": _LORA8 if eight else _LORA, "strength_model": 1, "model": ["1", 0]}),
             "7": node("RandomNoise", {"noise_seed": seed}),
-            "8": node("KSamplerSelect", {"sampler_name": "res_multistep"}),
-            "9": node("BasicScheduler", {"scheduler": "simple", "steps": 20 if full else 4, "denoise": 1, "model": model}),
+            "8": node("KSamplerSelect", {"sampler_name": "euler" if eight else "res_multistep"}),
+            "9": node("BasicScheduler", {"scheduler": "simple", "steps": steps, "denoise": 1, "model": model}),
             "12": node("VAEDecode", {"samples": ["11", 0], "vae": ["3", 0]}),
             "13": node("VAEDecodeAudio", {"samples": ["11", 0], "vae": ["4", 0]}),
             "14": node("CreateVideo", {"fps": 24, "bit_depth": 8, "color_space": "sRGB", "codec": "none",
@@ -213,6 +233,11 @@ class H3Video(BaseTool):
                     "positive": conditioning, "latent": ["6", 1], "frame_idx": frame,
                     "vae": ["3", 0], "audio_vae": ["4", 0], "image": [str(200 + i), 0]})
                 conditioning = [str(300 + i), 0]
+            # The 8-step LoRA's flow shifts (video 6, audio 3); the scheduler reads them off the model.
+            if eight:
+                graph["25"] = node("MiniMaxH3SigmaShift", {"model": model, "shift_video": 6.0, "shift_audio": 3.0})
+                model = ["25", 0]
+                graph["9"]["inputs"]["model"] = model
             # PyTorch's own attention for this model (KinClaw's node on the box,
             # kinclaw-mac/scripts/comfy) instead of ComfyUI's sub-quadratic
             # default on a Mac: 75.6 -> 68.3 s a step at 640x640x124.
@@ -234,7 +259,7 @@ class H3Video(BaseTool):
             data={"provider": self.provider, "model": "minimax-h3-ref2va-int8", "prompt": inputs["prompt"],
                   "width": width, "height": height, "frames": length, "seconds": round(length / 24, 2),
                   "references": references[:9], "pins": [{"image_path": p, "frame": f} for p, f in pins],
-                  "steps": 20 if full else 4, "output": str(paths[0]), "has_audio": True},
+                  "steps": steps, "output": str(paths[0]), "has_audio": True},
             artifacts=[str(p) for p in paths], cost_usd=0.0, duration_seconds=round(time.time() - start, 2),
             seed=seed, model="minimax-h3-ref2va-int8",
         )

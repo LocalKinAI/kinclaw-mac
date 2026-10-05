@@ -960,9 +960,10 @@ extension FilmStudio {
             }
             clips.append(raw)
         }
-        try await Self.cut(clips, voices: done.map { film.voice($0.id) },
-                           voiceover: film.voiceover == nil ? nil : film.voiceoverFile,
-                           music: music && (film.withMusic ?? Self.musicOn) ? film.music : nil, to: film.file)
+        let spoken = try await Self.cut(clips, voices: done.map { film.voice($0.id) },
+                                        voiceover: film.voiceover == nil ? nil : film.voiceoverFile,
+                                        music: music && (film.withMusic ?? Self.musicOn) ? film.music : nil,
+                                        musicDB: film.musicDB ?? 0, duckDB: film.duckDB ?? 6.3, to: film.file)
         let finish = Finish(title: film.titleCard ?? true ? film.title : nil, grade: film.finishGrade ?? true,
                             upscale: film.upscale ?? true)
         do {
@@ -970,6 +971,64 @@ extension FilmStudio {
         } catch {
             NSLog("film: mastering failed, the cut is as it came out: \(error.localizedDescription)")
         }
+        if film.subtitles ?? true, !spoken.isEmpty {
+            do {
+                try await subtitle(film, spoken: spoken, done: done)
+            } catch {
+                film.note = "字幕没加上（\(error.localizedDescription)）：片子是不带字幕的"
+            }
+        }
+    }
+
+    /// The narration burnt in, a clause a line (Easel's `SocialSubtitles`, the same lines a phone
+    /// reads). The one continuous voice-over is heard by whisper from its own clean track — the
+    /// film's sound has the music in it, and a YuE2 song would be heard too — told the passage, so
+    /// the names come out as written, and moved to where the cut put it, at the pace it was read.
+    /// A shot's own line is its text, spread over the time its voice takes. The film without them
+    /// stays beside it as film.clean.mp4.
+    private func subtitle(_ film: Film, spoken: [Spoken], done: [Shot]) async throws {
+        let folder = film.folder.appendingPathComponent("subtitles")
+        var lines: [SocialSubtitles.Line] = []
+        for piece in spoken {
+            if let index = piece.shot {
+                guard index < done.count, let text = done[index].narration, !text.isEmpty else { continue }
+                lines += Self.spread(text, from: piece.start, over: piece.length)
+            } else if let passage = film.voiceover {
+                let chinese = passage.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) }
+                let heard = try await SocialSubtitles.hear(piece.file, language: chinese ? "zh" : nil, script: passage,
+                                                           longest: nil, into: folder)
+                lines += heard.compactMap { line in
+                    let start = piece.start + line.start * piece.pace, end = piece.start + min(line.end * piece.pace, piece.length)
+                    return end > start ? SocialSubtitles.Line(start: start, end: end, text: line.text, second: nil) : nil
+                }
+            }
+        }
+        guard !lines.isEmpty else { return }
+        let burned = try await SocialSubtitles.burn(film.file, lines: lines, style: SocialSubtitles.Style(), into: folder,
+                                                    name: "film.subtitled")
+        let clean = film.folder.appendingPathComponent("film.clean.mp4")
+        if FileManager.default.fileExists(atPath: clean.path) {
+            _ = try FileManager.default.replaceItemAt(clean, withItemAt: film.file)
+        } else {
+            try FileManager.default.moveItem(at: film.file, to: clean)
+        }
+        try FileManager.default.moveItem(at: burned, to: film.file)
+    }
+
+    /// A line of narration as subtitle lines over the time it is spoken: cut where the words
+    /// allow (`SocialSubtitles.cut`), each part given time in proportion to its letters.
+    nonisolated static func spread(_ text: String, from start: Double, over length: Double) -> [SocialSubtitles.Line] {
+        let chinese = text.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) }
+        let pieces: [String] = chinese ? text.map(String.init) : text.split(separator: " ").map { String($0) + " " }
+        let letters = Double(max(1, pieces.reduce(0) { $0 + $1.count }))
+        var at = start
+        var words: [(start: Double, end: Double, text: String)] = []
+        for piece in pieces {
+            let span = length * Double(piece.count) / letters
+            words.append((at, at + span, piece))
+            at += span
+        }
+        return SocialSubtitles.cut(words, longest: chinese ? 16 : 42, chinese: chinese)
     }
 
     // MARK: - Mastering

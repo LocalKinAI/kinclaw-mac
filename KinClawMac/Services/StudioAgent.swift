@@ -670,29 +670,11 @@ final class StudioAgent: ObservableObject {
         return lines.joined(separator: "\n")
     }
 
-    /// The box's ComfyUI queue in a line. A job an agent put on the box
-    /// itself shows in no tab's `busy` — Motion's hand-built H3 take did not —
-    /// but it holds the box all the same.
+    /// The box's ComfyUI in a line or three: whose job runs, at which node and step, what
+    /// waits, the last interruption (`ComfyWatch`). A job an agent put on the box itself shows
+    /// in no tab's `busy` — Motion's hand-built H3 take did not — but it holds the box all the same.
     static func comfyQueue() async -> String {
-        guard let url = URL(string: ComfyStudio.base + "/queue") else { return "盒子的 ComfyUI：地址不对" }
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 4
-        guard let (data, _) = try? await URLSession.shared.data(for: request),
-              let queue = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return "盒子的 ComfyUI：连不上"
-        }
-        let running = queue["queue_running"] as? [[Any]] ?? []
-        let pending = queue["queue_pending"] as? [[Any]] ?? []
-        // What a job is, from its nodes: [number, id, graph, extra, outputs].
-        let kinds = [("MiniMaxH3", "H3 视频"), ("MiniMaxMusic", "MiniMax 配乐"), ("YuE", "YuE2 歌"), ("LTX", "LTX 视频"),
-                     ("FrameInterpolat", "补帧"), ("SeedVR", "放大"), ("Hunyuan3D", "3D"), ("Trellis", "3D"), ("Qwen", "出图")]
-        func kind(_ job: [Any]) -> String {
-            let graph = job.count > 2 ? job[2] as? [String: Any] ?? [:] : [:]
-            let nodes = graph.values.compactMap { ($0 as? [String: Any])?["class_type"] as? String }.joined(separator: " ")
-            return kinds.first { nodes.localizedCaseInsensitiveContains($0.0) }?.1 ?? "别的工作流"
-        }
-        let what = running.isEmpty ? "" : "（" + running.map(kind).joined(separator: "、") + "）"
-        return "盒子的 ComfyUI（几个标签共用）：在跑 \(running.count)\(what)，排队 \(pending.count)"
+        await ComfyWatch.summary(base: ComfyStudio.base)
     }
 
     /// One tab closer: its agent, what it makes now and made last, and the
@@ -857,7 +839,14 @@ final class StudioAgent: ObservableObject {
                 sections, max_duration in seconds, the format), or audio_yue2_music_cover for a cover of a song given \
                 in `files`. About 17 seconds of work per second of music, and ComfyUI is busy all that time. Then \
                 film_rescore with music_file (the file comfy_run brought back) and voice: false keeps the narration. \
-                Background music without words stays the film's own. Speak the language they write in, and keep it short.
+                Background music without words stays the film's own. The finish keeps to what they asked for: the \
+                narration is burnt in as subtitles (on by default; film_recut subtitles: false turns it off), music_db \
+                makes the music louder (+3 clearly) and duck_db sets how far it dips under the voice (default 6.3; 3 \
+                keeps it up) — film_recut, kept for later cuts; film_recut title renames a film. film_rescore \
+                voice_description changes only the narrator's voice, as written (the box's voice design), the words \
+                staying; music: false there keeps the music (no_music leaves it out). film_continue fast_draw changes \
+                快速出图 for what is still to be drawn. film_status says where the job stands on the shared box — in \
+                the queue behind whom, or which node and step. Speak the language they write in, and keep it short.
                 """
         case .motion:
             return """
@@ -888,7 +877,10 @@ final class StudioAgent: ObservableObject {
                 is old stone paving…") — the same number of things in the same places, so the model and the picture \
                 agree; `who` is who performs (omit for her). Use until: "model" and look at the grey model's first frame \
                 (motion_status(take)) before the pictures and the filming; about six minutes of model and six of H3 \
-                draft per ten seconds. Speak the language they write in, and keep it short.
+                draft per ten seconds. The first frame is then composed from the grey model, the person and the place \
+                and pinned (it holds the far background, which otherwise drifts): at until: "still" look at it — the \
+                figure where the grey one stands, in its pose; if it is wrong, motion_continue with first_words (your \
+                English, saying the pose) composes it again. Speak the language they write in, and keep it short.
                 """
         case .comfy:
             return """
@@ -919,7 +911,12 @@ final class StudioAgent: ObservableObject {
                 create the project workspace as the guide says and the board finds it by itself (never run \
                 `backlot open`). Generate on the box with its local tools qwen_image, h3_video and minimax_music — read \
                 .agents/skills/minimax-h3-local/SKILL.md first — instead of paid APIs. A project already under \
-                projects/ can be carried on from its checkpoints. \(Self.seeing) The box is slow — about 2 minutes a \
+                projects/ can be carried on from its checkpoints. A score shorter than the film (MiniMax picks its own \
+                length) is made long enough with music_extend — it loops back where the music matches itself and lists \
+                each seam to listen to — rather than asked for again. A long job: start, then wait (up to fifteen \
+                minutes; your other calls go on meanwhile) instead of a run that sleeps; job and wait say what the \
+                box's ComfyUI is doing — whose job, which step, what waits, the last interruption. A checkpoint that \
+                fails lists every problem at once. \(Self.seeing) The box is slow — about 2 minutes a \
                 still, 10 minutes a 5-second H3 shot, about 6 seconds of work per second of music (minimax_music's text \
                 stage runs on the box's GPU now: 3 minutes for 30 s) — and does one heavy job \
                 at a time: say what a plan will cost in time, wait for a yes, and start the music early. A song with a \
@@ -950,7 +947,9 @@ final class StudioAgent: ObservableObject {
                 开做前说清要多久（ltx 约 3 分钟一个场景）。ltx 的动法可以用 motion_prompts 每个场景写一句英文（镜头怎么走、画面里什么在动），\
                 不写就按画面描述轻轻地动；图表、文字类的画面用 pan 更稳（LTX 可能把线条和字弄变形）。ltx 的片段会先用 RIFE 补成两倍帧\
                 （几秒一个场景），场景比片段长、要放慢时也不卡；ComfyUI 被别的标签占着时那几场不补，结果里的 motion 会写明。以前逐句配音的片子每句像换了个人：\
-                pixelle_rework revoice true 重配成一个人。模板只有 image_*（每个场景一张 AI 图）\
+                pixelle_rework revoice true 重配成一个人。某几场的图坏了：pixelle_rework redraw [场号] 只重画这几场（约 50 秒一场，\
+                image_prompts 可以给新的英文画面描述），别的场景照旧；pixelle_wait 带 task 等的就是那个任务，别处又开了新任务也不会跟丢。\
+                模板只有 image_*（每个场景一张 AI 图）\
                 和 static_*（纯文字，不用 ComfyUI）能在盒子上跑；大多数模板的页脚默认是 Pixelle 自己的署名（@Pixelle.AI），用 template_params\
                 （author / brand / describe / signature，"" 隐藏）换成对方的。音乐：盒子上的 localkin-wonder-33s.wav 可以用（bgm_volume 约 0.45，\
                 对方要听得清音乐）；绝不用 Pixelle 自带的 default.mp3——它是《最终幻想 IX》Melodies of Life 的 OC ReMix 改编，有版权，不能出现在\

@@ -1,4 +1,5 @@
 import Foundation
+import Network
 
 /// The model servers on the box, as things that can be started and stopped.
 ///
@@ -50,6 +51,36 @@ final class BoxServices: ObservableObject {
     @Published private(set) var states: [Kind: State] = [:]
     @Published private(set) var memoryFree: Int?
     @Published private(set) var note: String?
+    /// The last look at the box failed as "offline" while this Mac is online: the app is kept
+    /// off the local network, and the services may be up. See `localNetworkBlocked`.
+    @Published private(set) var blocked = false
+
+    private init() { _ = Self.path }
+
+    // MARK: - Kept off the local network
+
+    /// This Mac's own network, watched from launch.
+    nonisolated private static let path: NWPathMonitor = {
+        let monitor = NWPathMonitor()
+        monitor.start(queue: DispatchQueue(label: "kinclaw.box.path"))
+        return monitor
+    }()
+
+    /// Whether a failed request to the box is macOS's Local Network permission rather than the
+    /// box: "offline" (or no route to the host) while this Mac is online. Then curl and the
+    /// system's python reach every service and the app reaches none — and the app said they were
+    /// all down (Motion's notebook, 2026-09-29).
+    nonisolated static func localNetworkBlocked(_ error: Error) -> Bool {
+        let error = error as NSError
+        let offline = error.domain == NSURLErrorDomain && error.code == NSURLErrorNotConnectedToInternet
+        let noRoute = error.domain == NSPOSIXErrorDomain && error.code == Int(EHOSTUNREACH)
+        return (offline || noRoute) && path.currentPath.status == .satisfied
+    }
+
+    static let blockedAdvice = "这台 Mac 上的 KinClaw 被挡在局域网外了：系统说「离线」，可这台 Mac 的网络是通的——是 macOS 的本地网络权限。"
+        + "系统设置 → 隐私与安全性 → 本地网络，打开 KinClaw（盒子上的服务本身多半好好的）"
+
+    private func setBlocked(_ value: Bool) { if blocked != value { blocked = value } }
 
     // MARK: - Where things are
 
@@ -145,8 +176,14 @@ final class BoxServices: ObservableObject {
         guard let url = await URL(string: base(kind) + path) else { return false }
         var request = URLRequest(url: url, timeoutInterval: 3)
         request.httpMethod = "GET"
-        guard let (_, response) = try? await URLSession.shared.data(for: request) else { return false }
-        return (response as? HTTPURLResponse)?.statusCode == 200
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            await shared.setBlocked(false)
+            return (response as? HTTPURLResponse)?.statusCode == 200
+        } catch {
+            if localNetworkBlocked(error) { await shared.setBlocked(true) }
+            return false
+        }
     }
 
     /// How much of the box's memory is free, which is the number that decides

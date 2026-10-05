@@ -202,18 +202,28 @@ extension FilmStudio {
         guard (response as? HTTPURLResponse)?.statusCode == 200, let id = answer["prompt_id"] as? String else {
             throw Failure.message("ComfyUI 不接配乐：\(String(data: data, encoding: .utf8)?.prefix(300) ?? "")")
         }
+        ComfyWatch.shared.began(id, what: "配乐", base: base)
+        defer { ComfyWatch.shared.ended(id) }
         // MiniMax Music 3's text stage is ~2.7 s a token on the box's CPU and a
         // 45 s piece is over a thousand tokens: fifty minutes (thirty was too
         // few). On the GPU it is minutes, but the deadline is the CPU's.
         let deadline = Date().addingTimeInterval(3 * 3600)
         while Date() < deadline {
-            try await Task.sleep(nanoseconds: 4_000_000_000)
+            do {
+                try await Task.sleep(nanoseconds: 4_000_000_000)
+            } catch {
+                // Stopped here, stopped on the box: a score nobody will hear holds it for minutes.
+                await ComfyWatch.interrupt(id, base: base, by: "KinClaw Film（配乐）", why: "在 app 里停下了")
+                throw error
+            }
             guard let hurl = URL(string: base + "/history/\(id)"),
                   let (hdata, _) = try? await URLSession.shared.data(from: hurl),
                   let history = (try? JSONSerialization.jsonObject(with: hdata)) as? [String: Any],
                   let entry = history[id] as? [String: Any] else { continue }
             let status = entry["status"] as? [String: Any]
-            if status?["status_str"] as? String == "error" { throw Failure.message("配乐出错（MiniMax Music 3）") }
+            if status?["status_str"] as? String == "error" {
+                throw Failure.message(await ComfyWatch.reason(id, what: "配乐", base: base) ?? "配乐出错（MiniMax Music 3）")
+            }
             guard status?["completed"] as? Bool == true else { continue }
             let saved = ((entry["outputs"] as? [String: Any])?["9"] as? [String: Any]).flatMap { $0["audio"] as? [[String: Any]] ?? $0["images"] as? [[String: Any]] } ?? []
             guard let file = saved.first, let name = file["filename"] as? String else { throw Failure.message("配乐跑完了但没存下来") }
