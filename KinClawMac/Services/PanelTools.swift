@@ -500,6 +500,75 @@ enum PanelTools {
             ],
         ],
         [
+            "name": "live_film",
+            "description": """
+                活画: a huashu-art-motion film played live in a window of the app — the same code that renders its \
+                video, drawn in real time over its song, for the person to play, scrub, slow down and turn its \
+                knobs. `action`: "open" (default) shows a film kept on this Mac (`name`: its id or a piece of its \
+                title; default the last one); "list" names them; "fetch" brings a film from the box once and opens \
+                it — `box`: its huashu engine folder there (index.html, engine.js, scenes/, lib/, eras_<film>.js), \
+                `film`: the <film> of eras_<film>.js, `song`: its song on the box, `title`, `name` (its id) — and \
+                again for a kept film brings over what changed; "play", "pause", "seek" (`at`, seconds) and \
+                "rate" (`rate` 0.25–1) drive the open window; "narrate" (讲给我听) has Claude write a few lines \
+                for what appears when, read from the film's own code, said by the companion's voice in step with \
+                the picture — for a film without a song, half a minute; "export" (存成视频) draws it frame by \
+                frame into a 1080p 60 fps MP4 in its folder, knobs and lettering as the window has them, its \
+                voice or song under it — about 40 ms a frame (12 s in half a minute). A film can give the person knobs: live_<film>.js \
+                beside its eras file sets window.LIVE_KNOBS = [{id, label, min, max, value, step, apply(v)}], \
+                apply changing what its drawing reads each frame (a wind, a petal count); it is read after the \
+                film loads. A frame takes 4–15 ms here, so 60 fps.
+                """,
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "action": ["type": "string", "description": "open (default) | list | fetch | play | pause | seek | rate | narrate | export"],
+                    "name": ["type": "string", "description": "The film's id or a piece of its title."],
+                    "box": ["type": "string", "description": "fetch: the huashu engine folder on the box, e.g. ~/kin-avatar/test/huashu-qianying/engine."],
+                    "film": ["type": "string", "description": "fetch: <film> of eras_<film>.js."],
+                    "song": ["type": "string", "description": "fetch: the song on the box."],
+                    "title": ["type": "string", "description": "fetch: what the window is called."],
+                    "at": ["type": "number", "description": "seek: seconds into the film."],
+                    "rate": ["type": "number", "description": "rate: 0.25, 0.5 or 1."],
+                ],
+            ],
+        ],
+        [
+            "name": "live_draw",
+            "description": """
+                画给我看: has Claude (this Mac's subscription) draw a short live picture that explains something in \
+                huashu-art-motion's way — 8–15 seconds drawn in code, with knobs that let the person explore the \
+                idea — played live in the app; 活画's window opens by itself when it is done, in two to four \
+                minutes. `topic`: what to draw (their question); `context`: what to explain about it (the answer \
+                you gave). `action`: "draw" (default) starts one and answers at once with its id; "status" says \
+                where each one stands. In a conversation the person can also press 「画给我看」 under an answer.
+                """,
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "action": ["type": "string", "description": "draw (default) | status"],
+                    "topic": ["type": "string", "description": "What to draw: their question."],
+                    "context": ["type": "string", "description": "What to explain about it: the answer you gave."],
+                ],
+            ],
+        ],
+        [
+            "name": "live_check",
+            "description": """
+                画给我看's check, for the one drawing it: loads a drawing (`id`, its folder under <art>/live) in the \
+                WebKit the person will watch it in, and answers with what went wrong — boot errors, exceptions \
+                while drawing, a knob that breaks it, a frame of one flat colour, frames slower than 16 ms — and \
+                the frames at `times` (seconds; default four across it), as pictures.
+                """,
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "id": ["type": "string", "description": "The drawing's id (its folder's name)."],
+                    "times": ["type": "array", "items": ["type": "number"], "description": "Seconds to look at."],
+                ],
+                "required": ["id"],
+            ],
+        ],
+        [
             "name": "talking_video_status",
             "description": "How the talking videos are going (talking_video): the newest few, or the one named — piece by piece, with the files.",
             "inputSchema": ["type": "object", "properties": ["name": ["type": "string", "description": "The job's name or title."]]],
@@ -1917,6 +1986,73 @@ enum PanelTools {
             } catch {
                 return (error.localizedDescription, true)
             }
+        case "live_film":
+            let live = LiveFilm.shared
+            let name = args["name"] as? String
+            switch (args["action"] as? String ?? "open").lowercased() {
+            case "list":
+                return (live.report(), false)
+            case "fetch":
+                guard let box = (args["box"] as? String)?.trimmingCharacters(in: .whitespaces), !box.isEmpty,
+                      let film = (args["film"] as? String)?.trimmingCharacters(in: .whitespaces), !film.isEmpty else {
+                    return ("fetch 要 box（盒子上 huashu 引擎的文件夹）和 film（eras_<film>.js 的 <film>）", true)
+                }
+                let title = (args["title"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? name ?? film
+                do {
+                    let kept = try await live.fetch(id: name ?? film, title: title, box: box, film: film, song: args["song"] as? String)
+                    await live.show(kept.id)
+                    await live.untilReady()
+                    return (live.player.ready ? "「\(kept.title)」拿过来了，窗口开着：\(live.report())" : "拿过来了，但没画起来：\(live.player.trouble ?? live.trouble ?? "不知道为什么")", !live.player.ready)
+                } catch {
+                    return (error.localizedDescription, true)
+                }
+            case "narrate", "export":
+                guard let film = live.film(named: name) else { return ("没有这部活画\(name.map { "：\($0)" } ?? "")", true) }
+                do {
+                    if (args["action"] as? String ?? "").lowercased() == "narrate" {
+                        let lines = try await LiveOut.shared.narrate(film.id)
+                        return ("「\(film.title)」有了解说（\(lines.count) 句）：" + lines.map { String(format: "%.1f 秒 %@", $0.t, $0.text) }.joined(separator: "；"), false)
+                    }
+                    let shown = live.current?.id == film.id && live.player.ready
+                    let knobs = shown ? Dictionary(live.player.knobs.map { ($0.id, $0.value) }, uniquingKeysWith: { first, _ in first }) : [:]
+                    let began = Date()
+                    let made = try await LiveOut.shared.export(film.id, knobs: knobs, lettering: shown ? live.player.lettering : true)
+                    return ("存好了（\(Int(Date().timeIntervalSince(began))) 秒）：\(made.path)", false)
+                } catch {
+                    return (error.localizedDescription, true)
+                }
+            case "play", "pause", "seek", "rate":
+                if live.current == nil || !live.player.ready {
+                    await live.show(name)
+                    await live.untilReady()
+                }
+                guard live.player.ready else { return (live.player.trouble ?? live.trouble ?? "活画没开起来", true) }
+                switch (args["action"] as? String ?? "").lowercased() {
+                case "play": live.player.play()
+                case "pause": live.player.pause()
+                case "seek": live.player.seek((args["at"] as? Double) ?? (args["at"] as? Int).map(Double.init) ?? 0)
+                default: live.player.setRate((args["rate"] as? Double) ?? (args["rate"] as? Int).map(Double.init) ?? 1)
+                }
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                return (live.report(), false)
+            default:
+                await live.show(name)
+                await live.untilReady()
+                return (live.player.ready ? live.report() : (live.player.trouble ?? live.trouble ?? "活画没开起来"), !live.player.ready)
+            }
+        case "live_draw":
+            if (args["action"] as? String ?? "draw").lowercased() == "status" { return (LiveDraw.shared.report(), false) }
+            guard let topic = (args["topic"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !topic.isEmpty else {
+                return ("live_draw 要 topic：画什么（他们的问题）", true)
+            }
+            let id = LiveDraw.shared.start(question: topic, answer: (args["context"] as? String) ?? topic, message: nil)
+            return ("开始画「\(topic.prefix(40))」（\(id)）：Claude 在用 huashu 的画法画，两到四分钟，画好后活画的窗口会自己打开。live_draw status 看进度", false)
+        case "live_check":
+            guard let id = (args["id"] as? String)?.trimmingCharacters(in: .whitespaces), !id.isEmpty else {
+                return ("live_check 要 id（这幅画的文件夹名）", true)
+            }
+            let times = (args["times"] as? [Any])?.compactMap { ($0 as? Double) ?? ($0 as? Int).map(Double.init) }
+            return await LiveDraw.shared.check(id, times: times)
         case "talking_video_status":
             return (TalkingVideo.shared.report(args["name"] as? String), false)
         case "talking_video_continue":

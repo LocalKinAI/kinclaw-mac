@@ -70,6 +70,9 @@ struct MontageView: View {
             Button { Task { await LyricVideo.shared.show() } } label: { Label("歌词视频", systemImage: "music.quarternote.3") }
                 .buttonStyle(.quiet)
                 .help("JIZURA：一首歌加上带时间的歌词（LRC），每句歌词各有版式、进场和运镜，卡着节拍，导出 MP4。也可以让 agent 用 lyric_video 自动做")
+            Button { Task { await LiveFilm.shared.show() } } label: { Label("活画", systemImage: "play.rectangle.on.rectangle") }
+                .buttonStyle(.quiet)
+                .help("huashu 的动画在 app 里实时播：跟着歌走，能拖、能慢放、能调片子给的旋钮。片子先由 agent 用 live_film 从盒子拿过来")
             if studio.board == .up {
                 HStack(spacing: 2) {
                     Button { studio.web?.goBack() } label: { Image(systemName: "chevron.left") }

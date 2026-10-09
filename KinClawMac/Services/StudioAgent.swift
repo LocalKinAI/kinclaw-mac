@@ -751,7 +751,9 @@ final class StudioAgent: ObservableObject {
                       // A photograph saying a script (TalkingVideo): a presenter, a greeting, a 口播.
                       "talking_video", "talking_video_status", "talking_video_continue",
                       // A lyric video for a song (JIZURA in the app).
-                      "lyric_video"]
+                      "lyric_video",
+                      // A huashu film played live in the app (活画), and a live drawing of an answer (画给我看).
+                      "live_film", "live_draw"]
         let comfy = ["comfy_templates", "comfy_run", "comfy_import", "comfy_status", "comfy_stop"]
         let film = ["film_guide", "film_make", "film_status", "film_shot", "film_edit", "film_cast", "film_continue",
                     "film_frames", "film_count", "film_fix_picture", "film_grade", "film_reshoot", "film_recut",
@@ -767,7 +769,7 @@ final class StudioAgent: ObservableObject {
         case .film: return film + comfy + studio + team + ["studio_note"]
         case .motion: return ["motion_find", "motion_make", "motion_status", "motion_stop", "motion_continue", "video_frames"] + studio + team + ["studio_note"]
         case .comfy: return comfy + ["video_frames"] + studio + team + ["studio_note"]
-        case .montage: return comfy + ["talking_video", "talking_video_status", "talking_video_continue", "lyric_video"] + team + ["studio_note"]
+        case .montage: return comfy + ["talking_video", "talking_video_status", "talking_video_continue", "lyric_video", "live_film"] + team + ["studio_note"]
         case .pixelle: return pixelle + comfy + ["video_frames"] + studio + team + ["studio_note"]
         // A post may carry a video: Pixelle's, made or found, from here too.
         case .social: return social + pixelle + comfy + ["video_frames"] + studio + team + ["studio_note"]
@@ -984,7 +986,10 @@ final class StudioAgent: ObservableObject {
                 in `files`): about 17 seconds of work per second of music — slower than minimax_music now, but it \
                 sings the words. A lyric video (文字PV) for a song is lyric_video, in the app: give it the song and \
                 an LRC whose lines you timed from the song (cut the sung phrases from the separated vocals and have \
-                the box's ASR hear each); about half a minute. The \
+                the box's ASR hear each); about half a minute. A huashu-art-motion film can also be played live in \
+                the app — 活画, live_film: fetch its engine folder from the box once (box, film, song) and it opens; \
+                they play, scrub and slow it over its song, and turn the knobs a live_<film>.js beside its eras file \
+                gives (window.LIVE_KNOBS — write one that suits the film: a wind, petals, light). The \
                 file comfy_run brings back is also on the box at ~/ComfyUI/output/audio/ under the same name, for \
                 OpenMontage to use. A request that starts from a Seedance prompt or an awesome-seedance template (the \
                 tab's Seedance button; kept on this Mac in \(SeedanceLibrary.folder.path), each case with its H3 retest) is \

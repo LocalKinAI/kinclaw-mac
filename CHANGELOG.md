@@ -8,6 +8,36 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Added — 活画 and 画给我看: answers drawn as live pictures, narrated, saved as video
+
+「huashu和claude rel motion给我很大启发」 → the code that renders a huashu film, played live in the app;
+then any answer drawn that way, by Claude, and told.
+
+- **活画** (`LiveFilm`, `LivePlayer`, Montage's 「活画」, `live_film`): a huashu-art-motion film runs in a
+  WKWebView of its own — its engine page from a scheme of the app's (its scenes load by synchronous
+  XHR, so every file is an HTTP 200), the song in the page, the picture on its own clock pulled back to
+  the song's when they drift 80 ms apart. WebKit's canvas `filter` is off by default and huashu's ink is
+  mostly blur — 《倩影》's mist came out as hard white ellipses — so it is switched on for these views
+  through WebKit's feature list (CanvasFiltersEnabled). 4–15 ms a frame: 60 fps through 《倩影》's
+  heaviest scenes; every scene is drawn once before it plays (a scene's first frame paints its layers,
+  up to 265 ms). Play, scrub across the scenes, 0.25× / 0.5×, loop, lettering off, and the knobs a film
+  gives in live_<film>.js (《倩影》: 风, 落花). A film comes from the box once (`live_film` fetch) and
+  again with 「从盒子更新」.
+- **画给我看** (`LiveDraw`, `LiveDrawCard`, `live_draw`, `live_check`): under the newest answer in Chat and
+  Cowork. Claude — this Mac's subscription — draws it in huashu's way, in the drawing's own folder: it
+  picks one of huashu's explainer grammars, reads its card and its demo, writes 8–15 s of scenes and one
+  to three knobs, and looks at its own frames through live_check — the same WebKit; errors, the knobs at
+  their ends, a flat frame, its speed — until it is right. Compound interest: one shot, two knobs, 1.5
+  minutes. The drawing plays in its card (one at a time), 「大窗口」 opens it in 活画, 「改一下」 goes on in
+  the same Claude conversation.
+- **讲给我听** (`LiveOut`): Claude reads the drawing's own code for when each thing appears and writes a few
+  lines; the companion's voice says each — the voice server's speaker, the same one for every line (8102
+  designs a new voice per call) — laid on one track that becomes the film's song, so it plays in step and
+  the last shot holds when the voice runs on. Five lines in 9 s, heard back word for word by the box's ASR.
+- **存成视频** (`LiveOut`): drawn frame by frame in a player off screen — the same WebKit, the knobs and the
+  lettering as the person left them — encoded 1080p60 H.264 with AVAssetWriter, the voice or the song laid
+  under it: 16.7 s in 15 s.
+
 ### Added — Studio: agents that say what they can do; Seedance 库, Mixar and lyric videos
 
 - **「你能做什么？」** (「你可以让每个agent，我问他们时，他们可以告诉我都能做什么吗」): every

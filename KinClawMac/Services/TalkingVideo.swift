@@ -290,7 +290,7 @@ final class TalkingVideo: ObservableObject {
 
     /// A voice id from the voice server (`/synthesize`, the companion's own
     /// request), or a voice designed from words by the film narrator service.
-    private static func voice(_ text: String, voice: String?, description: String?) async -> Data? {
+    static func voice(_ text: String, voice: String?, description: String?) async -> Data? {
         if let description, !description.isEmpty {
             let chinese = text.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) }
             let narrator = FilmStudio.Narrator(speaker: "", language: chinese ? "zh" : "en", instruct: nil, voice: description)

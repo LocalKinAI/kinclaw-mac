@@ -2480,6 +2480,12 @@ struct SpotlightContentView: View {
             ForEach(msg.attachments) { attachment in
                 AttachmentView(attachment: attachment)
             }
+            // 「画给我看」: the answer drawn as a live picture, under it (LiveDraw).
+            if !showCursor, !msg.content.isEmpty, mode == .chat || mode == .cowork {
+                LiveDrawCard(message: msg, question: question(answering: msg),
+                             newest: msg.id == messages.last(where: { $0.role == .assistant })?.id)
+                    .padding(.top, 2)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -2496,6 +2502,12 @@ struct SpotlightContentView: View {
         // each block-level Text view doesn't carry it itself, but
         // SwiftUI inherits this modifier from the enclosing scope.
         .textSelection(.enabled)
+    }
+
+    /// The person's words an answer answers: the last of theirs before it.
+    private func question(answering msg: ChatMessage) -> String {
+        guard let index = messages.firstIndex(where: { $0.id == msg.id }) else { return "" }
+        return messages[..<index].last(where: { $0.isUser })?.content ?? ""
     }
 
     @ViewBuilder
