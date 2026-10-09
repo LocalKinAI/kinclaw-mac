@@ -24,11 +24,17 @@ import SwiftUI
 struct MarkdownView: View {
     let text: String
 
+    @Environment(\.uiCardSlot) private var slot
+
     var body: some View {
+        let blocks = MarkdownParser.parse(text)
+        // A reply's 「画给我看」 goes into its first card only.
+        let firstCard = blocks.firstIndex { if case .codeBlock(let lang, _) = $0 { return lang?.lowercased() == "ui" }; return false }
         VStack(alignment: .leading, spacing: 6) {
-            ForEach(Array(MarkdownParser.parse(text).enumerated()), id: \.offset) {
-                _, block in
+            ForEach(Array(blocks.enumerated()), id: \.offset) {
+                index, block in
                 blockView(block)
+                    .environment(\.uiCardSlot, index == firstCard ? slot : nil)
             }
         }
     }
@@ -63,7 +69,12 @@ struct MarkdownView: View {
             }
 
         case .codeBlock(let lang, let body):
-            CodeBlockView(language: lang, content: body)
+            if lang?.lowercased() == "ui" {
+                // 秒出组件卡: the reply's small interface, drawn here (UICard).
+                UICardView(spec: body)
+            } else {
+                CodeBlockView(language: lang, content: body)
+            }
 
         case .blockquote(let s):
             HStack(alignment: .top, spacing: 0) {

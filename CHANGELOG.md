@@ -8,6 +8,21 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Added — 秒出组件卡: answers with a small interface of their own, and beside her
+
+The other speed of an answer (after OpenAI's Intelligent UI, 2026-10-08): the model writes a ```ui block,
+one element a line, and it is drawn natively as it streams (`UICard`) — card, text, input / slider /
+toggle (numbers to change), calc (a formula worked out again at once, here, by a small evaluator of our
+own: + − × ÷ ^ and min max round abs sqrt pow log…; a calc's label is a variable for the ones after it),
+stat, compare / vs, row, step, time, bar, check, and ask (a button that says its words). The pilot and
+the companion souls teach it (kinclaw). With kimi-k2.6, a mortgage question came back as a calculator
+(月供 4,490.45 元, right) and a joke with no card. A card is not read out, an unclosed one included.
+
+- An answer's 「画给我看」 sits inside its card, and the drawing plays there.
+- 陪伴模式: her latest reply's card, or its drawing, is beside her. 「画给我看」, typed or said, draws the
+  last answer without a turn for the model; in companion mode she says she will, and when it is drawn her
+  voice tells it while it moves.
+
 ### Added — 活画 and 画给我看: answers drawn as live pictures, narrated, saved as video
 
 「huashu和claude rel motion给我很大启发」 → the code that renders a huashu film, played live in the app;

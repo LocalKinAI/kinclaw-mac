@@ -391,6 +391,7 @@ struct SpotlightContentView: View {
                                   speaker.stop()
                                   answerQuestion(q, text: text)
                               },
+                              aside: companionAside(),
                               onExit: { exitCompanionMode() },
                               onFetchArt: { showingArtPicker = true },
                               onPreviewVoice: { previewVoice() },
@@ -2480,8 +2481,8 @@ struct SpotlightContentView: View {
             ForEach(msg.attachments) { attachment in
                 AttachmentView(attachment: attachment)
             }
-            // 「画给我看」: the answer drawn as a live picture, under it (LiveDraw).
-            if !showCursor, !msg.content.isEmpty, mode == .chat || mode == .cowork {
+            // 「画给我看」: the answer drawn as a live picture, under it (LiveDraw) — or inside its card.
+            if !showCursor, !msg.content.isEmpty, mode == .chat || mode == .cowork, !msg.content.contains("```ui") {
                 LiveDrawCard(message: msg, question: question(answering: msg),
                              newest: msg.id == messages.last(where: { $0.role == .assistant })?.id)
                     .padding(.top, 2)
@@ -2504,6 +2505,48 @@ struct SpotlightContentView: View {
         .textSelection(.enabled)
     }
 
+    /// 「画给我看」「画出来看看」「再画给我看」… on its own.
+    static func asksToDraw(_ text: String) -> Bool {
+        let said = text.trimmingCharacters(in: CharacterSet(charactersIn: " \n。！!？?，,~～"))
+        return said.range(of: #"^(请|你)?(再)?(帮我)?画(出来|一下|个图)?(给我)?(看|看看)(吧|呗|一下)?$"#,
+                          options: .regularExpression) != nil
+    }
+
+    /// The first ```ui block of a reply, as far as it is written.
+    static func firstCard(in text: String) -> String? {
+        guard let open = text.range(of: "```ui") else { return nil }
+        let rest = text[open.upperBound...]
+        let body = rest.range(of: "```").map { rest[..<$0.lowerBound] } ?? rest
+        return String(body.drop(while: { $0 != "\n" }).dropFirst())
+    }
+
+    /// Beside her in companion mode: her latest reply's card (as it is written), or its drawing.
+    private func companionAside() -> AnyView? {
+        guard let reply = messages.last(where: { $0.role == .assistant }), !reply.content.isEmpty else { return nil }
+        let card = Self.firstCard(in: reply.content)
+        guard card != nil || LiveDraw.shared.byMessage[reply.id] != nil else { return nil }
+        let streaming = isStreaming && reply.id == messages.last?.id
+        let draw = streaming ? nil : AnyView(LiveDrawCard(message: reply, question: question(answering: reply), newest: true))
+        let ask: (String) -> Void = { words in
+            guard !isStreaming else { return }
+            inputText = words
+            send()
+        }
+        if let card {
+            return AnyView(UICardView(spec: card).environment(\.uiCardSlot, draw).environment(\.uiCardAsk, ask))
+        }
+        return draw.map { view in
+            AnyView(view.padding(12).background(RoundedRectangle(cornerRadius: 12).fill(Theme.card)))
+        }
+    }
+
+    /// An answer with a card keeps its 「画给我看」 inside the card, once it is written out.
+    private func drawSlot(_ msg: ChatMessage, showCursor: Bool) -> AnyView? {
+        guard !showCursor, !msg.isUser, mode == .chat || mode == .cowork, msg.content.contains("```ui") else { return nil }
+        return AnyView(LiveDrawCard(message: msg, question: question(answering: msg),
+                                    newest: msg.id == messages.last(where: { $0.role == .assistant })?.id))
+    }
+
     /// The person's words an answer answers: the last of theirs before it.
     private func question(answering msg: ChatMessage) -> String {
         guard let index = messages.firstIndex(where: { $0.id == msg.id }) else { return "" }
@@ -2522,6 +2565,14 @@ struct SpotlightContentView: View {
         // during tool calls.
         VStack(alignment: .leading, spacing: 4) {
             MarkdownView(text: msg.content)
+                // A card's ask buttons say their words as the person's next message;
+                // its 「画给我看」 sits inside the card.
+                .environment(\.uiCardAsk, { words in
+                    guard !isStreaming else { return }
+                    inputText = words
+                    send()
+                })
+                .environment(\.uiCardSlot, drawSlot(msg, showCursor: showCursor))
             if showCursor {
                 BlinkingCursor()
             }
@@ -2922,7 +2973,11 @@ struct SpotlightContentView: View {
         let tail = ttsPending.trimmingCharacters(in: .whitespacesAndNewlines)
         ttsPending = ""
         guard speaker.isStreamOpen else { return }
-        if !tail.isEmpty { speaker.stream(tail) }
+        // A fence left open at the end (a card the model did not close) is not read out.
+        let spoken = tail.components(separatedBy: "```").count % 2 == 0
+            ? String(tail[..<(tail.range(of: "```", options: .backwards)?.lowerBound ?? tail.endIndex)]) : tail
+        let words = Self.dropFencedCode(spoken).trimmingCharacters(in: .whitespacesAndNewlines)
+        if !words.isEmpty { speaker.stream(words) }
         speaker.endStream()
     }
 
@@ -3635,6 +3690,19 @@ struct SpotlightContentView: View {
         // → click send" without typing anything implies "look at
         // this").
         guard !typed.isEmpty || !pendingAttachments.isEmpty else { return }
+
+        // 「画给我看」, typed or said: the last answer drawn as a live picture, here — not
+        // a turn for the model. In companion mode she says so, and says it when it is drawn.
+        if pendingAttachments.isEmpty, Self.asksToDraw(typed),
+           let answer = messages.last(where: { $0.role == .assistant && !$0.content.isEmpty }) {
+            inputText = ""
+            LiveDraw.shared.start(question: question(answering: answer), answer: answer.content,
+                                  message: answer.id, narrate: companionMode)
+            if companionMode {
+                speaker.speak("好，我画给你看，一两分钟就好。", hostname: hostname) { resumeListeningIfConversing() }
+            }
+            return
+        }
 
         // Wrap message-list mutations in a SwiftUI animation block
         // so the welcome-card → bubbles transition + bubble append

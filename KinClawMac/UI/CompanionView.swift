@@ -55,6 +55,9 @@ struct CompanionView: View {
     let onPromptDecision: (String) -> Void
     let onPromptAnswer: (String) -> Void
 
+    /// What her latest reply carries — its card, its drawing — beside her (UICard, LiveDraw).
+    var aside: AnyView? = nil
+
     let onExit: () -> Void
     let onFetchArt: () -> Void
     /// Speak the sample line in the voice just chosen.
@@ -243,6 +246,20 @@ struct CompanionView: View {
                 }
             }
             .animation(.easeOut(duration: 0.2), value: prompt)
+            // Her card or her drawing, at her side: she talks, it moves.
+            if let aside {
+                GeometryReader { space in
+                    HStack {
+                        Spacer()
+                        ScrollView(.vertical, showsIndicators: false) { aside }
+                            .frame(width: min(560, space.size.width * 0.46))
+                            .frame(maxHeight: space.size.height - 120)
+                            .padding(.trailing, 20)
+                    }
+                    .frame(maxHeight: .infinity)
+                }
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
         }
         .background(Color.black)
         .onAppear {
