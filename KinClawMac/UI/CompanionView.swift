@@ -517,7 +517,7 @@ struct CompanionView: View {
             .padding(.vertical, 4)
             .background(Capsule().fill(.black.opacity(0.35)))
         }
-        .menuStyle(.borderlessButton)
+        .menuStyle(.button).buttonStyle(.plain)
         .menuIndicator(.hidden)
         .fixedSize()
         .help("她的形象和衣服：~/.kinclaw/avatars/ 里的 VRM 模型")
@@ -566,7 +566,7 @@ struct CompanionView: View {
             .padding(.vertical, 6)
             .background(Capsule().fill(.black.opacity(0.35)))
         }
-        .menuStyle(.borderlessButton)
+        .menuStyle(.button).buttonStyle(.plain)
         .menuIndicator(.hidden)
         .fixedSize()
         .help("换个声音 · 每次换都会念一句给你听")
@@ -655,7 +655,7 @@ struct CompanionView: View {
                 .padding(.vertical, 6)
                 .background(Capsule().fill(.black.opacity(0.35)))
             }
-            .menuStyle(.borderlessButton)
+            .menuStyle(.button).buttonStyle(.plain)
             .menuIndicator(.hidden)
             .fixedSize()
             .help("嘴型跟着 Kokoro 的声音动。背景还是上面那套，人站在前面。")
@@ -690,7 +690,7 @@ struct CompanionView: View {
             .padding(.vertical, 6)
             .background(Capsule().fill(.black.opacity(0.35)))
         }
-        .menuStyle(.borderlessButton)
+        .menuStyle(.button).buttonStyle(.plain)
         .menuIndicator(.hidden)
         .fixedSize()
         .help("换一套背景：~/.kinclaw/companion-<名字>/ 都是一套")

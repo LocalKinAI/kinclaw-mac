@@ -8,6 +8,13 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Fixed — Companion: the menus at the top left show again
+
+「陪伴模式为什么左上角那些button选项都看不见了啊」: the row of menus at the top left of
+companion mode — figure, voice, face and scene — had stopped drawing at all, while the close
+button at the right still did. They were `.menuStyle(.borderlessButton)`, which drew nothing
+there; `.menuStyle(.button)` with `.buttonStyle(.plain)` looks the same and shows.
+
 ### Added — Companion: mini-turns, the listening half of Griffin
 
 Tavus's Griffin (2026-10-01) decides every few hundred milliseconds whether to stay quiet,
