@@ -53,6 +53,7 @@ CUDA, a dependency its environment had moved past). What runs on what, for the a
 | `localkin/kin-faces.swift` | build, then `~/OpenMontage/.localkin/bin/kin-faces` | faces by Apple's Vision in face_tracker's JSON (`swiftc -O -target arm64-apple-macos14 …`) |
 | `skills/localkin-pipelines/SKILL.md` | `~/OpenMontage/.agents/skills/localkin-pipelines/` | which pipeline runs on what, and how to call the changed tools |
 | `tools/video/video_translate.py` | `~/OpenMontage/tools/video/` | `video_translate` — a video into another language: the speaker's own voice cloned from a few seconds of it (Qwen3-TTS Base, :8103), the face drawn again by Ditto to say the new words, an .srt; 10 s in about a minute |
+| `skills/seedance-on-box/SKILL.md` | `~/OpenMontage/.agents/skills/seedance-on-box/` | a Seedance prompt or awesome-seedance template turned into a plan H3 and LTX can film on the box |
 | `setup/talkers_setup.sh` | `~/kin-avatar/` | SadTalker (checkpoints 2.5 GB) and Wav2Lip (GAN weights + s3fd) with one Python 3.10 env (`~/kin-avatar/talkers`), MediaPipe 0.10.21 in its own (`~/kin-avatar/mediapipe`) |
 | `patches/wav2lip-mps-torchscript.patch` | `git apply` in `~/kin-avatar/wav2lip` | its README's weights are TorchScript now; Apple's GPU for inference and face detection |
 | `setup/om_tools_setup.sh` | `~/kin-avatar/` | Pygments, Playwright (+ its Chromium), torch + transformers + CLIP ViT-B/32, cairo (Homebrew) + manim, into OpenMontage's venv |

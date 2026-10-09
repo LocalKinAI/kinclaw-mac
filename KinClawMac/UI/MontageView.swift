@@ -19,6 +19,8 @@ struct MontageView: View {
     @State private var library = false
     /// Other people's Opus 5.5 video prompts, to start from.
     @State private var browsing = false
+    /// awesome-seedance's templates and cases, to film on the box (`SeedanceLibrary`).
+    @State private var seedance = false
 
     var body: some View {
         GeometryReader { space in
@@ -41,6 +43,7 @@ struct MontageView: View {
         .onAppear { if !agent.running { agent.shown = true } }
         .task { await studio.openBoard() }
         .sheet(isPresented: $browsing) { VideoPromptSheet(agent: agent) }
+        .sheet(isPresented: $seedance) { SeedancePromptSheet(agent: agent, film: false) }
     }
 
     // MARK: Header: where the board is, and the way home
@@ -61,6 +64,12 @@ struct MontageView: View {
             Button { browsing = true } label: { Label("提示词库", systemImage: "text.book.closed") }
                 .buttonStyle(.quiet)
                 .help("别人用 Opus 5.5 做视频的完整提示词：挑一条，改一改，交给 agent")
+            Button { seedance = true } label: { Label("Seedance", systemImage: "film.stack") }
+                .buttonStyle(.quiet)
+                .help("awesome-seedance：27 个分类模板、760 个案例（355 个在 H3 上重测过）。挑一个交给 agent，它改成盒子上 H3 / LTX 能拍的方案")
+            Button { Task { await LyricVideo.shared.show() } } label: { Label("歌词视频", systemImage: "music.quarternote.3") }
+                .buttonStyle(.quiet)
+                .help("JIZURA：一首歌加上带时间的歌词（LRC），每句歌词各有版式、进场和运镜，卡着节拍，导出 MP4。也可以让 agent 用 lyric_video 自动做")
             if studio.board == .up {
                 HStack(spacing: 2) {
                     Button { studio.web?.goBack() } label: { Image(systemName: "chevron.left") }

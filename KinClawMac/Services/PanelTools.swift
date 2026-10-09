@@ -467,6 +467,39 @@ enum PanelTools {
             ],
         ],
         [
+            "name": "lyric_video",
+            "description": """
+                A lyric video (文字PV) from a song and its timed lyrics, made in JIZURA (a lyric-video page, MIT) \
+                inside the app: every line gets its own layout, entrance and camera move on the song's beats, and \
+                the song is the soundtrack. `song`: the audio file (a YuE2 song from comfy_run, any song the person \
+                gives). `lrc`: the lyrics with each line's start, as text or a file path — one [mm:ss.xx]line per \
+                line, and a line with only a time where the singing ends. Time the lines from the song itself: \
+                for a song with a voice, cut the sung phrases (where the voice is loud) and have the box's ASR hear \
+                each, or ask the person. `aspect` 16:9 (default) | 9:16 | 1:1 | 4:5…, `resolution` 1080 (default) \
+                | 720 | 1440 | 2160, `fps` 30, `keep_centre: true` leaves the middle free to lay a singer over it, \
+                `font` a font on this Mac with every character (PingFang HK for Cantonese words), `language` \
+                zh-Hant | zh-Hans | ja | ko | en | auto, `title`. Its window shows at the bottom right of the \
+                screen while it renders — it has to be on screen — and closes by itself: a 60 s song took about \
+                half a minute. `open: true` only opens the page for the person to make one by hand.
+                """,
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "song": ["type": "string", "description": "Path of the song."],
+                    "lrc": ["type": "string", "description": "The timed lyrics: LRC text, or the path of an .lrc file."],
+                    "title": ["type": "string", "description": "The song's title, shown by some styles."],
+                    "aspect": ["type": "string", "description": "16:9 (default) | 9:16 | 4:3 | 3:4 | 1:1 | 4:5 | 21:9"],
+                    "resolution": ["type": "string", "description": "1080 (default) | 720 | 1440 | 2160"],
+                    "fps": ["type": "integer", "description": "24 | 30 (default) | 60"],
+                    "keep_centre": ["type": "boolean", "description": "Leave the middle free for a singer laid over it."],
+                    "font": ["type": "string", "description": "A font on this Mac by name, e.g. PingFang HK."],
+                    "language": ["type": "string", "description": "zh-Hant | zh-Hans | ja | ko | en | auto (default)"],
+                    "out": ["type": "string", "description": "Where to save the MP4 (default: <art>/lyric-videos/)."],
+                    "open": ["type": "boolean", "description": "Only open the page for the person."],
+                ],
+            ],
+        ],
+        [
             "name": "talking_video_status",
             "description": "How the talking videos are going (talking_video): the newest few, or the one named — piece by piece, with the files.",
             "inputSchema": ["type": "object", "properties": ["name": ["type": "string", "description": "The job's name or title."]]],
@@ -1852,6 +1885,37 @@ enum PanelTools {
             switch result {
             case .success(let job): return ("开始做「\(job.title)」（\(job.id)，\(TalkingVideo.engineTitle(job))，\(job.width)×\(job.height)）：先配音，\(job.engine == "ditto" ? "再一条拍完" : "再一段一段拍")。talking_video_status 看进度，做好的在 \(job.folder.path)", false)
             case .failure(let failure): return (failure.localizedDescription, true)
+            }
+        case "lyric_video":
+            if (args["open"] as? Bool) == true {
+                await LyricVideo.shared.show()
+                return ("JIZURA 的窗口开了：在里面匯入歌曲、讀取 LRC、挑風格、匯出 MP4；导出的文件放在 \(LyricVideo.made.path)", false)
+            }
+            guard let song = (args["song"] as? String).map({ ($0 as NSString).expandingTildeInPath }), !song.isEmpty else {
+                return ("lyric_video 要 song（歌的文件）", true)
+            }
+            guard var lrc = (args["lrc"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !lrc.isEmpty else {
+                return ("lyric_video 要 lrc（每行带 [分:秒] 时间的歌词，文字或 .lrc 文件路径）", true)
+            }
+            let lrcPath = (lrc as NSString).expandingTildeInPath
+            if !lrc.contains("\n"), FileManager.default.fileExists(atPath: lrcPath) {
+                lrc = (try? String(contentsOfFile: lrcPath, encoding: .utf8)) ?? lrc
+            }
+            var options = LyricVideo.Options()
+            options.title = args["title"] as? String
+            if let v = args["aspect"] as? String, !v.isEmpty { options.aspect = v }
+            if let v = args["resolution"] { options.resolution = "\(v)".replacingOccurrences(of: "p", with: "") }
+            if let v = (args["fps"] as? Int) ?? (args["fps"] as? Double).map(Int.init) { options.fps = v }
+            options.keepCentre = args["keep_centre"] as? Bool ?? false
+            options.font = (args["font"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            if let v = args["language"] as? String, !v.isEmpty { options.language = v }
+            let out = (args["out"] as? String).map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
+            let began = Date()
+            do {
+                let made = try await LyricVideo.shared.make(song: URL(fileURLWithPath: song), lrc: lrc, options: options, out: out)
+                return ("歌词视频做好了（\(Int(Date().timeIntervalSince(began))) 秒）：\(made.path)", false)
+            } catch {
+                return (error.localizedDescription, true)
             }
         case "talking_video_status":
             return (TalkingVideo.shared.report(args["name"] as? String), false)

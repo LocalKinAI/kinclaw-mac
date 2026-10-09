@@ -195,7 +195,8 @@ struct AgentDock<Starter: View>: View {
                 Text("用大白话说，它来操作这一页。它会先说打算怎么做，要花时间的事等你点头。")
                     .font(.kinLabel).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 FlowLayout(spacing: 6) {
-                    ForEach(examples, id: \.self) { example in
+                    // Every tab's agent answers this from the Studio guide's card for its tab.
+                    ForEach(["你能做什么？"] + examples, id: \.self) { example in
                         Button { onExample(example) } label: { ChipLabel(title: example, symbol: "sparkles") }
                             .buttonStyle(.plain)
                     }

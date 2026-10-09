@@ -8,6 +8,41 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Added — Studio: agents that say what they can do; Seedance 库, Mixar and lyric videos
+
+- **「你能做什么？」** (「你可以让每个agent，我问他们时，他们可以告诉我都能做什么吗」): every
+  tab's agent is given its tab's card from the Studio guide — what the tab is, what it makes
+  best, the requests that land there, what it is weak at, how long things take, things to
+  say — and answers from it in the person's language; it is the first chip under every
+  agent. The guide and the agent say the same thing, and a new ability is written down once.
+- **Seedance 库** (a chip in Film, a button in Montage; `SeedanceLibrary`):
+  learnprompt/awesome-seedance (code MIT, curation CC BY 4.0) — 27 templates, each a way of
+  writing one kind of video, and 760 cases with their whole prompts, 355 of them retested on
+  MiniMax H3 with a verdict. Kept in <art>/guides/awesome-seedance, a file fetched again only
+  when the repository's copy changed. A pick goes to the agent as a plan to translate for H3
+  and LTX (`seedance-on-box.md`; the box's `seedance-on-box` skill), not text to paste.
+- **Mixar for Motion**: with Mixar installed (Blender 5.2 with AI, the person's own signed-in
+  app), the Motion agent gets its MCP bridge; a set built there and rendered is a reference
+  for the 整场白模 route. Its tools are not allowed ahead: they act on the open app, and its
+  generation spends Mixar credits.
+- **歌词视频** (`LyricVideo`, `lyric_video`; 「jizura接入我的kinclaw-mac啊」, 2026-10-08):
+  JIZURA (852wa/JIZURA, MIT) inside the app — a song and its LRC become a lyric video
+  (文字PV), each line with its own layout, entrance and camera move on the beat. Its page is
+  fetched once into <art>/tools/jizura and served from a scheme of the app's own in a
+  WKWebView; the song and the LRC go into its own file inputs, its own button exports the
+  MP4, and the download is caught. Three things found on the way: the export needs its
+  window on screen (off screen WebKit throttled it to nothing for 15 minutes), so a job shows
+  it small at the bottom right and closes it after; reading an LRC asks whether to replace
+  the lyrics, answered yes; WebKit's AAC came out with no channels, so the song itself is
+  laid under the picture. A 60 s song in 9–18 s at 1080p. Every Studio agent has
+  `lyric_video`; Montage's 「歌词视频」 opens the page to make one by hand.
+- **The guide**: routes for 口播精剪, 切片, 数字人口播, 翻译配音, art animation (huashu),
+  歌词视频, 卡通角色, Seedance and Mixar; Film's card says 说话视频, singing and ACE, Motion's
+  Mixar, Montage's the twelve pipelines, video translation, huashu/onetake and lyric videos,
+  Comfy's that a YuE2 song can be sung by a photograph; 克隆声音 :8103 is in the box list.
+  The Montage agent is told about the pipelines, video_translate, Seedance and lyric_video,
+  Film's about Seedance and lyric_video.
+
 ### Added — Film: a score exactly the film's length (ACE-Step 1.5)
 
 `music_engine` on film_make and film_rescore (kept on the film; left out, the tab's choice):

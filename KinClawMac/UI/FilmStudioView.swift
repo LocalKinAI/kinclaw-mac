@@ -24,6 +24,8 @@ struct FilmStudioView: View {
     @AppStorage("kinclaw.film.byAgent") private var byAgent = true
 
     @State private var idea = ""
+    /// awesome-seedance's templates and cases (`SeedanceLibrary`).
+    @State private var seedance = false
     @State private var shots = 4
     @State private var lead = true
     @State private var trouble: String?
@@ -979,10 +981,15 @@ struct FilmStudioView: View {
                 writerMenu
                 tongueMenu
                 reviewMenu
+                Rectangle().fill(Theme.hairline).frame(width: 0.5, height: 18).padding(.horizontal, 3)
+                Button { seedance = true } label: { ChipLabel(title: "Seedance 库", symbol: "film.stack") }
+                    .buttonStyle(.plain)
+                    .help("awesome-seedance：27 个分类模板、760 个案例（355 个在 H3 上重测过）。挑一个交给 agent，它照着写法用 H3 / LTX 拍")
             }
         }
         .padding(.horizontal, 20).padding(.vertical, 12)
         .background(Theme.sidebar.opacity(0.6))
+        .sheet(isPresented: $seedance) { SeedancePromptSheet(agent: agent, film: true) }
     }
 
     private func toggleChip(_ title: String, symbol: String, on: Binding<Bool>, help: String) -> some View {

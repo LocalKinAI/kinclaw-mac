@@ -301,9 +301,10 @@ final class StudioAgent: ObservableObject {
     }
 
     /// The MCP servers it is given: the panel's tools for this tab, served by
-    /// this very binary and cut down to them; for Montage, the bridge. A panel
-    /// call may take as long as its work does (a download, a render: fifteen
-    /// minutes), and Claude Code is handed the pictures a tool names.
+    /// this very binary and cut down to them; for Montage, the bridge; for
+    /// Motion, Mixar's, once it is installed. A panel call may take as long as
+    /// its work does (a download, a render: fifteen minutes), and Claude Code is
+    /// handed the pictures a tool names.
     private func servers(for harness: AgentHarness) -> [(name: String, command: String, args: [String])] {
         var list: [(String, String, [String])] = []
         if !panelTools.isEmpty {
@@ -314,7 +315,17 @@ final class StudioAgent: ObservableObject {
         if place == .montage, let bridge = OpenMontageBridge.server {
             list.append(("openmontage", bridge.command, bridge.args))
         }
+        if place == .motion, let mixar = Self.mixar { list.append(("mixar", mixar, [])) }
         return list
+    }
+
+    /// Mixar's launcher for its MCP bridge — Blender 5.2 with AI, the person's
+    /// own signed-in app on this Mac (「用这个操作blender」, 2026-10-04) — where
+    /// Mixar puts it. Its tools are not allowed ahead: they act on the open app
+    /// and some spend Mixar credits, so each is the person's to approve.
+    nonisolated static var mixar: String? {
+        let path = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".mixar/connector/mixar-mcp").path
+        return FileManager.default.isExecutableFile(atPath: path) ? path : nil
     }
 
     private func claudeArgs(_ binary: String, _ brain: AgentBrain, _ words: String?, _ session: String?) -> [String] {
@@ -738,7 +749,9 @@ final class StudioAgent: ObservableObject {
     var panelTools: [String] {
         let studio = ["panel_show", "box_services", "image_generate", "video_generate", "video_status",
                       // A photograph saying a script (TalkingVideo): a presenter, a greeting, a 口播.
-                      "talking_video", "talking_video_status", "talking_video_continue"]
+                      "talking_video", "talking_video_status", "talking_video_continue",
+                      // A lyric video for a song (JIZURA in the app).
+                      "lyric_video"]
         let comfy = ["comfy_templates", "comfy_run", "comfy_import", "comfy_status", "comfy_stop"]
         let film = ["film_guide", "film_make", "film_status", "film_shot", "film_edit", "film_cast", "film_continue",
                     "film_frames", "film_count", "film_fix_picture", "film_grade", "film_reshoot", "film_recut",
@@ -754,7 +767,7 @@ final class StudioAgent: ObservableObject {
         case .film: return film + comfy + studio + team + ["studio_note"]
         case .motion: return ["motion_find", "motion_make", "motion_status", "motion_stop", "motion_continue", "video_frames"] + studio + team + ["studio_note"]
         case .comfy: return comfy + ["video_frames"] + studio + team + ["studio_note"]
-        case .montage: return comfy + ["talking_video", "talking_video_status", "talking_video_continue"] + team + ["studio_note"]
+        case .montage: return comfy + ["talking_video", "talking_video_status", "talking_video_continue", "lyric_video"] + team + ["studio_note"]
         case .pixelle: return pixelle + comfy + ["video_frames"] + studio + team + ["studio_note"]
         // A post may carry a video: Pixelle's, made or found, from here too.
         case .social: return social + pixelle + comfy + ["video_frames"] + studio + team + ["studio_note"]
@@ -802,8 +815,42 @@ final class StudioAgent: ObservableObject {
         ("用 Comfy 刚写的那首歌"), and before starting something long while the box is busy.
         """
 
+    /// Motion's, when Mixar is installed: a set built there is a reference for the fourth route.
+    private static let mixarWords = """
+        Mixar — Blender 5.2 with AI, the person's own app on this Mac — is in reach through the mixar tools while \
+        it is open with Connect AI Apps (MCP) on in its profile menu; if a call says it is not open, tell them just \
+        that. A set built there — real assets, terrain, a camera move — and rendered with render_scene_video is a \
+        reference like any other for route "whole": its layout and camera kept, H3 films the place over it. It acts \
+        on their open app, so say what you will build first; its generation spends their Mixar credits — ask first. \
+
+        """
+
     var briefing: String {
         brief + " " + Self.notebook + " " + Self.routing + (place == .montage ? " " + Self.openMontageCode : "")
+            + "\n\n" + abilities
+    }
+
+    /// What it says when asked what it can do: the Studio guide's own card for
+    /// this tab — 「我问他们时，他们可以告诉我都能做什么」 (2026-10-04) — so the
+    /// guide the person opens and the agent they ask say the same thing, and a
+    /// new ability is written down once.
+    private var abilities: String {
+        guard let mode = ChatMode(rawValue: place.rawValue), let card = StudioGuide.cards[mode] else { return "" }
+        let here = StudioGuide.routes.filter { $0.mode == mode }
+        var lines = ["""
+            When they ask what you can do — 「你能做什么」「都能干嘛」「你会什么」「有什么功能」, "what can you do" — answer \
+            from this card (the Studio guide's for this tab, which they can also open from the top bar), in the \
+            language they write in: what this tab is in a sentence, then the things it makes best as a short list, \
+            each with how long it takes on the box and one thing they could say to you to get it; then what it is \
+            not good at and which tab does that instead. Nothing beyond the card and your tools; offer to start one.
+            """]
+        lines.append("这个标签：" + card.what)
+        lines.append("最拿手：\n- " + card.best.joined(separator: "\n- "))
+        if !here.isEmpty { lines.append("别人来这里要的：\n- " + here.map { "\($0.want)——\($0.why)" }.joined(separator: "\n- ")) }
+        lines.append("不擅长：\n- " + card.weak.joined(separator: "\n- "))
+        lines.append("要多久：\n- " + card.time.joined(separator: "\n- "))
+        lines.append("可以这样说：\n- " + card.asks.joined(separator: "\n- "))
+        return lines.joined(separator: "\n")
     }
 
     private var brief: String {
@@ -839,7 +886,8 @@ final class StudioAgent: ObservableObject {
                 and words — a theme, a closing song — is YuE2: comfy_run, template audio_yue2_text2music (open it with \
                 run: false and read comfy_status for its fields: the style in English, the lyrics in [Verse]/[Chorus] \
                 sections, max_duration in seconds, the format), or audio_yue2_music_cover for a cover of a song given \
-                in `files`. About 17 seconds of work per second of music, and ComfyUI is busy all that time. Then \
+                in `files`. About 17 seconds of work per second of music, and ComfyUI is busy all that time. A lyric \
+                video for the song (文字PV) is lyric_video: the song and an LRC with each line's start. Then \
                 film_rescore with music_file (the file comfy_run brought back) and voice: false keeps the narration. \
                 Background music without words stays the film's own. The finish keeps to what they asked for: the \
                 narration is burnt in as subtitles (on by default; film_recut subtitles: false turns it off), music_db \
@@ -848,7 +896,10 @@ final class StudioAgent: ObservableObject {
                 voice_description changes only the narrator's voice, as written (the box's voice design), the words \
                 staying; music: false there keeps the music (no_music leaves it out). film_continue fast_draw changes \
                 快速出图 for what is still to be drawn. film_status says where the job stands on the shared box — in \
-                the queue behind whom, or which node and step. Speak the language they write in, and keep it short.
+                the queue behind whom, or which node and step. A request that starts from a Seedance prompt or an \
+                awesome-seedance template (the tab's Seedance 库; kept in \(SeedanceLibrary.folder.path): templates/zh, \
+                cases.json with each case's H3 retest) is a plan to translate, not text to paste — seedance-on-box.md \
+                there says how. Speak the language they write in, and keep it short.
                 """
         case .motion:
             return """
@@ -882,7 +933,8 @@ final class StudioAgent: ObservableObject {
                 draft per ten seconds. The first frame is then composed from the grey model, the person and the place \
                 and pinned (it holds the far background, which otherwise drifts): at until: "still" look at it — the \
                 figure where the grey one stands, in its pose; if it is wrong, motion_continue with first_words (your \
-                English, saying the pose) composes it again. Speak the language they write in, and keep it short.
+                English, saying the pose) composes it again. \(Self.mixar == nil ? "" : Self.mixarWords)Speak the language \
+                they write in, and keep it short.
                 """
         case .comfy:
             return """
@@ -912,7 +964,12 @@ final class StudioAgent: ObservableObject {
                 checkpoints and approval gates. The person watches OpenMontage's Backlot board beside this terminal: \
                 create the project workspace as the guide says and the board finds it by itself (never run \
                 `backlot open`). Generate on the box with its local tools qwen_image, h3_video and minimax_music — read \
-                .agents/skills/minimax-h3-local/SKILL.md first — instead of paid APIs. A project already under \
+                .agents/skills/minimax-h3-local/SKILL.md first — instead of paid APIs. All twelve of its pipelines \
+                run on the box now (口播精剪 talking-head, 切片 clip-factory, 数字人口播 avatar-spokesperson, 翻译配音 \
+                localization-dub, character-animation, documentary-montage and the rest), Chinese transcription and \
+                captions included: read .agents/skills/localkin-pipelines/SKILL.md before choosing one. A video into \
+                another language is video_translate: their own voice cloned from the video, lips moved to the new words \
+                (Ditto draws the face again), an .srt — call it once for the lines, translate them yourself, call it again. A project already under \
                 projects/ can be carried on from its checkpoints. A score shorter than the film (MiniMax picks its own \
                 length) is made long enough with music_extend — it loops back where the music matches itself and lists \
                 each seam to listen to — rather than asked for again. A long job: start, then wait (up to fifteen \
@@ -925,9 +982,14 @@ final class StudioAgent: ObservableObject {
                 voice and words is YuE2, through the Comfy tools (comfy_run, template audio_yue2_text2music — open it \
                 with run: false and read comfy_status for its fields — or audio_yue2_music_cover for a cover of a song \
                 in `files`): about 17 seconds of work per second of music — slower than minimax_music now, but it \
-                sings the words. The \
+                sings the words. A lyric video (文字PV) for a song is lyric_video, in the app: give it the song and \
+                an LRC whose lines you timed from the song (cut the sung phrases from the separated vocals and have \
+                the box's ASR hear each); about half a minute. The \
                 file comfy_run brings back is also on the box at ~/ComfyUI/output/audio/ under the same name, for \
-                OpenMontage to use. Speak the language they write in, and keep it short.
+                OpenMontage to use. A request that starts from a Seedance prompt or an awesome-seedance template (the \
+                tab's Seedance button; kept on this Mac in \(SeedanceLibrary.folder.path), each case with its H3 retest) is \
+                a plan to translate for the box: seedance-on-box.md there, also .agents/skills/seedance-on-box. Speak the \
+                language they write in, and keep it short.
                 """
         case .pixelle:
             return """
