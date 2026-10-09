@@ -8,6 +8,30 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Added — 说话视频: Ditto first, a recording's voice, and a song to sing
+
+`talking_video` again (2026-10-04, 「一步到位吧，接进说话视频」):
+
+- **Ditto** is the default engine (「效果真个很不错啊」): one take of any length, the face,
+  lips and head moved by the voice and the rest of the photograph still — ten seconds of
+  speech in about a minute, voice included, where H3 takes fifteen. It runs on the box
+  (`kin_ditto_talk.py`); the photograph, cut to the job's size, and the speech go up through
+  ComfyUI's input folder and the video comes back through its output. H3 and LTX stay.
+- **`voice_sample`**: a recording of someone talking (3 s or more) — every sentence is said
+  in that voice, in any language, by the box's clone (Qwen3-TTS 1.7B Base, :8103);
+  `voice_sample_text` is what the recording says, or the box's Qwen3-ASR hears it.
+- **`song`**: a song with its music, for the photograph to sing. Its singing voice is
+  separated on the box by Demucs (`kin_separate.py`, 40 s of song in 2 s) and moves the face
+  — the accompaniment would move the mouth through the intro and the solo — and the whole
+  song plays under the video. Ditto sings a 40 s chorus in about 3 minutes; `expression`
+  scales how far the face moves (1.2–1.4 for singing; at 1.25 the quiet bars looked
+  surprised).
+- **H3 singing**: pieces cut at H3's own length (158 frames, 6.58 s) so the joined pieces stay
+  on the song's beat, the camera told to hold and the photograph pinned in the middle of
+  every piece as well. She sings with her body, hair and eyes, but the framing is not held
+  yet: on every frame (Vision's face boxes) her face crossed 40–49 % of the frame within a
+  piece, where Ditto's stays within 4 %.
+
 ### Added — Montage: OpenMontage's twelve pipelines on the box, and a video in another language
 
 「一个一个链接吧，把他们都弄上」 and 「不可以用的就弄可用啊」 (2026-10-04): every OpenMontage

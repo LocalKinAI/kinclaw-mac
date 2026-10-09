@@ -412,16 +412,31 @@ enum PanelTools {
                 A photograph speaking a script — a talking-head video, made on the \
                 user's own box (what HeyGen sells). `image`: a picture of one person, \
                 face visible. `text`: what they say, any length — spoken a sentence \
-                at a time and filmed in pieces of up to about 6 seconds — or `audio`: \
+                at a time — or `song`: a song with its music (a file on this Mac: \
+                mp3, flac, wav, m4a…) for them to sing — its singing voice is \
+                separated on the box (Demucs, seconds) and moves the face, and the \
+                whole song plays under the video. Ditto sings fast (a 40 s chorus in \
+                about 3 minutes) and holds the framing, but only the face moves \
+                (`expression` 1.3 opens it up); engine "h3" moves the body, hair and \
+                eyes too (about 10 minutes per 6 seconds: say so first) but does not \
+                hold the framing yet — her face drifts across the frame \
+                — or `audio`: \
                 a recording to lip-sync instead. The voice: `voice`, one of the box \
                 voice server's speakers (vivian, serena, uncle_fu, dylan, eric, ryan, \
                 aiden, ono_anna, sohee; default: the companion's own), or \
                 `voice_description`, a voice designed from words, in the language of \
-                the text ("二十多岁的女生，声音温柔清亮，语速不快"). `engine`: "h3" \
-                (default; about 1.5 minutes per second of speech in the draft; lively \
-                — smiles, blinks, head and shoulders move; every piece starts and ends \
-                on the photograph, so the pieces join without a jump) or "ltx" \
-                (steadier and calmer, about 2 minutes per second). `quality: "full"` \
+                the text ("二十多岁的女生，声音温柔清亮，语速不快"), or `voice_sample`: a \
+                recording of someone talking (a file on this Mac, 3 seconds or more) \
+                — the text is spoken in that person's voice, in any language, cloned \
+                on the box (`voice_sample_text`: what the recording says; heard there \
+                when left out). `engine`: "ditto" (default — the person liked it best: \
+                one take, ten seconds of speech in about a minute; the face, lips and \
+                head move with the voice, sharp, the rest of the picture stays still — \
+                a presenter, a 口播, anything long), "h3" (about 1.5 minutes per \
+                second of speech in the draft, filmed in pieces of up to 6 s; livelier \
+                — smiles, head and shoulders move; every piece starts and ends on the \
+                photograph, so they join without a jump) or "ltx" (steadier and \
+                calmer, about 2 minutes per second). `quality: "full"` \
                 is H3's 20-step model, about 3.5 times as long. `look`: how they \
                 behave, in words. `shape`: square | portrait | landscape (default: \
                 the photograph's). `stop_after: "speech"` makes the voice first and \
@@ -437,7 +452,11 @@ enum PanelTools {
                     "audio": ["type": "string", "description": "Path of a recording to lip-sync instead of text."],
                     "voice": ["type": "string", "description": "A speaker of the box voice server."],
                     "voice_description": ["type": "string", "description": "A voice designed from words."],
-                    "engine": ["type": "string", "description": "h3 (default) | ltx"],
+                    "voice_sample": ["type": "string", "description": "Path of a recording whose voice says the text (cloned on the box)."],
+                    "voice_sample_text": ["type": "string", "description": "What the recording says, if known."],
+                    "song": ["type": "string", "description": "Path of a song (with its music) for them to sing: the voice is separated on the box and drives the face; the whole song is the soundtrack."],
+                    "expression": ["type": "number", "description": "Ditto: how far the face moves, 1 as it drives it; 1.2–1.4 for singing."],
+                    "engine": ["type": "string", "description": "ditto (default, fastest) | h3 | ltx"],
                     "quality": ["type": "string", "description": "draft (default) | full — H3 only"],
                     "look": ["type": "string", "description": "How they behave while talking."],
                     "shape": ["type": "string", "description": "square | portrait | landscape"],
@@ -1821,11 +1840,15 @@ enum PanelTools {
                 image: URL(fileURLWithPath: image), text: args["text"] as? String,
                 audio: (args["audio"] as? String).map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) },
                 voice: args["voice"] as? String, voiceDescription: args["voice_description"] as? String,
+                voiceSample: (args["voice_sample"] as? String).map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) },
+                voiceSampleText: args["voice_sample_text"] as? String,
+                song: (args["song"] as? String).map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) },
+                expression: (args["expression"] as? Double) ?? (args["expression"] as? Int).map(Double.init),
                 engine: args["engine"] as? String, quality: args["quality"] as? String, look: args["look"] as? String,
                 shape: args["shape"] as? String, title: args["title"] as? String,
                 holdAfterSpeech: (args["stop_after"] as? String) == "speech")
             switch result {
-            case .success(let job): return ("开始做「\(job.title)」（\(job.id)，\(job.engine == "ltx" ? "LTX" : "H3")，\(job.width)×\(job.height)）：先配音，再一段一段拍。talking_video_status 看进度，做好的在 \(job.folder.path)", false)
+            case .success(let job): return ("开始做「\(job.title)」（\(job.id)，\(TalkingVideo.engineTitle(job))，\(job.width)×\(job.height)）：先配音，\(job.engine == "ditto" ? "再一条拍完" : "再一段一段拍")。talking_video_status 看进度，做好的在 \(job.folder.path)", false)
             case .failure(let failure): return (failure.localizedDescription, true)
             }
         case "talking_video_status":

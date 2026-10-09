@@ -111,3 +111,8 @@ MPS backend crashes when several threads encode at once) — kept for the measur
   over every frame (ping-pong when the voice is longer): the offline lip-sync now (`lip_sync` auto, video_translate)
   — sharper than MuseTalk's mouth, but each pass softens a face, so a video made from a photograph is redone from
   the photograph.
+- `kin_separate.py` (in `~/kin-avatar/demucs`, its own `.venv`) — the singing voice out of a song (Demucs htdemucs,
+  MIT): vocals.wav drives the face, the whole song is laid under the video — the app's 说话视频 `song`. 40 s of song
+  in 2 s on the box's GPU. Set up once:
+  `uv venv --python 3.12 ~/kin-avatar/demucs/.venv && uv pip install --python ~/kin-avatar/demucs/.venv/bin/python
+  "torch==2.14.1" torchaudio demucs soundfile` (torch from the uv cache; the htdemucs weights, ~80 MB, at first use).
