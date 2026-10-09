@@ -543,6 +543,7 @@ enum PanelTools {
                     "stop_after": ["type": "string", "description": "H3: \"frames\" to stop once every first frame is made (look, fix, then film_continue), \"sets\" to stop once the portraits and sets are drawn. Omit to run straight through."],
                     "pin": ["type": "boolean", "description": "H3: make each shot's first frame from the portraits and the set and pin it where the shot starts. Omit for the user's setting (usually on)."],
                     "music": ["type": ["boolean", "string"], "description": "false: no music under the film. A text: what the music should be. Omit for the user's setting and the studio's choice."],
+                    "music_engine": ["type": "string", "description": "Who writes the score: \"ace\" (ACE-Step 1.5 — exactly the film's length, about 2 minutes for 30 s), \"minimax3\" (MiniMax Music 3 — picks its own length, a short one is looped). Omit for the tab's."],
                     "as_written": ["type": "boolean", "description": "Use every shot's still and motion exactly as written: no pass rereads the pose off the shot before or rewrites the movement, and no reviewer sends a shot back. Default false."],
                     "fast_draw": ["type": "boolean", "description": "Pictures made through ComfyUI (first frames, fixed and recounted pictures) in 8 steps with the Pruna LoRA instead of 25: about three times faster, as good in the tests so far. Omit for the user's switch (usually on)."],
                     "title_card": ["type": "boolean", "description": "The title over the last shot, faded in and out. Default true."],
@@ -1408,6 +1409,7 @@ enum PanelTools {
                 "properties": [
                     "film": ["type": "string", "description": "The film's id or title."],
                     "music": ["type": "boolean", "description": "Default true: new music. false keeps the music the film has."],
+                    "music_engine": ["type": "string", "description": "Who writes the new music: \"ace\" (ACE-Step 1.5, exactly the film's length) or \"minimax3\" (MiniMax Music 3). Omit for what the film had."],
                     "no_music": ["type": "boolean", "description": "Leave the music out of the film altogether."],
                     "music_file": ["type": "string", "description": "A sound file on this Mac (flac, mp3, wav…) to use as the film's music, e.g. the YuE2 song comfy_run brought back."],
                     "voice": ["type": "boolean", "description": "Default true: choose and read the narrator again. false keeps the narration as it is."],
@@ -2434,7 +2436,8 @@ enum PanelTools {
             let written = (args["voiceover"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
             let noMusic = args["no_music"] as? Bool ?? false
             switch FilmStudio.shared.rescore(film: id, music: args["music"] as? Bool ?? true, musicFile: song, voice: voice,
-                                             voiceDescription: described, voiceover: written, noMusic: noMusic) {
+                                             voiceDescription: described, voiceover: written, noMusic: noMusic,
+                                             musicEngine: FilmStudio.musicEngineNamed(args["music_engine"])) {
             case .success(let film):
                 let reading = described.map { "用「\($0.prefix(30))」的声音重念旁白" } ?? written.map { _ in "照新稿重念旁白" }
                     ?? (voice ? "重新配音" : nil)
@@ -2665,7 +2668,7 @@ enum PanelTools {
                                    tongue: args["narration_language"] as? String, retakes: args["retakes"] as? Int,
                                    shape: FilmStudio.Shape(rawValue: (args["shape"] as? String) ?? "") ?? .square,
                                    kind: kind, engine: engine, cast: cast.isEmpty ? nil : cast, hold: hold,
-                                   pinFrames: pin, withMusic: withMusic)
+                                   pinFrames: pin, withMusic: withMusic, musicEngine: FilmStudio.musicEngineNamed(args["music_engine"]))
             return ("在写分镜了（十几秒到一分钟），写好就开拍" + (engine == .h3 ? "（H3 · 故事）" : "") + "。film_status 看进度", false)
         }
         let seconds = (args["seconds"] as? Double) ?? Double((args["seconds"] as? Int) ?? (engine == .h3 ? 5 : 4))
@@ -2687,7 +2690,7 @@ enum PanelTools {
                                       engine: engine, cast: cast, hold: hold, pinFrames: pin, withMusic: withMusic,
                                       literal: args["as_written"] as? Bool ?? false,
                                       finishing: (args["title_card"] as? Bool, args["grade"] as? Bool, args["upscale"] as? Bool),
-                                      fastDraw: args["fast_draw"] as? Bool) {
+                                      fastDraw: args["fast_draw"] as? Bool, musicEngine: FilmStudio.musicEngineNamed(args["music_engine"])) {
         case .success(let film):
             FilmStudio.shared.presetSound(film: film.id, voice: args["narrator_voice"] as? String,
                                           voiceover: args["voiceover"] as? String, music: brief)

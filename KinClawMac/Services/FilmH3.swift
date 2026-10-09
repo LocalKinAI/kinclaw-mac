@@ -378,7 +378,8 @@ extension FilmStudio {
                     throw Failure.message("\(what)出错：" + (messages.compactMap { $0["exception_message"] as? String }.first ?? "看盒子上的 comfy.log").prefix(300))
                 }
                 guard status?["completed"] as? Bool == true else { continue }
-                let saved = ((entry["outputs"] as? [String: Any])?[node] as? [String: Any])?["images"] as? [[String: Any]] ?? []
+                let outputs = ((entry["outputs"] as? [String: Any])?[node] as? [String: Any]) ?? [:]
+                let saved = outputs["images"] as? [[String: Any]] ?? outputs["audio"] as? [[String: Any]] ?? []
                 guard let file = saved.first, let name = file["filename"] as? String else { throw Failure.message("\(what)跑完了但没存下来") }
                 var parts = URLComponents(string: base + "/view")
                 parts?.queryItems = [URLQueryItem(name: "filename", value: name),

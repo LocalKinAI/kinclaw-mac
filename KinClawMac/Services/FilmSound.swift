@@ -25,10 +25,16 @@ extension FilmStudio {
 
     static let musicKey = "kinclaw.film.music"
     /// "minimax3" (MiniMax Music 3 through ComfyUI on the box: stereo, up to
-    /// five minutes, a structured description) or "musicgen" (kin audio).
+    /// five minutes, a structured description), "ace" (ACE-Step 1.5 there:
+    /// exactly as long as the film) or "musicgen" (kin audio).
     static let musicEngineKey = "kinclaw.film.music.engine"
     static var musicEngine: String { UserDefaults.standard.string(forKey: musicEngineKey) ?? "minimax3" }
     static var musicOn: Bool { UserDefaults.standard.object(forKey: musicKey) as? Bool ?? true }
+    /// An agent's `music_engine`, if it names one there is.
+    nonisolated static func musicEngineNamed(_ value: Any?) -> String? {
+        let name = ((value as? String) ?? "").trimmingCharacters(in: .whitespaces).lowercased()
+        return ["ace", "minimax3", "musicgen"].contains(name) ? name : name.hasPrefix("ace") ? "ace" : name.hasPrefix("minimax") ? "minimax3" : nil
+    }
     /// MusicGen writes at most thirty seconds; a longer film loops it.
     static let musicModel = "musicgen:medium"
 
@@ -243,6 +249,51 @@ extension FilmStudio {
             return
         }
         throw Failure.message("配乐三个小时还没好")
+    }
+
+    /// ACE-Step 1.5 XL Turbo on the box's ComfyUI (its official template, written
+    /// directly): eight steps, the length asked for to the frame — 30.0 s for
+    /// 30, in two minutes (2026-10-04) — where MiniMax Music 3 picks its own and
+    /// a short score is looped.
+    nonisolated static let aceModel = "acestep_v1.5_xl_turbo_bf16.safetensors"
+
+    static func aceOnBox() async -> Bool {
+        await boxHas("UNETLoader", offering: aceModel, at: BoxServices.base(.comfy))
+    }
+
+    static func composeACE(_ description: String, seconds: Double, for film: String, to out: URL) async throws {
+        guard await BoxServices.shared.ensure(.comfy) else { throw Failure.message("盒子上的 ComfyUI 起不来") }
+        let base = BoxServices.base(.comfy)
+        // ACE reads a description as its tags; "instrumental" keeps a voice out.
+        let tags = description.lowercased().contains("instrumental") ? description : description + ", instrumental"
+        let bpm = description.range(of: #"(\d{2,3})\s*bpm"#, options: [.regularExpression, .caseInsensitive])
+            .flatMap { Int(description[$0].prefix { $0.isNumber }) } ?? 90
+        let length = (min(600, max(10, seconds)) * 10).rounded() / 10
+        let seed = Int.random(in: 0..<1_000_000)
+        func node(_ type: String, _ inputs: [String: Any]) -> [String: Any] { ["class_type": type, "inputs": inputs] }
+        let graph: [String: Any] = [
+            "1": node("UNETLoader", ["unet_name": aceModel, "weight_dtype": "default"]),
+            "2": node("ModelSamplingAuraFlow", ["model": ["1", 0], "shift": 3]),
+            "3": node("DualCLIPLoader", ["clip_name1": "qwen_0.6b_ace15.safetensors", "clip_name2": "qwen_4b_ace15.safetensors",
+                                         "type": "ace", "device": "default"]),
+            "4": node("VAELoader", ["vae_name": "ace_1.5_vae.safetensors"]),
+            "5": node("TextEncodeAceStepAudio1.5", ["clip": ["3", 0], "tags": tags, "lyrics": "[Instrumental]", "seed": seed,
+                                                    "bpm": bpm, "duration": length, "timesignature": "4", "language": "en",
+                                                    "keyscale": "C major", "generate_audio_codes": true, "cfg_scale": 2.0,
+                                                    "temperature": 0.85, "top_p": 0.9, "top_k": 0, "min_p": 0.0]),
+            "6": node("ConditioningZeroOut", ["conditioning": ["5", 0]]),
+            "7": node("EmptyAceStep1.5LatentAudio", ["seconds": length, "batch_size": 1]),
+            "8": node("KSampler", ["model": ["2", 0], "seed": seed, "steps": 8, "cfg": 1, "sampler_name": "euler",
+                                   "scheduler": "simple", "positive": ["5", 0], "negative": ["6", 0],
+                                   "latent_image": ["7", 0], "denoise": 1.0]),
+            "9": node("VAEDecodeAudio", ["samples": ["8", 0], "vae": ["4", 0]]),
+            "10": node("SaveAudioAdvanced", ["audio": ["9", 0], "filename_prefix": "audio/kinclaw-score-ace", "format": "flac"]),
+        ]
+        let bytes = try await comfyResult(graph, node: "10", base: base, what: "配乐", deadline: 3600)
+        let flac = out.deletingPathExtension().appendingPathExtension("flac")
+        try? FileManager.default.removeItem(at: flac)
+        try bytes.write(to: flac)
+        try flacToWAV(flac, out)
     }
 
     private static func flacToWAV(_ input: URL, _ output: URL) throws {

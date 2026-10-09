@@ -262,6 +262,9 @@ final class FilmStudio: ObservableObject {
         /// what it wants instead of taking whatever the tab was left on.
         var pinFrames: Bool?
         var withMusic: Bool?
+        /// Which model writes the score — "ace" (ACE-Step 1.5: exactly the film's
+        /// length), "minimax3", "musicgen"; nil follows the tab's.
+        var musicEngine: String?
         /// How the cut is finished: the title over the last shot, one warm
         /// grade over all of it, the picture doubled. Nil is on.
         var titleCard: Bool?
@@ -444,7 +447,7 @@ final class FilmStudio: ObservableObject {
               read: Understanding? = nil, shape: Shape = .square, engine: Engine = .ltx,
               cast: [Cast]? = nil, hold: String? = nil, pinFrames: Bool? = nil, withMusic: Bool? = nil,
               literal: Bool = false, finishing: (title: Bool?, grade: Bool?, upscale: Bool?) = (nil, nil, nil),
-              fastDraw: Bool? = nil) -> Result<Film, Failure> {
+              fastDraw: Bool? = nil, musicEngine: String? = nil) -> Result<Film, Failure> {
         guard shooting == nil else { return .failure(.message("片场正在拍「\(shooting!)」，等它拍完")) }
         let wanted = shots.filter { !$0.still.trimmingCharacters(in: .whitespaces).isEmpty }
         guard !wanted.isEmpty else { return .failure(.message("分镜是空的：每个镜头要有 still（画面）和 motion（动作）")) }
@@ -485,6 +488,7 @@ final class FilmStudio: ObservableObject {
         film.hold = hold
         film.pinFrames = pinFrames
         film.withMusic = withMusic
+        film.musicEngine = musicEngine
         (film.titleCard, film.finishGrade, film.upscale) = finishing
         film.fastDraw = fastDraw
         for (index, draft) in wanted.enumerated() {
@@ -526,7 +530,7 @@ final class FilmStudio: ObservableObject {
     func make(from idea: String, shots: Int, lead: Bool, tongue: String? = nil, retakes: Int? = nil,
               source: String = "", shape: Shape = .square, kind: Kind = .auto, engine: Engine = .ltx,
               cast: [Cast]? = nil, hold: String? = nil, pinFrames: Bool? = nil, withMusic: Bool? = nil,
-              then done: ((Result<Film, Failure>) -> Void)? = nil) {
+              musicEngine: String? = nil, then done: ((Result<Film, Failure>) -> Void)? = nil) {
         let tongue = tongue ?? UserDefaults.standard.string(forKey: Self.tongueKey) ?? ""
         guard writing == nil else { done?(.failure(.message("还在给「\(writing!)」写分镜"))); return }
         writing = idea
@@ -549,7 +553,7 @@ final class FilmStudio: ObservableObject {
                 result = make(title: board.title, idea: idea, look: board.look, place: board.place,
                               wears: board.wears, lead: hers, seconds: engine == .h3 ? 5 : 4, shots: board.shots, tongue: tongue,
                               retakes: retakes, read: read, shape: shape, engine: engine,
-                              cast: cast, hold: hold, pinFrames: pinFrames, withMusic: withMusic)
+                              cast: cast, hold: hold, pinFrames: pinFrames, withMusic: withMusic, musicEngine: musicEngine)
             } catch {
                 result = .failure(.message("分镜没写出来：\(error.localizedDescription)"))
             }
@@ -1145,15 +1149,23 @@ final class FilmStudio: ObservableObject {
         // quiet minutes for a hang, stopped the film and cut it with no music.
         let clock = DateFormatter()
         clock.dateFormat = "HH:mm"
-        let perSecond: Double = await Self.musicOnGPU() ? 6 : 67
+        // ACE-Step when asked for and on the box: exactly the film's length, about
+        // four seconds of work a second of music (30 s in two minutes).
+        var engine = film.musicEngine ?? Self.musicEngine
+        if engine == "ace", !(await Self.aceOnBox()) { engine = "minimax3" }
+        let perSecond: Double = engine == "ace" ? 4 : await Self.musicOnGPU() ? 6 : 67
         let minutes = max(1, Int(((seconds + 2) * perSecond + 60) / 60))
-        film.note = Self.musicEngine == "minimax3"
+        film.note = engine == "ace"
+            ? "在盒子上作配乐（ACE-Step 1.5，正好 \(Int(seconds.rounded())) 秒，\(clock.string(from: Date())) 开始，大约 \(minutes) 分钟）"
+            : engine == "minimax3"
             ? "在盒子上作配乐（MiniMax Music 3，\(clock.string(from: Date())) 开始，大约 \(minutes) 分钟：先逐字读描述、再出声音，中间没有进度，不是卡住）"
             : "在盒子上作配乐（\(clock.string(from: Date())) 开始）"
         save(film)
         await ComfyStudio.yieldMemory()
         do {
-            if Self.musicEngine == "minimax3" {
+            if engine == "ace" {
+                try await Self.composeACE(score, seconds: seconds, for: film.id, to: film.music)
+            } else if engine == "minimax3" {
                 try await Self.composeMiniMax(score, seconds: seconds, for: film.id, to: film.music)
             } else {
                 try await Self.compose(score, seconds: seconds, for: film.id, to: film.music)
@@ -2404,7 +2416,8 @@ final class FilmStudio: ObservableObject {
     /// with a voice and words, made through the Comfy tools — and with
     /// `voice: false` the narrator stays as it is and only the music changes.
     func rescore(film id: String, music: Bool = true, musicFile: URL? = nil, voice: Bool = true,
-                 voiceDescription: String? = nil, voiceover: String? = nil, noMusic: Bool = false) -> Result<Film, Failure> {
+                 voiceDescription: String? = nil, voiceover: String? = nil, noMusic: Bool = false,
+                 musicEngine: String? = nil) -> Result<Film, Failure> {
         guard shooting == nil else { return .failure(.message("片场正在拍「\(shooting!)」，等它拍完")) }
         guard var film = films.first(where: { $0.id == id || $0.title == id }) else {
             return .failure(.message("没有这部片子：\(id)"))
@@ -2416,6 +2429,7 @@ final class FilmStudio: ObservableObject {
         }
         let stamp = Int(Date().timeIntervalSince1970)
         let fm = FileManager.default
+        if let musicEngine { film.musicEngine = musicEngine }
         film.state = .cutting
         save(film)
         shooting = film.id

@@ -8,6 +8,15 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Added — Film: a score exactly the film's length (ACE-Step 1.5)
+
+`music_engine` on film_make and film_rescore (kept on the film; left out, the tab's choice):
+"ace" is ACE-Step 1.5 XL Turbo on the box's ComfyUI — its official graph, written directly,
+eight steps — and the score comes out as long as the film to the frame: 30.0 s for 30, in
+about two minutes (121 s), four seconds of work a second of music, where MiniMax Music 3
+picks its own length and a short score is looped. "minimax3" and "musicgen" as before; a box
+without the ACE model falls back to MiniMax. A ComfyUI result can be a sound now.
+
 ### Added — 说话视频: Ditto first, a recording's voice, and a song to sing
 
 `talking_video` again (2026-10-04, 「一步到位吧，接进说话视频」):
