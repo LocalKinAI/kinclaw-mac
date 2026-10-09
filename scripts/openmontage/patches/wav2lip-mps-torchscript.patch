@@ -1,0 +1,41 @@
+diff --git a/face_detection/detection/core.py b/face_detection/detection/core.py
+index 0f8275e..be97b0b 100644
+--- a/face_detection/detection/core.py
++++ b/face_detection/detection/core.py
+@@ -24,7 +24,7 @@ class FaceDetector(object):
+                 logger = logging.getLogger(__name__)
+                 logger.warning("Detection running on CPU, this may be potentially slow.")
+ 
+-        if 'cpu' not in device and 'cuda' not in device:
++        if 'cpu' not in device and 'cuda' not in device and 'mps' not in device:  # mps: Apple GPU (LocalKin box)
+             if verbose:
+                 logger.error("Expected values for device are: {cpu, cuda} but got: %s", device)
+             raise ValueError
+diff --git a/inference.py b/inference.py
+index 9069252..ef41dce 100644
+--- a/inference.py
++++ b/inference.py
+@@ -154,7 +154,8 @@ def datagen(frames, mels):
+ 		yield img_batch, mel_batch, frame_batch, coords_batch
+ 
+ mel_step_size = 16
+-device = 'cuda' if torch.cuda.is_available() else 'cpu'
++# Apple's GPU when there is no CUDA (LocalKin box): face detection on the CPU took minutes.
++device = 'cuda' if torch.cuda.is_available() else ('mps' if torch.backends.mps.is_available() else 'cpu')
+ print('Using {} for inference.'.format(device))
+ 
+ def _load(checkpoint_path):
+@@ -166,6 +167,13 @@ def _load(checkpoint_path):
+ 	return checkpoint
+ 
+ def load_model(path):
++	# The weights its README links to now (2023) are TorchScript: the whole model, not a state_dict.
++	try:
++		model = torch.jit.load(path, map_location='cpu')
++		print("Load TorchScript model from: {}".format(path))
++		return model.to(device).eval()
++	except RuntimeError:
++		pass
+ 	model = Wav2Lip()
+ 	print("Load checkpoint from: {}".format(path))
+ 	checkpoint = _load(path)

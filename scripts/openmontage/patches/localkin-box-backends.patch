@@ -1,0 +1,1322 @@
+diff --git a/tools/analysis/face_tracker.py b/tools/analysis/face_tracker.py
+index f9ed63e..9f3d32b 100644
+--- a/tools/analysis/face_tracker.py
++++ b/tools/analysis/face_tracker.py
+@@ -5,15 +5,22 @@ Outputs per-frame face data as JSON — used by auto_reframe, face_enhance,
+ and other tools that need to know where the speaker's face is.
+ 
+ Falls back to OpenCV Haar cascade if MediaPipe is not installed.
++
++On the LocalKin box: Apple's Vision first (.localkin/bin/kin-faces, the same JSON), then MediaPipe
++0.10 in its own environment (tools/_mediapipe_env.py) — Jacky, 2026-10-04: 「两个都要」.
+ """
+ 
+ from __future__ import annotations
+ 
+ import json
++import os
++import subprocess
+ import time
+ from pathlib import Path
+ from typing import Any
+ 
++from tools import _mediapipe_env
++
+ from tools.base_tool import (
+     BaseTool,
+     Determinism,
+@@ -71,6 +78,12 @@ class FaceTracker(BaseTool):
+                 "minimum": 0.0,
+                 "maximum": 1.0,
+             },
++            "method": {
++                "type": "string",
++                "enum": ["auto", "vision", "mediapipe", "opencv"],
++                "default": "auto",
++                "description": "auto: Apple's Vision when there (macOS), else MediaPipe (here or in its own environment), else OpenCV's Haar cascade.",
++            },
+         },
+     }
+ 
+@@ -128,7 +141,14 @@ class FaceTracker(BaseTool):
+         except ImportError:
+             return False
+ 
++    @staticmethod
++    def _kin_faces() -> str | None:
++        exe = os.environ.get("KIN_FACES") or str(Path(__file__).resolve().parents[2] / ".localkin" / "bin" / "kin-faces")
++        return exe if os.path.exists(exe) else None
++
+     def get_status(self) -> ToolStatus:
++        if self._kin_faces() or _mediapipe_env.python():
++            return ToolStatus.AVAILABLE
+         if self._has_mediapipe() and self._has_opencv():
+             return ToolStatus.AVAILABLE
+         if self._has_opencv():
+@@ -140,7 +160,12 @@ class FaceTracker(BaseTool):
+         if not input_path.exists():
+             return ToolResult(success=False, error=f"Input not found: {input_path}")
+ 
+-        if not self._has_opencv():
++        method = inputs.get("method", "auto")
++        if method in ("auto", "mediapipe") and not (self._has_mediapipe() and self._has_opencv()) \
++                and not (method == "auto" and self._kin_faces()) and _mediapipe_env.python():
++            return _mediapipe_env.execute("tools.analysis.face_tracker", "FaceTracker", dict(inputs, method="mediapipe"))
++        use_vision = method in ("auto", "vision") and self._kin_faces() is not None
++        if not use_vision and not self._has_opencv():
+             return ToolResult(
+                 success=False,
+                 error="opencv-python is required. Install: pip install opencv-python",
+@@ -156,10 +181,15 @@ class FaceTracker(BaseTool):
+ 
+         start = time.time()
+ 
+-        if self._has_mediapipe():
++        if use_vision:
++            result_data = self._track_vision(input_path, sample_fps, confidence)
++            used = "vision"
++        elif self._has_mediapipe():
+             result_data = self._track_mediapipe(input_path, sample_fps, confidence)
++            used = "mediapipe"
+         else:
+             result_data = self._track_opencv(input_path, sample_fps)
++            used = "opencv_haar"
+ 
+         elapsed = time.time() - start
+ 
+@@ -175,12 +205,22 @@ class FaceTracker(BaseTool):
+                 "duration_seconds": result_data["duration_seconds"],
+                 "frames_sampled": result_data["frame_count"],
+                 "faces_detected": result_data["face_detected_count"],
+-                "method": "mediapipe" if self._has_mediapipe() else "opencv_haar",
++                "method": used,
+             },
+             artifacts=[str(output_path)],
+             duration_seconds=round(elapsed, 2),
+         )
+ 
++    def _track_vision(self, input_path: Path, sample_fps: float, confidence: float) -> dict:
++        """Apple's Vision through kin-faces (macOS): the same JSON as _track_mediapipe."""
++        done = subprocess.run([self._kin_faces(), str(input_path), "--fps", str(sample_fps),
++                               "--min-confidence", str(confidence)], capture_output=True, text=True, timeout=3600)
++        if done.returncode != 0:
++            raise RuntimeError(f"kin-faces: {done.stderr.strip()[-500:]}")
++        data = json.loads(done.stdout)
++        data.pop("method", None)
++        return data
++
+     def _track_mediapipe(
+         self, input_path: Path, sample_fps: float, confidence: float
+     ) -> dict:
+diff --git a/tools/analysis/transcriber.py b/tools/analysis/transcriber.py
+index 8e38415..bf05150 100644
+--- a/tools/analysis/transcriber.py
++++ b/tools/analysis/transcriber.py
+@@ -3,12 +3,25 @@
+ Provides speech-to-text with word-level timestamps and optional speaker
+ diarization. Falls back gracefully when GPU or diarization dependencies
+ are not available.
++
++On the LocalKin box (engine "box", the default there): the words come from the
++box's own Qwen3-ASR 1.7B (localkin-service-audio, :8100), which hears Chinese far
++better than whisper does, and whisper (small, cached) still says when each was
++spoken — the two lined up character by character, a Chinese character or a Latin
++word to a "word". Whisper alone when the box's ASR is not up.
+ """
+ 
+ from __future__ import annotations
+ 
++import difflib
++import io
+ import json
++import os
++import re
++import subprocess
++import tempfile
+ import time
++import wave
+ from pathlib import Path
+ from typing import Any, Optional
+ 
+@@ -25,6 +38,76 @@ from tools.base_tool import (
+     ToolTier,
+ )
+ 
++BOX_ASR_URL = os.environ.get("BOX_ASR_URL", "http://127.0.0.1:8100/v1/audio/transcriptions")
++_CJK = re.compile(r"[㐀-鿿豈-﫿぀-ヿ가-힯]")
++_SENTENCE_END = set("。！？!?；;…")
++_CHUNK_S = 30.0          # the box's ASR hears at most this much at a time, cut where whisper heard a pause
++_PAUSE_S = 0.8           # a silence this long ends a segment even without a full stop
++
++
++def _key(unit: str) -> str:
++    """What is spoken in a unit, for lining the two transcripts up."""
++    return "".join(c.lower() for c in unit if _CJK.match(c) or (c.isascii() and c.isalnum()))
++
++
++def _units(text: str) -> list[str]:
++    """A CJK character, or a run of letters and digits, each; punctuation and spaces ride with
++    the unit before them (or the one after, at the start)."""
++    units: list[str] = []
++    prefix = ""
++    i = 0
++    while i < len(text):
++        c = text[i]
++        if _CJK.match(c):
++            units.append(prefix + c)
++            prefix = ""
++            i += 1
++        elif c.isascii() and c.isalnum():
++            j = i
++            while j < len(text) and text[j].isascii() and (text[j].isalnum() or text[j] in "'-"):
++                j += 1
++            units.append(prefix + text[i:j])
++            prefix = ""
++            i = j
++        else:
++            if units:
++                units[-1] += c
++            elif not c.isspace():
++                prefix += c
++            i += 1
++    return units
++
++
++def _pin(heard: list[tuple[str, float, float]], units: list[str], t0: float, t1: float) -> tuple[list[tuple[float, float, float]], int]:
++    """Times for every unit: whisper's where the two agree, spread over whisper's span where
++    they differ, interpolated where whisper heard nothing. (start, end, confidence) each."""
++    keys = [_key(u) for u in units]
++    sm = difflib.SequenceMatcher(None, [k for k, *_ in heard], keys, autojunk=False)
++    times: list[Optional[tuple[float, float, float]]] = [None] * len(units)
++    for tag, i1, i2, j1, j2 in sm.get_opcodes():
++        if tag == "equal":
++            for k in range(i2 - i1):
++                times[j1 + k] = (heard[i1 + k][1], heard[i1 + k][2], 1.0)
++        elif tag == "replace":
++            a, b = heard[i1][1], heard[i2 - 1][2]
++            for k in range(j2 - j1):
++                times[j1 + k] = (a + (b - a) * k / (j2 - j1), a + (b - a) * (k + 1) / (j2 - j1), 0.5)
++    k = 0
++    while k < len(times):
++        if times[k] is not None:
++            k += 1
++            continue
++        j = k
++        while j < len(times) and times[j] is None:
++            j += 1
++        a = times[k - 1][1] if k else t0
++        b = times[j][0] if j < len(times) else t1
++        for q in range(k, j):
++            times[q] = (a + (b - a) * (q - k) / (j - k), a + (b - a) * (q - k + 1) / (j - k), 0.3)
++        k = j
++    agreed = sum(block.size for block in sm.get_matching_blocks())
++    return times, agreed  # type: ignore[return-value]
++
+ 
+ class Transcriber(BaseTool):
+     name = "transcriber"
+@@ -59,7 +142,17 @@ class Transcriber(BaseTool):
+             "model_size": {
+                 "type": "string",
+                 "enum": ["tiny", "base", "small", "medium", "large-v2", "large-v3"],
+-                "default": "base",
++                "default": "small",
++                "description": "Whisper's model. small is the one cached on the box; another is downloaded at first use.",
++            },
++            "engine": {
++                "type": "string",
++                "enum": ["auto", "box", "whisper"],
++                "default": "auto",
++                "description": (
++                    "box: the words from the box's Qwen3-ASR (far better in Chinese), whisper's timing pinned "
++                    "onto them; whisper: whisper alone; auto: box when its ASR answers, else whisper."
++                ),
+             },
+             "language": {"type": "string", "description": "ISO 639-1 language code, or null for auto-detect"},
+             "diarize": {"type": "boolean", "default": False},
+@@ -115,7 +208,7 @@ class Transcriber(BaseTool):
+ 
+     def execute(self, inputs: dict[str, Any]) -> ToolResult:
+         input_path = Path(inputs["input_path"])
+-        model_size = inputs.get("model_size", "base")
++        model_size = inputs.get("model_size", "small")
+         language = inputs.get("language")
+         diarize = inputs.get("diarize", False)
+         output_dir = Path(inputs.get("output_dir", input_path.parent))
+@@ -125,6 +218,15 @@ class Transcriber(BaseTool):
+ 
+         output_dir.mkdir(parents=True, exist_ok=True)
+ 
++        engine = inputs.get("engine", "auto")
++        if engine == "box" or (engine == "auto" and self._box_answers()):
++            try:
++                return self._execute_box(input_path, model_size, language, output_dir)
++            except Exception as exc:
++                if engine == "box":
++                    return ToolResult(success=False, error=f"box ASR: {type(exc).__name__}: {exc}")
++                # auto: whisper alone below
++
+         try:
+             from faster_whisper import WhisperModel
+         except ImportError:
+@@ -239,6 +341,136 @@ class Transcriber(BaseTool):
+             duration_seconds=round(elapsed, 2),
+         )
+ 
++    def _box_answers(self) -> bool:
++        try:
++            import requests
++
++            return requests.get(BOX_ASR_URL.split("/v1/")[0] + "/health", timeout=2).status_code == 200
++        except Exception:
++            return False
++
++    def _execute_box(
++        self, input_path: Path, model_size: str, language: Optional[str], output_dir: Path
++    ) -> ToolResult:
++        """The box's Qwen3-ASR for the words, whisper for when each was said."""
++        import numpy as np
++        import requests
++        from faster_whisper import WhisperModel
++
++        start = time.time()
++        with tempfile.TemporaryDirectory() as tmp:
++            wav = Path(tmp) / "audio.wav"
++            subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(input_path), "-vn", "-ac", "1",
++                            "-ar", "16000", "-c:a", "pcm_s16le", str(wav)], check=True)
++            with wave.open(str(wav)) as w:
++                pcm = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16)
++        total = len(pcm) / 16000
++
++        # When: whisper's words, each split into units with its time shared out among them.
++        try:
++            model = WhisperModel(model_size, device="cpu", compute_type="int8", local_files_only=True)
++        except Exception as exc:
++            raise RuntimeError(f"whisper {model_size} is not on the box (small is): {exc}") from exc
++        found, info = model.transcribe(pcm.astype(np.float32) / 32768.0, language=language,
++                                       word_timestamps=True, vad_filter=True)
++        heard_segments = []
++        for seg in found:
++            heard = []
++            for w in seg.words or []:
++                spoken = [u for u in _units(w.word) if _key(u)]
++                step = (w.end - w.start) / max(1, len(spoken))
++                heard += [(_key(u), w.start + i * step, w.start + (i + 1) * step) for i, u in enumerate(spoken)]
++            if heard:
++                heard_segments.append({"start": seg.start, "end": seg.end, "heard": heard})
++
++        # What: the box's ASR on stretches of up to _CHUNK_S, cut where whisper heard a pause.
++        chunks: list[list[dict]] = []
++        for s in heard_segments:
++            if chunks and s["end"] - chunks[-1][0]["start"] <= _CHUNK_S:
++                chunks[-1].append(s)
++            else:
++                chunks.append([s])
++        units_all: list[tuple[str, float, float, float]] = []
++        agreed = 0
++        box_language = None
++        for chunk in chunks:
++            t0 = max(0.0, chunk[0]["start"] - 0.25)
++            t1 = min(total, chunk[-1]["end"] + 0.25)
++            buf = io.BytesIO()
++            with wave.open(buf, "wb") as w:
++                w.setnchannels(1)
++                w.setsampwidth(2)
++                w.setframerate(16000)
++                w.writeframes(pcm[int(t0 * 16000):int(t1 * 16000)].tobytes())
++            params = {"enable_vad": "false"}
++            if language:
++                params["language"] = language
++            reply = requests.post(BOX_ASR_URL, params=params, timeout=600,
++                                  files={"file": ("chunk.wav", buf.getvalue(), "audio/wav")})
++            reply.raise_for_status()
++            body = reply.json()
++            box_language = box_language or body.get("language")
++            units = [u for u in _units(body.get("text", "")) if _key(u)]
++            if not units:
++                continue
++            times, ok = _pin([h for s in chunk for h in s["heard"]], units, t0, t1)
++            agreed += ok
++            units_all += [(u, a, b, c) for u, (a, b, c) in zip(units, times)]
++
++        # Segments end at a full stop or a pause; a unit is a "word".
++        segments: list[dict] = []
++        word_timestamps: list[dict] = []
++        current: list[dict] = []
++
++        def close() -> None:
++            if current:
++                segments.append({
++                    "id": len(segments),
++                    "start": current[0]["start"],
++                    "end": current[-1]["end"],
++                    "text": "".join(w["_text"] for w in current).strip(),
++                    "words": [{k: v for k, v in w.items() if k != "_text"} for w in current],
++                })
++                current.clear()
++
++        last_start = 0.0
++        for unit, a, b, confidence in units_all:
++            a = max(a, last_start)
++            b = max(b, a + 0.01)
++            last_start = a
++            if current and a - current[-1]["end"] > _PAUSE_S:
++                close()
++            word = {"word": unit.strip(), "start": round(float(a), 3), "end": round(float(b), 3),
++                    "probability": confidence, "_text": unit}
++            current.append(word)
++            word_timestamps.append({k: v for k, v in word.items() if k != "_text"})
++            if unit.rstrip() and unit.rstrip()[-1] in _SENTENCE_END:
++                close()
++        close()
++
++        result_data = {
++            "segments": segments,
++            "word_timestamps": word_timestamps,
++            "language": language or box_language or info.language,
++            "duration_seconds": round(float(total), 3),
++            "model_size": model_size,
++            "device": "cpu",
++            "compute_type": "int8",
++            "engine": "box",
++            "words_from": "Qwen3-ASR 1.7B on the box (" + BOX_ASR_URL.split("/v1/")[0] + ")",
++            "timing_from": f"faster-whisper {model_size}",
++            "timing_agreed": round(agreed / max(1, len(units_all)), 3),
++            "gpu_fallback_reason": None,
++        }
++        output_path = output_dir / f"{input_path.stem}_transcript.json"
++        output_path.write_text(json.dumps(result_data, indent=2, ensure_ascii=False), encoding="utf-8")
++        return ToolResult(
++            success=True,
++            data=result_data,
++            artifacts=[str(output_path)],
++            duration_seconds=round(time.time() - start, 2),
++        )
++
+     def _apply_diarization(
+         self,
+         audio_path: str,
+diff --git a/tools/audio/music_gen.py b/tools/audio/music_gen.py
+index 94776b0..5d9a7d3 100644
+--- a/tools/audio/music_gen.py
++++ b/tools/audio/music_gen.py
+@@ -2,15 +2,24 @@
+ 
+ Generates background music and sound effects for video production.
+ Reports unavailable when no API key is configured.
++
++On the LocalKin box (2026-10), without an ElevenLabs key: ACE-Step 1.5 XL Turbo on the box's
++ComfyUI — it keeps to the length asked for (MiniMax Music 3 picks its own), sings in Chinese
++when given lyrics, and needs no account. provider "auto" picks it when there is no key.
+ """
+ 
+ from __future__ import annotations
+ 
+ import os
++import re
++import shutil
++import subprocess
+ import time
+ from pathlib import Path
+ from typing import Any
+ 
++from tools._box import node, seed as pick_seed
++from tools._comfyui.client import ComfyUIClient, ComfyUIError
+ from tools.base_tool import (
+     BaseTool,
+     Determinism,
+@@ -25,6 +34,11 @@ from tools.base_tool import (
+ )
+ 
+ 
++_ACE_DIT = "acestep_v1.5_xl_turbo_bf16.safetensors"
++_ACE_ENCODERS = ("qwen_0.6b_ace15.safetensors", "qwen_4b_ace15.safetensors")
++_ACE_VAE = "ace_1.5_vae.safetensors"
++
++
+ class MusicGen(BaseTool):
+     name = "music_gen"
+     version = "0.1.0"
+@@ -69,6 +83,20 @@ class MusicGen(BaseTool):
+                 ),
+             },
+             "output_path": {"type": "string"},
++            "provider": {
++                "type": "string",
++                "enum": ["auto", "elevenlabs", "ace_step"],
++                "default": "auto",
++                "description": "auto: ElevenLabs when its key is set, else ACE-Step 1.5 on the LocalKin box's ComfyUI.",
++            },
++            "lyrics": {
++                "type": "string",
++                "description": "ACE-Step: words to sing, with [Verse]/[Chorus] lines; leave out for instrumental.",
++            },
++            "bpm": {"type": "integer", "description": "ACE-Step: tempo (else read from '95 BPM' in the prompt, else 100)."},
++            "keyscale": {"type": "string", "description": "ACE-Step: e.g. 'C major', 'A minor' (default C major)."},
++            "language": {"type": "string", "description": "ACE-Step: language of the lyrics, e.g. zh, en, yue (default from the lyrics)."},
++            "seed": {"type": "integer"},
+             "force_instrumental": {
+                 "type": "boolean",
+                 "default": True,
+@@ -94,10 +122,21 @@ class MusicGen(BaseTool):
+     ]
+ 
+     def get_status(self) -> ToolStatus:
+-        if os.environ.get("ELEVENLABS_API_KEY"):
++        if os.environ.get("ELEVENLABS_API_KEY") or self._ace_ready():
+             return ToolStatus.AVAILABLE
+         return ToolStatus.UNAVAILABLE
+ 
++    @staticmethod
++    def _ace_ready() -> bool:
++        try:
++            client = ComfyUIClient(capability="music")
++            if not client.is_available():
++                return False
++            _, missing = client.check_models([_ACE_DIT, *_ACE_ENCODERS, _ACE_VAE])
++            return not missing
++        except Exception:
++            return False
++
+     def estimate_cost(self, inputs: dict[str, Any]) -> float:
+         # ElevenLabs music generation pricing is per generation
+         duration = inputs.get("duration_seconds")
+@@ -107,11 +146,17 @@ class MusicGen(BaseTool):
+                 "Derive it from the approved target runtime in the script/proposal. "
+                 "Silent defaults are not permitted."
+             )
++        if inputs.get("provider") == "ace_step" or (inputs.get("provider", "auto") == "auto"
++                                                    and not os.environ.get("ELEVENLABS_API_KEY")):
++            return 0.0  # the box's own GPU
+         # Approximate: ~$0.05 per 30 seconds
+         return round(duration / 30 * 0.05, 4)
+ 
+     def execute(self, inputs: dict[str, Any]) -> ToolResult:
+         api_key = os.environ.get("ELEVENLABS_API_KEY")
++        provider = inputs.get("provider", "auto")
++        if provider == "ace_step" or (provider == "auto" and not api_key):
++            return self._generate_ace(inputs)
+         if not api_key:
+             return ToolResult(
+                 success=False,
+@@ -185,3 +230,76 @@ class MusicGen(BaseTool):
+             },
+             artifacts=[str(output_path)],
+         )
++
++    def _generate_ace(self, inputs: dict[str, Any]) -> ToolResult:
++        """ACE-Step 1.5 XL Turbo on the box's ComfyUI, as ComfyUI's own template has it
++        (audio_ace_step1_5_xl_turbo): 8 euler steps at cfg 1, AuraFlow shift 3, audio codes on."""
++        start = time.time()
++        duration = inputs.get("duration_seconds")
++        if duration is None:
++            return ToolResult(success=False, error=(
++                "music_gen: duration_seconds is required. Derive it from the approved target runtime "
++                "in the script/proposal — ACE-Step makes exactly that length."))
++        client = ComfyUIClient(capability="music")
++        if not client.is_available():
++            return ToolResult(success=False, error=client.unavailable_reason())
++        seed = pick_seed(inputs.get("seed"))
++        prompt = inputs["prompt"].strip()
++        lyrics = (inputs.get("lyrics") or "").strip()
++        instrumental = not lyrics
++        tags = prompt + (", instrumental" if instrumental and "instrumental" not in prompt.lower() else "")
++        found = re.search(r"(\d{2,3})\s*bpm", prompt, re.IGNORECASE)
++        bpm = int(inputs.get("bpm") or (found.group(1) if found else 100))
++        language = inputs.get("language") or ("zh" if re.search(r"[\u4e00-\u9fff]", lyrics) else "en")
++        seconds = float(duration)
++        wanted = Path(inputs.get("output_path", "music_output.mp3"))
++        flac = wanted.with_suffix(".flac")
++        graph = {
++            "1": node("UNETLoader", {"unet_name": _ACE_DIT, "weight_dtype": "default"}),
++            "2": node("ModelSamplingAuraFlow", {"model": ["1", 0], "shift": 3}),
++            "3": node("DualCLIPLoader", {"clip_name1": _ACE_ENCODERS[0], "clip_name2": _ACE_ENCODERS[1],
++                                         "type": "ace", "device": "default"}),
++            "4": node("VAELoader", {"vae_name": _ACE_VAE}),
++            "5": node("TextEncodeAceStepAudio1.5", {
++                "clip": ["3", 0], "tags": tags, "lyrics": "[Instrumental]" if instrumental else lyrics,
++                "seed": seed, "bpm": bpm, "duration": seconds, "timesignature": "4", "language": language,
++                "keyscale": inputs.get("keyscale") or "C major", "generate_audio_codes": True,
++                "cfg_scale": 2.0, "temperature": 0.85, "top_p": 0.9, "top_k": 0, "min_p": 0.0}),
++            "6": node("ConditioningZeroOut", {"conditioning": ["5", 0]}),
++            "7": node("EmptyAceStep1.5LatentAudio", {"seconds": seconds, "batch_size": 1}),
++            "8": node("KSampler", {"model": ["2", 0], "seed": seed, "steps": 8, "cfg": 1, "sampler_name": "euler",
++                                   "scheduler": "simple", "positive": ["5", 0], "negative": ["6", 0],
++                                   "latent_image": ["7", 0], "denoise": 1.0}),
++            "9": node("VAEDecodeAudio", {"samples": ["8", 0], "vae": ["4", 0]}),
++            "10": node("SaveAudioAdvanced", {"audio": ["9", 0], "filename_prefix": f"audio/openmontage-{wanted.stem}",
++                                             "format": "flac"}),
++        }
++        try:
++            paths = client.generate(graph, output_node="10", dest=flac,
++                                    timeout=int(inputs.get("timeout_seconds", 3600)))
++        except ComfyUIError as exc:
++            return ToolResult(success=False, data={"prompt_id": exc.prompt_id}, error=str(exc))
++        except Exception as exc:
++            return ToolResult(success=False, error=f"ACE-Step 1.5 on the box failed: {exc}")
++        output = paths[0]
++        if wanted.suffix.lower() != ".flac" and shutil.which("ffmpeg"):
++            done = subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(output), str(wanted)])
++            if done.returncode == 0:
++                output = wanted
++        actual = None
++        if shutil.which("ffprobe"):
++            probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
++                                    str(output)], capture_output=True, text=True)
++            try:
++                actual = round(float(probe.stdout.strip()), 2)
++            except ValueError:
++                actual = None
++        return ToolResult(
++            success=True,
++            data={"provider": "ace_step_box", "model": "ace-step-1.5-xl-turbo", "prompt": tags,
++                  "lyrics": None if instrumental else lyrics, "bpm": bpm, "language": language,
++                  "requested_seconds": seconds, "duration_seconds": actual if actual is not None else seconds,
++                  "output": str(output), "format": Path(output).suffix.lstrip(".")},
++            artifacts=[str(output)], cost_usd=0.0, duration_seconds=round(time.time() - start, 2),
++            seed=seed, model="ace-step-1.5-xl-turbo",
++        )
+diff --git a/tools/avatar/lip_sync.py b/tools/avatar/lip_sync.py
+index 8deea07..414c362 100644
+--- a/tools/avatar/lip_sync.py
++++ b/tools/avatar/lip_sync.py
+@@ -3,6 +3,10 @@
+ Syncs lip movements in a video to match a different audio track using
+ Wav2Lip or MuseTalk models. Primary use case: replace original speech
+ with translated audio and make the speaker's lips match.
++
++On the LocalKin box (2026-10): MuseTalk 1.5 on MLX with the mouth and jaw as tuned for its live
++face (~/kin-avatar/face/kin_lipsync.py) — model "musetalk", and "auto" picks it — and Wav2Lip
++itself in ~/kin-avatar/wav2lip with a Python 3.10 environment of its own (~/kin-avatar/talkers).
+ """
+ 
+ from __future__ import annotations
+@@ -77,9 +81,9 @@ class LipSync(BaseTool):
+             },
+             "model": {
+                 "type": "string",
+-                "enum": ["wav2lip", "wav2lip_gan"],
+-                "default": "wav2lip",
+-                "description": "Model variant (gan = higher quality but slower)",
++                "enum": ["auto", "ditto", "musetalk", "wav2lip", "wav2lip_gan"],
++                "default": "auto",
++                "description": "auto: Ditto where it is set up (the LocalKin box) — the whole face drawn again speaking the audio, lips and teeth sharp, the head as the video moves it — else MuseTalk, else Wav2Lip. musetalk redraws only the mouth and blurs a small or turned face (2026-10-04). wav2lip_gan = higher quality but slower; wav2lip falls back to it when only the GAN weights are there.",
+             },
+             "face_padding": {
+                 "type": "array",
+@@ -107,8 +111,48 @@ class LipSync(BaseTool):
+         "Check face region for visual artifacts or jitter",
+     ]
+ 
++    @staticmethod
++    def _ditto() -> Path | None:
++        """Ditto's folder with kin_ditto_talk.py and its venv, as on the LocalKin box."""
++        d = Path(os.environ.get("DITTO_PATH", os.path.expanduser("~/kin-avatar/ditto/ditto-talkinghead")))
++        ready = (d / "kin_ditto_talk.py").exists() and (d / ".venv312" / "bin" / "python").exists()
++        return d if ready else None
++
++    def _run_ditto(self, video_path: Path, audio_path: Path, output_path: Path) -> ToolResult:
++        """The video as Ditto's source: every frame kept, the face in it drawn again speaking the
++        audio (frames repeat if the audio is longer). 25 fps out, about 6.5 frames a second."""
++        d = self._ditto()
++        start = time.time()
++        try:
++            self.run_command([str(d / ".venv312" / "bin" / "python"), "kin_ditto_talk.py",
++                              "./checkpoints/ditto_cfg/v0.4_hubert_cfg_pytorch.pkl",
++                              str(video_path.resolve()), str(audio_path.resolve()), str(output_path.resolve())],
++                             cwd=d, timeout=3600)
++        except Exception as e:
++            tail = getattr(e, "stderr", "") or ""
++            return ToolResult(success=False, error=f"Ditto failed: {e}\n{str(tail)[-1500:]}")
++        if not output_path.exists():
++            return ToolResult(success=False, error=f"Ditto wrote no video at {output_path}")
++        return ToolResult(success=True, artifacts=[str(output_path)], duration_seconds=round(time.time() - start, 2),
++                          model="ditto", data={"model": "ditto", "output": str(output_path), "format": "mp4"})
++
++    @staticmethod
++    def _musetalk() -> tuple[str, str] | None:
++        """(python, kin_lipsync.py) when MuseTalk is set up as on the LocalKin box."""
++        face = Path(os.environ.get("KIN_FACE_DIR", os.path.expanduser("~/kin-avatar/face")))
++        python = Path(os.environ.get("MUSETALK_PYTHON", os.path.expanduser("~/kin-avatar/musetalk/.venv/bin/python")))
++        script = face / "kin_lipsync.py"
++        return (str(python), str(script)) if python.exists() and script.exists() else None
++
++    @staticmethod
++    def _wav2lip_python() -> str:
++        exe = os.environ.get("WAV2LIP_PYTHON") or os.path.expanduser("~/kin-avatar/talkers/.venv/bin/python")
++        return exe if os.path.exists(exe) else "python"
++
+     def get_status(self) -> ToolStatus:
+         """Check Wav2Lip availability via env var or Python import."""
++        if self._ditto() or self._musetalk() or self._resolve_wav2lip_dir():
++            return ToolStatus.AVAILABLE
+         # Check WAV2LIP_PATH environment variable
+         wav2lip_path = os.environ.get("WAV2LIP_PATH")
+         if wav2lip_path and Path(wav2lip_path).is_dir():
+@@ -141,6 +185,10 @@ class LipSync(BaseTool):
+         except (ImportError, AttributeError):
+             pass
+ 
++        # The LocalKin box keeps it with the other faces
++        p = Path(os.path.expanduser("~/kin-avatar/wav2lip"))
++        if (p / "inference.py").exists():
++            return p
+         return None
+ 
+     def execute(self, inputs: dict[str, Any]) -> ToolResult:
+@@ -163,10 +211,17 @@ class LipSync(BaseTool):
+         )
+         output_path.parent.mkdir(parents=True, exist_ok=True)
+ 
+-        model_variant = inputs.get("model", "wav2lip")
++        model_variant = inputs.get("model", "auto")
+         face_padding = inputs.get("face_padding", [0, 10, 0, 0])
+         resize_factor = inputs.get("resize_factor", 1)
+ 
++        if model_variant == "auto":
++            model_variant = "ditto" if self._ditto() else "musetalk" if self._musetalk() else "wav2lip"
++        if model_variant == "ditto" and self._ditto():
++            return self._run_ditto(video_path, audio_path, output_path)
++        if model_variant == "musetalk":
++            return self._run_musetalk(video_path, audio_path, output_path)
++
+         wav2lip_dir = self._resolve_wav2lip_dir()
+         if wav2lip_dir is None:
+             return ToolResult(
+@@ -175,6 +230,10 @@ class LipSync(BaseTool):
+             )
+ 
+         checkpoint = wav2lip_dir / "checkpoints" / MODEL_CHECKPOINTS[model_variant]
++        if not checkpoint.exists() and model_variant == "wav2lip":
++            gan = wav2lip_dir / "checkpoints" / MODEL_CHECKPOINTS["wav2lip_gan"]
++            if gan.exists():
++                checkpoint, model_variant = gan, "wav2lip_gan"
+         if not checkpoint.exists():
+             return ToolResult(
+                 success=False,
+@@ -191,7 +250,7 @@ class LipSync(BaseTool):
+         start = time.time()
+ 
+         cmd = [
+-            "python", str(inference_script),
++            self._wav2lip_python(), str(inference_script),
+             "--checkpoint_path", str(checkpoint),
+             "--face", str(video_path),
+             "--audio", str(audio_path),
+@@ -200,10 +259,13 @@ class LipSync(BaseTool):
+             "--resize_factor", str(resize_factor),
+         ]
+ 
++        # Wav2Lip runs on Apple's GPU on the box (its inference.py patched for mps); an op the GPU
++        # lacks falls back to the CPU instead of failing.
++        os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+         try:
+-            self.run_command(cmd, timeout=600, cwd=wav2lip_dir)
++            self.run_command(cmd, timeout=3600, cwd=wav2lip_dir)
+         except subprocess.TimeoutExpired:
+-            return ToolResult(success=False, error="Lip-sync timed out after 600 seconds")
++            return ToolResult(success=False, error="Lip-sync timed out after 3600 seconds")
+         except Exception as e:
+             return ToolResult(success=False, error=f"Wav2Lip inference failed: {e}")
+ 
+@@ -229,3 +291,37 @@ class LipSync(BaseTool):
+             duration_seconds=round(elapsed, 2),
+             model=model_variant,
+         )
++
++    def _run_musetalk(self, video_path: Path, audio_path: Path, output_path: Path) -> ToolResult:
++        """MuseTalk on the LocalKin box (kin_lipsync.py): the video is the body, looped when
++        shorter than the voice; the mouth and jaw come from the voice."""
++        found = self._musetalk()
++        if found is None:
++            return ToolResult(success=False, error="MuseTalk is not set up (~/kin-avatar/face/kin_lipsync.py)")
++        python, script = found
++        start = time.time()
++        cmd = [python, script, "--video", str(video_path.resolve()), "--audio", str(audio_path.resolve()),
++               "--out", str(output_path.resolve())]
++        error = None
++        for _ in range(2):  # once more if muxing the voice in failed (seen once on the box)
++            try:
++                self.run_command(cmd, timeout=3600, cwd=Path(script).parent)
++                error = None
++            except Exception as e:
++                error = f"{e}\n{(getattr(e, 'stderr', '') or '')[-1200:]}"
++            if output_path.exists():
++                break
++        if not output_path.exists():
++            return ToolResult(success=False, error=f"MuseTalk lip-sync failed: {error}")
++        return ToolResult(
++            success=True,
++            data={
++                "video_input": str(video_path),
++                "audio_input": str(audio_path),
++                "output": str(output_path),
++                "model": "musetalk",
++            },
++            artifacts=[str(output_path)],
++            duration_seconds=round(time.time() - start, 2),
++            model="musetalk",
++        )
+diff --git a/tools/avatar/talking_head.py b/tools/avatar/talking_head.py
+index f69a063..6e77ccc 100644
+--- a/tools/avatar/talking_head.py
++++ b/tools/avatar/talking_head.py
+@@ -2,6 +2,11 @@
+ 
+ Animates a still face photo to appear as if speaking provided audio.
+ Uses SadTalker or MuseTalk models for audio-driven face animation.
++
++On the LocalKin box: Ditto (Ant Group, Apache-2.0; ~/kin-avatar/ditto/ditto-talkinghead,
++kin_ditto_talk.py) — the whole face from the voice, lips included, about 6.5 frames a second
++on the box's GPU, chosen by model "auto" (the default); SadTalker itself is in ~/kin-avatar/sadtalker
++with a Python 3.10 environment of its own (~/kin-avatar/talkers) for model "sadtalker".
+ """
+ 
+ from __future__ import annotations
+@@ -71,9 +76,14 @@ class TalkingHead(BaseTool):
+             },
+             "model": {
+                 "type": "string",
+-                "enum": ["sadtalker", "musetalk"],
+-                "default": "sadtalker",
+-                "description": "Model to use for face animation",
++                "enum": ["auto", "ditto", "sadtalker", "musetalk"],
++                "default": "auto",
++                "description": "Model to use for face animation. auto: Ditto where it is set up (the LocalKin box: newer, on the GPU), else SadTalker.",
++            },
++            "crop_scale": {
++                "type": "number",
++                "default": 2.3,
++                "description": "Ditto: how much of the photo around the face is re-rendered (larger keeps more hair and shoulders moving with the head).",
+             },
+             "expression_scale": {
+                 "type": "number",
+@@ -110,9 +120,8 @@ class TalkingHead(BaseTool):
+ 
+     def get_status(self) -> ToolStatus:
+         """Check for SadTalker availability via env var or Python import."""
+-        # 1. SADTALKER_PATH env var pointing to cloned repo
+-        sadtalker_path = os.environ.get("SADTALKER_PATH", "")
+-        if sadtalker_path and Path(sadtalker_path).is_dir():
++        # 1. SADTALKER_PATH env var pointing to cloned repo (or ~/kin-avatar/sadtalker on the box)
++        if self._sadtalker_dir() is not None:
+             return ToolStatus.AVAILABLE
+ 
+         # 2. Installed as a Python package
+@@ -122,8 +131,39 @@ class TalkingHead(BaseTool):
+         except ImportError:
+             pass
+ 
++        # 3. Ditto on the LocalKin box
++        if self._ditto_dir() is not None:
++            return ToolStatus.AVAILABLE
++
+         return ToolStatus.UNAVAILABLE
+ 
++    @staticmethod
++    def _ditto_dir() -> Path | None:
++        d = Path(os.environ.get("DITTO_PATH", os.path.expanduser("~/kin-avatar/ditto/ditto-talkinghead")))
++        ready = (d / "kin_ditto_talk.py").exists() and (d / ".venv312" / "bin" / "python").exists() \
++            and (d / "checkpoints" / "ditto_pytorch").is_dir()
++        return d if ready else None
++
++    @staticmethod
++    def _sadtalker_dir() -> Path | None:
++        path = os.environ.get("SADTALKER_PATH", "") or os.path.expanduser("~/kin-avatar/sadtalker")
++        p = Path(path)
++        return p if (p / "inference.py").exists() else None
++
++    @staticmethod
++    def _sadtalker_python() -> str:
++        exe = os.environ.get("SADTALKER_PYTHON") or os.path.expanduser("~/kin-avatar/talkers/.venv/bin/python")
++        return exe if os.path.exists(exe) else "python"
++
++    def _sadtalker_ready(self) -> bool:
++        if self._sadtalker_dir() is not None:
++            return True
++        try:
++            import sadtalker  # noqa: F401
++            return True
++        except ImportError:
++            return False
++
+     # ------------------------------------------------------------------
+     # Cost & runtime estimates
+     # ------------------------------------------------------------------
+@@ -132,7 +172,16 @@ class TalkingHead(BaseTool):
+         return 0.0  # local GPU, no API cost
+ 
+     def estimate_runtime(self, inputs: dict[str, Any]) -> float:
+-        # SadTalker typically takes 30-120s depending on audio length
++        # SadTalker typically takes 30-120s depending on audio length; Ditto on the box renders
++        # about 6.5 of its 25 frames a second, plus ~20 s to load.
++        if inputs.get("model", "auto") in ("auto", "ditto") and self._ditto_dir():
++            try:
++                import subprocess as _sp
++                seconds = float(_sp.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
++                                         str(inputs.get("audio_path", ""))], capture_output=True, text=True).stdout or 0)
++            except Exception:
++                seconds = 20.0
++            return 20.0 + seconds * 25 / 6.5
+         return 60.0
+ 
+     # ------------------------------------------------------------------
+@@ -148,7 +197,12 @@ class TalkingHead(BaseTool):
+         if not audio_path.exists():
+             return ToolResult(success=False, error=f"Audio not found: {audio_path}")
+ 
+-        model = inputs.get("model", "sadtalker")
++        model = inputs.get("model", "auto")
++        # auto: Ditto where it is set up (newer, on the GPU), else SadTalker
++        if model == "auto":
++            model = "ditto" if self._ditto_dir() else "sadtalker"
++        elif model == "sadtalker" and not self._sadtalker_ready() and self._ditto_dir():
++            model = "ditto"
+         output_path = Path(
+             inputs.get("output_path", str(image_path.with_stem(f"{image_path.stem}_talking").with_suffix(".mp4")))
+         )
+@@ -157,14 +211,16 @@ class TalkingHead(BaseTool):
+         start = time.time()
+ 
+         try:
+-            if model == "sadtalker":
++            if model == "ditto":
++                result = self._run_ditto(inputs, image_path, audio_path, output_path)
++            elif model == "sadtalker":
+                 result = self._run_sadtalker(inputs, image_path, audio_path, output_path)
+             elif model == "musetalk":
+                 result = self._run_musetalk(inputs, image_path, audio_path, output_path)
+             else:
+                 return ToolResult(
+                     success=False,
+-                    error=f"Unknown model: {model}. Supported: sadtalker, musetalk",
++                    error=f"Unknown model: {model}. Supported: ditto, sadtalker, musetalk",
+                 )
+         except Exception as e:
+             return ToolResult(success=False, error=f"Talking head generation failed: {e}")
+@@ -180,14 +236,12 @@ class TalkingHead(BaseTool):
+         output_path: Path,
+     ) -> ToolResult:
+         """Run SadTalker inference via subprocess."""
+-        sadtalker_path = os.environ.get("SADTALKER_PATH", "")
+-        if not sadtalker_path or not Path(sadtalker_path).is_dir():
++        sadtalker_dir = self._sadtalker_dir()
++        if sadtalker_dir is None:
+             return ToolResult(
+                 success=False,
+                 error="SADTALKER_PATH not set or directory does not exist.\n" + self.install_instructions,
+             )
+-
+-        sadtalker_dir = Path(sadtalker_path)
+         result_dir = output_path.parent / "sadtalker_results"
+         result_dir.mkdir(parents=True, exist_ok=True)
+ 
+@@ -197,7 +251,7 @@ class TalkingHead(BaseTool):
+ 
+         # Build SadTalker inference command
+         cmd = [
+-            "python", str(sadtalker_dir / "inference.py"),
++            self._sadtalker_python(), str(sadtalker_dir / "inference.py"),
+             "--driven_audio", str(audio_path),
+             "--source_image", str(image_path),
+             "--result_dir", str(result_dir),
+@@ -208,7 +262,7 @@ class TalkingHead(BaseTool):
+         if still_mode:
+             cmd.append("--still")
+ 
+-        self.run_command(cmd, cwd=sadtalker_dir, timeout=600)
++        self.run_command(cmd, cwd=sadtalker_dir, timeout=3600)
+ 
+         # Find the output video in result_dir (SadTalker names it automatically)
+         generated = glob.glob(str(result_dir / "**" / "*.mp4"), recursive=True)
+@@ -241,6 +295,49 @@ class TalkingHead(BaseTool):
+             model="sadtalker",
+         )
+ 
++    def _run_ditto(
++        self,
++        inputs: dict[str, Any],
++        image_path: Path,
++        audio_path: Path,
++        output_path: Path,
++    ) -> ToolResult:
++        """Ditto on the LocalKin box, through kin_ditto_talk.py in its own venv."""
++        d = self._ditto_dir()
++        if d is None:
++            return ToolResult(success=False, error="Ditto is not set up (DITTO_PATH or ~/kin-avatar/ditto/ditto-talkinghead)")
++        expression = float(inputs.get("expression_scale", 1.0))
++        still = bool(inputs.get("still_mode", False))
++        crop_scale = float(inputs.get("crop_scale", 2.3))
++        cmd = [str(d / ".venv312" / "bin" / "python"), "kin_ditto_talk.py",
++               "./checkpoints/ditto_cfg/v0.4_hubert_cfg_pytorch.pkl",
++               str(image_path.resolve()), str(audio_path.resolve()), str(output_path.resolve()),
++               "--crop-scale", str(crop_scale), "--expression", str(expression)]
++        if still:
++            cmd.append("--still")
++        try:
++            self.run_command(cmd, cwd=d, timeout=3600)
++        except Exception as e:
++            tail = getattr(e, "stderr", "") or ""
++            return ToolResult(success=False, error=f"Ditto failed: {e}\n{tail[-1500:]}")
++        if not output_path.exists():
++            return ToolResult(success=False, error=f"Ditto wrote no video at {output_path}")
++        return ToolResult(
++            success=True,
++            data={
++                "model": "ditto",
++                "image": str(image_path),
++                "audio": str(audio_path),
++                "output": str(output_path),
++                "expression_scale": expression,
++                "still_mode": still,
++                "crop_scale": crop_scale,
++                "format": "mp4",
++            },
++            artifacts=[str(output_path)],
++            model="ditto",
++        )
++
+     def _run_musetalk(
+         self,
+         inputs: dict[str, Any],
+diff --git a/tools/base_tool.py b/tools/base_tool.py
+index 15d24e6..c362fa6 100644
+--- a/tools/base_tool.py
++++ b/tools/base_tool.py
+@@ -7,6 +7,7 @@ interface for discovery, execution, cost estimation, and health reporting.
+ from __future__ import annotations
+ 
+ import functools
++import glob
+ import hashlib
+ import inspect
+ import json
+@@ -140,6 +141,38 @@ class ToolResult:
+ 
+ import threading as _threading
+ 
++# An ffmpeg that can draw text. Homebrew's ffmpeg 9 on the LocalKin box (2026-10) has neither
++# libass (subtitles, ass) nor freetype (drawtext), so every caption burn and title card failed
++# there; a static build with both is kept in .localkin/bin. run_command hands it the commands
++# that draw text, and only when the ffmpeg on PATH cannot.
++_TEXT_FILTERS = ("subtitles=", "ass=", "drawtext=")
++_TEXT_FFMPEG: Optional[str] = None
++
++
++def _ffmpeg_for_text() -> Optional[str]:
++    global _TEXT_FFMPEG
++    if _TEXT_FFMPEG is not None:
++        return _TEXT_FFMPEG or None
++    candidates = [os.environ.get("OPENMONTAGE_FFMPEG_TEXT", ""), "ffmpeg",
++                  str(Path(__file__).resolve().parent.parent / ".localkin" / "bin" / "ffmpeg-libass")]
++    for pattern in ("~/*/.venv/lib/python3*/site-packages/imageio_ffmpeg/binaries/ffmpeg-*",
++                    "~/*/*/.venv/lib/python3*/site-packages/imageio_ffmpeg/binaries/ffmpeg-*"):
++        candidates += sorted(glob.glob(os.path.expanduser(pattern)))
++    for exe in candidates:
++        if not exe:
++            continue
++        try:
++            listed = subprocess.run([exe, "-hide_banner", "-filters"], capture_output=True,
++                                    text=True, timeout=15).stdout
++        except Exception:
++            continue
++        if " subtitles " in listed and " drawtext " in listed:
++            _TEXT_FFMPEG = exe
++            return exe
++    _TEXT_FFMPEG = ""
++    return None
++
++
+ # Shared nesting counter for instrumented execute() calls (thread-local so
+ # parallel tool threads don't see each other's depth).
+ _EXECUTE_DEPTH = _threading.local()
+@@ -421,6 +454,10 @@ class BaseTool(ABC):
+         shutil.which() so subprocess.run() can find them without shell=True.
+         """
+         resolved_cmd = list(cmd)
++        if resolved_cmd and resolved_cmd[0] == "ffmpeg" and any(
++            f in str(arg) for arg in resolved_cmd[1:] for f in _TEXT_FILTERS
++        ):
++            resolved_cmd[0] = _ffmpeg_for_text() or "ffmpeg"
+         if platform.system() == "Windows" and resolved_cmd:
+             exe = shutil.which(resolved_cmd[0])
+             if exe:
+diff --git a/tools/enhancement/eye_enhance.py b/tools/enhancement/eye_enhance.py
+index 5ffe771..464f8c3 100644
+--- a/tools/enhancement/eye_enhance.py
++++ b/tools/enhancement/eye_enhance.py
+@@ -9,6 +9,9 @@ Uses MediaPipe Face Mesh (468 landmarks) to precisely locate eye regions,
+ then applies targeted OpenCV adjustments. Processes video frame-by-frame.
+ 
+ Falls back to FFmpeg region-based filters if MediaPipe is not installed.
++
++On the LocalKin box MediaPipe 0.10 has an environment of its own (tools/_mediapipe_env.py): when
++it cannot be imported here, this tool runs there, unchanged.
+ """
+ 
+ from __future__ import annotations
+@@ -18,6 +21,7 @@ import time
+ from pathlib import Path
+ from typing import Any
+ 
++from tools import _mediapipe_env
+ from tools.base_tool import (
+     BaseTool,
+     Determinism,
+@@ -140,7 +144,7 @@ class EyeEnhance(BaseTool):
+             return False
+ 
+     def get_status(self) -> ToolStatus:
+-        if self._has_mediapipe() and self._has_opencv():
++        if (self._has_mediapipe() and self._has_opencv()) or _mediapipe_env.python():
+             return ToolStatus.AVAILABLE
+         if self._has_opencv():
+             return ToolStatus.DEGRADED
+@@ -150,6 +154,8 @@ class EyeEnhance(BaseTool):
+         input_path = Path(inputs["input_path"])
+         if not input_path.exists():
+             return ToolResult(success=False, error=f"Input not found: {input_path}")
++        if not (self._has_mediapipe() and self._has_opencv()) and _mediapipe_env.python():
++            return _mediapipe_env.execute("tools.enhancement.eye_enhance", "EyeEnhance", inputs)
+ 
+         operations = inputs.get("operations", ["dark_circles", "brighten_eyes"])
+         output_path = Path(
+diff --git a/tools/graphics/blender_world.py b/tools/graphics/blender_world.py
+index a3b930a..8502264 100644
+--- a/tools/graphics/blender_world.py
++++ b/tools/graphics/blender_world.py
+@@ -162,7 +162,7 @@ class BlenderWorld(BaseTool):
+         spec_path.write_text(json.dumps(inputs["world_spec"], indent=2), encoding="utf-8")
+ 
+         command = [
+-            str(blender), "--background", "--python", str(_RUNTIME_SCRIPT), "--",
++            str(blender), "--background", "--python-exit-code", "1", "--python", str(_RUNTIME_SCRIPT), "--",
+             "--operation", operation,
+             "--spec", str(spec_path),
+             "--blend", str(blend_path),
+@@ -215,6 +215,10 @@ class BlenderWorld(BaseTool):
+         if process.returncode != 0:
+             return ToolResult(success=False, error="Blender world build failed: " + (process.stderr or process.stdout)[-3000:])
+ 
++        # A render that wrote nothing is a failure, whatever Blender's exit code said.
++        if operation == "render_still" and output_raw and not Path(str(output_raw)).expanduser().exists():
++            return ToolResult(success=False, error="Blender exited without writing " + str(output_raw) + ": "
++                              + (process.stderr or process.stdout)[-2000:])
+         artifacts = [str(spec_path), str(blend_path)]
+         if output_raw:
+             output = Path(str(output_raw)).expanduser().resolve()
+diff --git a/tools/graphics/templates/blender-world-runtime.py b/tools/graphics/templates/blender-world-runtime.py
+index 429908f..197d581 100644
+--- a/tools/graphics/templates/blender-world-runtime.py
++++ b/tools/graphics/templates/blender-world-runtime.py
+@@ -376,7 +376,11 @@ def setup_title(spec: dict, args: argparse.Namespace):
+ 
+ def setup_render(args: argparse.Namespace):
+     scene = bpy.context.scene
+-    scene.render.engine = "BLENDER_EEVEE_NEXT"
++    # EEVEE Next (Blender 4.2-4.5) is plain EEVEE again from 5.0 (LocalKin box: 5.2.1)
++    try:
++        scene.render.engine = "BLENDER_EEVEE_NEXT"
++    except TypeError:
++        scene.render.engine = "BLENDER_EEVEE"
+     scene.eevee.taa_render_samples = args.samples
+     scene.render.resolution_x = args.width
+     scene.render.resolution_y = args.height
+diff --git a/tools/subtitle/subtitle_gen.py b/tools/subtitle/subtitle_gen.py
+index a22f67d..f7e58f7 100644
+--- a/tools/subtitle/subtitle_gen.py
++++ b/tools/subtitle/subtitle_gen.py
+@@ -12,6 +12,7 @@ import time
+ from pathlib import Path
+ from typing import Any
+ 
++from tools.subtitle import cjk
+ from tools.base_tool import (
+     BaseTool,
+     Determinism,
+@@ -82,8 +83,12 @@ class SubtitleGen(BaseTool):
+     def execute(self, inputs: dict[str, Any]) -> ToolResult:
+         segments = inputs["segments"]
+         fmt = inputs.get("format", "srt")
+-        max_words = inputs.get("max_words_per_cue", 8)
+-        max_chars = inputs.get("max_chars_per_line", 42)
++        # Chinese, Japanese, Korean: a character is a "word", so a cue is measured in characters
++        # (16 to a line unless asked otherwise) and ends with its clause (tools/subtitle/cjk.py).
++        is_cjk = cjk.mostly_cjk([w.get("word", "") for seg in segments for w in seg.get("words", [])]
++                                or [seg.get("text", "") for seg in segments])
++        max_words = inputs.get("max_words_per_cue", 0 if is_cjk else 8)
++        max_chars = inputs.get("max_chars_per_line", 16 if is_cjk else 42)
+         highlight_style = inputs.get("highlight_style", "none")
+         output_path = inputs.get("output_path")
+         corrections = inputs.get("corrections")
+@@ -93,9 +98,12 @@ class SubtitleGen(BaseTool):
+         # Apply word corrections if provided
+         if corrections:
+             segments = self._apply_corrections(segments, corrections)
++            if is_cjk:
++                segments = [dict(seg, words=cjk.correct(seg.get("words", []), corrections)) for seg in segments]
+ 
+         # Build cues from word-level timestamps
+-        cues = self._build_cues(segments, max_words, max_chars)
++        cues = self._build_cues_cjk(segments, max_words, max_chars) if is_cjk \
++            else self._build_cues(segments, max_words, max_chars)
+ 
+         if fmt == "srt":
+             content = self._render_srt(cues, highlight_style)
+@@ -152,7 +160,7 @@ class SubtitleGen(BaseTool):
+                     w["word"] = corr[stripped] + trailing
+             # Also fix segment-level text
+             if "text" in seg and words:
+-                seg["text"] = " ".join(w["word"] for w in words)
++                seg["text"] = cjk.join([w["word"] for w in words])
+             elif "text" in seg:
+                 for wrong, right in corr.items():
+                     import re as _re
+@@ -226,6 +234,32 @@ class SubtitleGen(BaseTool):
+ 
+         return cues
+ 
++    def _build_cues_cjk(self, segments: list[dict], max_words: int, max_chars: int) -> list[dict]:
++        """A cue per clause, a clause wider than max_chars cut into even parts, no spaces
++        between characters, the clause's comma or full stop not shown at the end."""
++        words = []
++        for seg in segments:
++            if seg.get("words"):
++                words += seg["words"]
++            elif seg.get("text"):
++                words.append({"word": seg["text"], "start": seg["start"], "end": seg["end"]})
++        cues: list[dict] = []
++        for clause in cjk.clauses(words):
++            for part in cjk.even_parts(clause, max_chars):
++                while part:
++                    take = part[:max_words] if max_words else part
++                    part = part[len(take):]
++                    texts = [w["word"].strip() for w in take]
++                    texts[-1] = cjk.shown(texts[-1], last=True)
++                    cues.append({
++                        "index": len(cues) + 1,
++                        "start": take[0]["start"],
++                        "end": take[-1]["end"],
++                        "text": cjk.join(texts),
++                        "words": [{"word": t, "start": w["start"], "end": w["end"]} for t, w in zip(texts, take)],
++                    })
++        return cues
++
+     def _render_srt(self, cues: list[dict], highlight_style: str = "none") -> str:
+         lines = []
+         if highlight_style == "word_by_word":
+@@ -261,7 +295,7 @@ class SubtitleGen(BaseTool):
+                             parts.append(f"<b>{w['word']}</b>")
+                         else:
+                             parts.append(w["word"])
+-                    lines.append(" ".join(parts))
++                    lines.append(cjk.join(parts))
+                     lines.append("")
+         else:
+             for cue in cues:
+@@ -299,7 +333,7 @@ class SubtitleGen(BaseTool):
+                             parts.append(f"<b>{w['word']}</b>")
+                         else:
+                             parts.append(w["word"])
+-                    lines.append(" ".join(parts))
++                    lines.append(cjk.join(parts))
+                     lines.append("")
+         else:
+             for cue in cues:
+diff --git a/tools/video/remotion_caption_burn.py b/tools/video/remotion_caption_burn.py
+index 35ff6ba..74f7db3 100644
+--- a/tools/video/remotion_caption_burn.py
++++ b/tools/video/remotion_caption_burn.py
+@@ -38,6 +38,7 @@ import time
+ from pathlib import Path
+ from typing import Any
+ 
++from tools.subtitle import cjk
+ from tools.base_tool import (
+     BaseTool,
+     Determinism,
+@@ -273,6 +274,7 @@ class RemotionCaptionBurn(BaseTool):
+         font_size: int,
+         highlight_color: str,
+         overlays: list[dict] | None = None,
++        word_separator: str | None = None,
+     ) -> ToolResult:
+         root = self._find_remotion_root()
+         if root is None:
+@@ -312,13 +314,16 @@ class RemotionCaptionBurn(BaseTool):
+ 
+         # Build props JSON
+         props = {
+-            "videoSrc": f"public/talking-head/{video_filename}",
++            # staticFile() paths are relative to public/ — Remotion refuses the prefix.
++            "videoSrc": f"talking-head/{video_filename}",
+             "captions": captions,
+             "overlays": overlays or [],
+             "wordsPerPage": words_per_page,
+             "fontSize": font_size,
+             "highlightColor": highlight_color,
+         }
++        if word_separator is not None:
++            props["captionWordSeparator"] = word_separator
+         props_dir = root / "public" / "demo-props"
+         props_dir.mkdir(parents=True, exist_ok=True)
+         props_file = props_dir / f"caption-burn-{Path(input_path).stem}.json"
+@@ -372,11 +377,17 @@ class RemotionCaptionBurn(BaseTool):
+ 
+         srt_lines = []
+         idx = 1
+-        # Group into pages of ~4 words
+-        page_size = 4
+-        for i in range(0, len(captions), page_size):
+-            page = captions[i : i + page_size]
+-            text = " ".join(c["word"] for c in page)
++        # Group into pages of ~4 words (by clause when the captions carry page breaks: CJK)
++        pages: list[list[dict]] = []
++        if any(c.get("pageBreakAfter") for c in captions):
++            for c in captions:
++                if not pages or pages[-1][-1].get("pageBreakAfter"):
++                    pages.append([])
++                pages[-1].append(c)
++        else:
++            pages = [captions[i : i + 4] for i in range(0, len(captions), 4)]
++        for page in pages:
++            text = cjk.join([c["word"] for c in page])
+             start = page[0]["startMs"]
+             end = page[-1]["endMs"]
+             srt_lines.append(str(idx))
+@@ -472,6 +483,26 @@ class RemotionCaptionBurn(BaseTool):
+         if not captions:
+             return ToolResult(success=False, error="No caption words extracted.")
+ 
++        # Chinese, Japanese, Korean (tools/subtitle/cjk.py): a character to a "word", so a page
++        # is a clause — cut into even parts when wider than words_per_page characters (14
++        # unless given) — with no spaces, and the clause's comma or full stop not shown.
++        word_separator = None
++        if cjk.mostly_cjk([c["word"] for c in captions]):
++            word_separator = ""
++            if corrections:
++                captions = cjk.correct(captions, corrections)
++            limit = inputs.get("words_per_page", 14)
++            paged = []
++            for clause in cjk.clauses(captions, gap=600, start="startMs", end="endMs"):
++                for part in cjk.even_parts(clause, limit):
++                    part = [dict(c) for c in part]
++                    last = cjk.shown(part[-1]["word"], last=True)
++                    part[-1]["word"] = last or part[-1]["word"]
++                    part[-1]["pageBreakAfter"] = True
++                    paged += part
++            captions = paged
++            words_per_page = max(words_per_page, 40) if "words_per_page" not in inputs else max(words_per_page, limit + 6)
++
+         overlays = inputs.get("overlays")
+ 
+         # Choose render method
+@@ -479,7 +510,7 @@ class RemotionCaptionBurn(BaseTool):
+             result = self._render_remotion(
+                 input_path, output_path, captions,
+                 words_per_page, font_size, highlight_color,
+-                overlays=overlays,
++                overlays=overlays, word_separator=word_separator,
+             )
+         else:
+             result = self._render_ffmpeg(input_path, output_path, captions)

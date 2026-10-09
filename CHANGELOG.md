@@ -8,6 +8,36 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Added — Montage: OpenMontage's twelve pipelines on the box, and a video in another language
+
+「一个一个链接吧，把他们都弄上」 and 「不可以用的就弄可用啊」 (2026-10-04): every OpenMontage
+pipeline's tools run on the box now — its own tools kept, the box's models added where a
+backend was missing (a cloud key, CUDA, a dependency its environment had moved past). What
+goes where is in `scripts/openmontage` (a patch, tools, setup scripts); the
+`localkin-pipelines` skill tells the Montage agent which pipeline runs on what.
+
+- **Chinese**: the transcriber's `engine: box` takes Qwen3-ASR's words and whisper's timing
+  (75 s of narration in 25 s, 98 % of the characters timed directly); captions are joined,
+  cut by clause and corrected for CJK (`cjk.py`). A Chinese 口播 captioned with Remotion in
+  9 s; its pauses cut, 26.8 → 10.3 s, in 1.2 s.
+- **Faces**: a photograph that talks with Ditto (5 s of speech in 30 s) or SadTalker (170 s);
+  a video lip-synced with Ditto, MuseTalk (17 s in 62 s) or Wav2Lip (5 s in 13 s); faces for
+  face_tracker found by Apple's Vision (`kin-faces`). `lip_sync` takes Ditto by default: it
+  draws the whole face again and stays sharp where MuseTalk's mouth blurred — but every pass
+  softens a face, so a video made from a photograph is made again from the photograph.
+- **`video_translate`**: a video into another language in its speaker's own voice. The box
+  hears the lines (Qwen3-ASR), the agent translates them, the voice is cloned from the
+  clearest 4–12 s of the video by Qwen3-TTS 1.7B Base — the box's new 克隆声音 service on
+  :8103, started and stopped from the 盒子 panel like the others — Ditto draws the face saying
+  the new words, and an .srt comes with it. A Chinese → English dub in 55 s.
+- **The rest**: ACE-Step music (30 s in 121 s, exactly 30.0 s), a cartoon character waving
+  and nodding in 7 s, Playwright, CLIP and manim in OpenMontage's venv, a static ffmpeg with
+  libass so captions burn in; huashu-art-motion (paintings and explainers drawn in code, 35
+  styles) and onetake (private use only) as skills.
+- `scripts/kin-face`: `kin_mouth.py` holds the live face's mouth — its mask, crop line and
+  sharper paste — for server.py and the offline `kin_lipsync.py` alike; `kin_ditto_talk.py`
+  runs Ditto from a photograph or a video, with `--still`, `--expression` and `--pose`.
+
 ### Fixed — Companion: the menus at the top left show again
 
 「陪伴模式为什么左上角那些button选项都看不见了啊」: the row of menus at the top left of

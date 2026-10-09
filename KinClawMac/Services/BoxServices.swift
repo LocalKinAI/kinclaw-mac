@@ -25,7 +25,7 @@ final class BoxServices: ObservableObject {
     static let binaryKey = "kinclaw.box.diffuser"
     static let defaultBinary = "~/.ollamadiffuser/venv/bin/ollamadiffuser"
 
-    enum Kind: String, CaseIterable { case draw, edit, film, filmHQ, brain, laya, comfy, narrator, turn, omni, face }
+    enum Kind: String, CaseIterable { case draw, edit, film, filmHQ, brain, laya, comfy, narrator, clone, turn, omni, face }
 
     struct Service: Identifiable, Equatable {
         let kind: Kind
@@ -44,6 +44,7 @@ final class BoxServices: ObservableObject {
         Service(kind: .laya, title: "Laya（打分 / 下棋）", cost: "约 2 GB；第一道题加载 5 秒，之后一道 23 ms"),
         Service(kind: .comfy, title: "ComfyUI", cost: "空闲不占；跑工作流时装着那个工作流的模型，跑完留在内存里直到被让出来"),
         Service(kind: .narrator, title: "电影旁白（Qwen3-TTS 1.7B VoiceDesign）", cost: "约 3 GB；一段 100 字的旁白 9 秒读完。和对话用的快速语音（8101）分开"),
+        Service(kind: .clone, title: "克隆声音（Qwen3-TTS 1.7B Base）", cost: "约 3 GB；几秒录音，就用那个人的声音说任何一种语言。视频翻译、用某段录音的声音做说话视频都靠它"),
         Service(kind: .turn, title: "陪伴小回合（Smart Turn + MaAI）", cost: "约 1 GB，只用 CPU；起来要一分钟。判断你说完没有、什么时候该嗯一声"),
         Service(kind: .face, title: "实时口型（Ditto 身体 + MuseTalk 嘴）", cost: "约 7 GB；起来要半分钟。陪伴里「真人 · 实时口型」，每秒 20 帧"),
         Service(kind: .omni, title: "MiniCPM-o 全双工（陪伴的另一个大脑）", cost: "通话时约 14 GB，开摄像头约 23 GB，挂断后仍占着；不用就在这里停掉。只听盒子本机，经 ssh 隧道连"),
@@ -106,6 +107,7 @@ final class BoxServices: ObservableObject {
         case .laya:   return "laya_judge.py"               // a script, not a model
         case .comfy:  return "ComfyUI"                     // a program with its own models
         case .narrator: return "qwen3-tts:1.7b-voicedesign" // a kin audio model
+        case .clone:  return "qwen3-tts:1.7b-base"         // a kin audio model that clones a voice
         case .turn:   return "kin-avatar/turn/server.py"   // a script, not a model
         case .omni:   return "llama-omni-server"           // llama.cpp-omni with MiniCPM-o 4.5 Q8_0
         case .face:   return "kin-avatar/face/server.py"   // MuseTalk on MLX over a Ditto body
@@ -131,6 +133,7 @@ final class BoxServices: ObservableObject {
         case .narrator:
             let set = (UserDefaults.standard.string(forKey: "kinclaw.film.narrator.url") ?? "").trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
             return set.isEmpty ? replacingPort(of: DiffuserClient.videoHost, with: 8102) : set
+        case .clone:  return replacingPort(of: DiffuserClient.videoHost, with: 8103)
         case .turn:   return replacingPort(of: DiffuserClient.videoHost, with: 8104)
         // Loopback on the box only (its firewall admits nothing else): reached
         // through OmniCall's ssh tunnel, and looked at over ssh.
@@ -187,7 +190,7 @@ final class BoxServices: ObservableObject {
             let (code, _) = await run("curl -sf -m 2 http://127.0.0.1:\(OmniCall.port)/health >/dev/null")
             return code == 0
         }
-        let path = kind == .brain ? "/api/tags" : (kind == .laya || kind == .narrator || kind == .turn || kind == .face) ? "/health" : kind == .comfy ? "/system_stats" : "/api/health"
+        let path = kind == .brain ? "/api/tags" : (kind == .laya || kind == .narrator || kind == .clone || kind == .turn || kind == .face) ? "/health" : kind == .comfy ? "/system_stats" : "/api/health"
         guard let url = await URL(string: base(kind) + path) else { return false }
         var request = URLRequest(url: url, timeoutInterval: 3)
         request.httpMethod = "GET"
@@ -233,15 +236,16 @@ final class BoxServices: ObservableObject {
                 PATH=/opt/homebrew/bin:/usr/local/bin:$PATH AIOHTTP_NOSENDFILE=1 \
                 nohup venv/bin/python main.py --listen 0.0.0.0 --port \(Self.port(.comfy)) > ~/Library/Logs/kinclaw/comfy.log 2>&1 & echo started; }
                 """
-        } else if kind == .narrator {
+        } else if kind == .narrator || kind == .clone {
             // The film narrator: kin audio serving a voice-design model — a
             // voice made from a description, for films; the companion's quick
-            // conversational voice stays on its own server.
+            // conversational voice stays on its own server. The clone: the
+            // same server with a model that speaks in a recording's voice.
             command = """
-                pgrep -f "kin audio serve \(Self.model(.narrator)) " >/dev/null && echo already || { \
+                pgrep -f "kin audio serve \(Self.model(kind)) " >/dev/null && echo already || { \
                 mkdir -p ~/Library/Logs/kinclaw; cd ~/localkin-service-audio; \
-                PATH=/opt/homebrew/bin:/usr/local/bin:$PATH nohup .venv/bin/kin audio serve \(Self.model(.narrator)) \
-                --host 0.0.0.0 --port \(Self.port(.narrator)) > ~/Library/Logs/kinclaw/narrator.log 2>&1 & echo started; }
+                PATH=/opt/homebrew/bin:/usr/local/bin:$PATH nohup .venv/bin/kin audio serve \(Self.model(kind)) \
+                --host 0.0.0.0 --port \(Self.port(kind)) > ~/Library/Logs/kinclaw/\(kind.rawValue).log 2>&1 & echo started; }
                 """
         } else if kind == .omni {
             command = OmniCall.serveCommand
@@ -313,7 +317,7 @@ final class BoxServices: ObservableObject {
             ? "launchctl bootout gui/$(id -u)/\(Self.model(.brain)) 2>&1; true"
             : kind == .laya ? "pkill -f laya_judge.py; true"
             : kind == .comfy ? "lsof -nP -iTCP:\(Self.port(.comfy)) -sTCP:LISTEN -t | xargs kill 2>/dev/null; true"
-            : kind == .narrator ? "pkill -f \"kin audio serve \(Self.model(.narrator)) \"; true"
+            : kind == .narrator || kind == .clone ? "pkill -f \"kin audio serve \(Self.model(kind)) \"; true"
             : kind == .turn ? "pkill -f \"\(Self.model(.turn))\"; true"
             : kind == .face ? "pkill -f \"\(Self.model(.face))\"; true"
             : kind == .omni ? "lsof -nP -iTCP:\(OmniCall.port) -sTCP:LISTEN -t | xargs kill 2>/dev/null; true"

@@ -97,3 +97,17 @@ a test client takes the face away from the app.
 
 `kin_ditto_online.py` drives Ditto's streaming pipeline with its GPU calls serialized (PyTorch's
 MPS backend crashes when several threads encode at once) — kept for the measurements.
+
+## For OpenMontage too (2026-10-04)
+
+- `kin_mouth.py` — the mouth+jaw mask, the crop line (FACE_BBOX_SHIFT) and the sharper paste, as one
+  `install()`: server.py and the offline lip-sync share it.
+- `kin_lipsync.py` (in `~/kin-avatar/face`, MuseTalk's venv) — a video lip-synced to a voice, offline: OpenMontage's
+  `lip_sync` model "musetalk" (avatar-spokesperson, localization-dub). The video is the body, looped when shorter
+  than the voice; its own frame rate. 17 s of speech over a 512×656 clip in about a minute.
+- `kin_ditto_talk.py` (in `ditto-talkinghead`, its `.venv312`) — Ditto from a photograph and a voice with the lips
+  driven too: OpenMontage's `talking_head` model "ditto". `--still` keeps the photograph's pose, `--expression`
+  scales the face's movement. 5 s of speech in 30 s. Given a video instead of a photograph it draws the face again
+  over every frame (ping-pong when the voice is longer): the offline lip-sync now (`lip_sync` auto, video_translate)
+  — sharper than MuseTalk's mouth, but each pass softens a face, so a video made from a photograph is redone from
+  the photograph.
