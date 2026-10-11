@@ -36,8 +36,8 @@ final class BoxServices: ObservableObject {
     }
 
     static let all: [Service] = [
-        Service(kind: .draw, title: "画图", cost: "空闲约 2 GB"),
-        Service(kind: .edit, title: "改图 / 换装 / 空镜", cost: "用过之后约 8 GB"),
+        Service(kind: .draw, title: "画图（Qwen-Image-2.1-Turbo）", cost: "画过一张后约 29 GB；和改图轮流，起一个先停另一个；闲 10 分钟盒子控制台会停掉它"),
+        Service(kind: .edit, title: "改图 / 换装 / 空镜（Qwen-Image-2.1-Turbo）", cost: "改过一张后约 30 GB；和画图轮流，换一次约 10 秒；闲 10 分钟盒子控制台会停掉它"),
         Service(kind: .film, title: "出片", cost: "空闲不占，拍的时候约 25 GB"),
         Service(kind: .filmHQ, title: "出片 · 精修 (q8)", cost: "拍的时候约 45 GB，一个镜头 9 分钟"),
         Service(kind: .brain, title: "kinfer 大模型", cost: "模型常驻，35B 约 35 GB，不会自己卸载"),
@@ -99,8 +99,8 @@ final class BoxServices: ObservableObject {
         let chosen = safe(UserDefaults.standard.string(forKey: "kinclaw.box.model.\(kind.rawValue)") ?? "")
         if !chosen.isEmpty { return chosen }
         switch kind {
-        case .draw:   return "boogu-image-turbo-mlx"
-        case .edit:   return "flux.2-klein-4b-edit-mlx"
+        case .draw:   return "qwen-image-2.1-turbo-mlx"       // the same weights twice: its own 8-step
+        case .edit:   return "qwen-image-2.1-turbo-edit-mlx"  // schedule to draw, its editor to change
         case .film:   return "ltx-2.3-mlx-q4"
         case .filmHQ: return "ltx-2.3-mlx-q8"
         case .brain:  return "ai.localkin.kinfer"          // a launchd label, not a model
@@ -216,8 +216,24 @@ final class BoxServices: ObservableObject {
 
     // MARK: - Doing
 
+    /// The other of the two picture servers. Each holds all of
+    /// Qwen-Image-2.1-Turbo, 29–30 GB once it has made a picture, and the box
+    /// cannot keep both beside ComfyUI and a language model (it went down once
+    /// on memory, 2026-10-09) — so they take turns.
+    private static func partner(_ kind: Kind) -> Kind? {
+        switch kind {
+        case .draw: return .edit
+        case .edit: return .draw
+        default:    return nil
+        }
+    }
+
     func start(_ kind: Kind) async {
         guard !Self.ssh.isEmpty else { note = "先填盒子的 SSH（user@地址）"; return }
+        // The one not wanted is let go first: about 3 s to stop, and the next
+        // picture spends about 8 s loading. DiffuserClient makes one picture at a
+        // time, so the one let go is not in the middle of one of ours.
+        if let other = Self.partner(kind), await Self.answers(other) { await stop(other) }
         states[kind] = .starting
         note = nil
         let command: String

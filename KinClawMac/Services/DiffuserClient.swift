@@ -1,4 +1,5 @@
 import AppKit
+import CoreImage
 import Foundation
 
 /// Pictures made to order, from an OllamaDiffuser on the network.
@@ -11,7 +12,9 @@ import Foundation
 ///
 /// It talks to OllamaDiffuser's REST API (`/api/generate`, `/api/models`), the
 /// same one `ollamadiffuser run` serves. Measured on the box with
-/// Boogu-Image-Turbo: 14s for 768×768 at 4 steps.
+/// Qwen-Image-2.1-Turbo (bf16, float16 compute, its own 8 steps): 22s for
+/// 768×768, 37s for 1024×1024. Boogu-Image-Turbo was 17s for 768×768 but
+/// wrote Chinese twice over and lost the layout.
 @MainActor
 final class DiffuserClient: ObservableObject {
     static let shared = DiffuserClient()
@@ -29,8 +32,10 @@ final class DiffuserClient: ObservableObject {
 
     /// And a third: editing an existing picture is a different model again.
     /// Text-to-image models cannot do it at all — Boogu, Krea, ERNIE, Lens and
-    /// Ideogram ship only a txt2img path — so "her, but in a cafe" needs
-    /// FLUX.1-Kontext, which takes the picture as its input and keeps the face.
+    /// Ideogram ship only a txt2img path — so "her, but in a cafe" needs an
+    /// editor, which takes the picture as its input and keeps the face: now
+    /// Qwen-Image-2.1-Turbo's own editor on the same weights (48–60s at
+    /// 1024×1024; it changes the lettering on a poster and leaves the rest).
     /// That is the whole trick behind a companion who stays the same person.
     static let editHostKey = "kinclaw.diffuser.edit.host"
     static let defaultEditHost = "http://192.168.0.21:8002"
@@ -113,6 +118,35 @@ final class DiffuserClient: ObservableObject {
         return (boundary, body)
     }
 
+    // MARK: - One picture at a time
+
+    /// The drawing and the editing server take turns on the box: each holds all
+    /// of Qwen-Image-2.1-Turbo, 29–30 GB once it has made a picture, and the box
+    /// cannot keep both beside ComfyUI and a language model, so BoxServices lets
+    /// one go when the other is wanted. A drawing and an edit from here must then
+    /// never be in flight together, or starting one would cut the other off:
+    /// pictures are made one at a time, in the order asked.
+    private var making = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    private func takeTurn() async {
+        guard making else { making = true; return }
+        await withCheckedContinuation { waiting.append($0) }
+    }
+
+    private func endTurn() {
+        if waiting.isEmpty { making = false } else { waiting.removeFirst().resume() }
+    }
+
+    /// What the server said when it refused. Since OllamaDiffuser 2.3.0 a
+    /// failure is an HTTP error with a `detail` — a missing input, or too little
+    /// memory free to load the model — instead of a 200 with an error card.
+    private static func refusal(_ data: Data) -> String {
+        guard let answer = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let detail = answer["detail"] else { return "" }
+        return "。服务说：" + String(((detail as? String) ?? "\(detail)").prefix(240))
+    }
+
     // MARK: - Changing one
 
     /// Edit `source` by instruction and write the result into `folder`.
@@ -122,7 +156,7 @@ final class DiffuserClient: ObservableObject {
     /// person who matches a description, and the reason a companion made of
     /// text-to-image calls is a different woman in every picture.
     ///
-    /// Kontext wants an instruction rather than a caption: "change her coat to
+    /// An editor wants an instruction rather than a caption: "change her coat to
     /// a red one", not "a woman in a red coat".
     @discardableResult
     func edit(prompt: String, from source: URL, also references: [URL] = [], into folder: URL,
@@ -133,6 +167,8 @@ final class DiffuserClient: ObservableObject {
         }
         let cleaned = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { throw Failure.message("要改成什么样？指令是空的") }
+        await takeTurn()
+        defer { endTurn() }
         _ = await BoxServices.shared.ensure(.edit)
         guard FileManager.default.fileExists(atPath: source.path) else {
             throw Failure.message("找不到要改的那张图：\(source.path)")
@@ -153,8 +189,15 @@ final class DiffuserClient: ObservableObject {
         // one place — see FilmStudio.recipe. A reference that has gone
         // missing is left out rather than failing the edit.
         let extras = references.filter { FileManager.default.fileExists(atPath: $0.path) }
+        // Qwen-Image-2.1 makes only sizes whose sides are multiples of 32 and
+        // refuses any other, and the answer is the size of image 1. So image 1
+        // of another size goes over stretched to the nearest such size, and the
+        // answer is stretched back: a few percent either way, and it still lines
+        // up with the picture it was made from. The others the model resizes itself.
+        let sent = Self.aligned(source)
+        defer { if let sent { try? FileManager.default.removeItem(at: sent.file) } }
         let (boundary, body) = try Self.multipart(
-            fields: fields, files: [(name: "image", url: source)] + extras.map { (name: "images", url: $0) })
+            fields: fields, files: [(name: "image", url: sent?.file ?? source)] + extras.map { (name: "images", url: $0) })
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -166,7 +209,7 @@ final class DiffuserClient: ObservableObject {
         let (data, response) = try await URLSession.shared.data(for: request)
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard code == 200 else {
-            throw Failure.message("改图失败（HTTP \(code)）：\(Self.editHost)")
+            throw Failure.message("改图失败（HTTP \(code)）：\(Self.editHost)" + Self.refusal(data))
         }
         guard data.count > 20_000, NSImage(data: data) != nil else {
             throw Failure.message("改图服务返回的不是一张正常的图（\(data.count) 字节），看它的日志")
@@ -175,10 +218,43 @@ final class DiffuserClient: ObservableObject {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let file = folder.appendingPathComponent(Self.fileName(for: cleaned))
         try data.write(to: file)
+        if let sent { Self.stretch(file, to: sent.size) }
         try? cleaned.write(to: file.appendingPathExtension("txt"),
                            atomically: true, encoding: .utf8)
         lastImage = file
         return file
+    }
+
+    /// A copy of `source` stretched to the nearest size whose sides are
+    /// multiples of 32, and the size it had. Nil when it already is one, or
+    /// cannot be read — then it goes as it is.
+    private static func aligned(_ source: URL) -> (file: URL, size: CGSize)? {
+        guard let picture = CIImage(contentsOf: source) else { return nil }
+        let have = picture.extent.size
+        let want = CGSize(width: nearest32(have.width), height: nearest32(have.height))
+        guard want != have else { return nil }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("kinclaw-edit-\(UUID().uuidString).png")
+        return write(picture, at: want, to: file) ? (file, have) : nil
+    }
+
+    /// The nearest side Qwen-Image-2.1 will make: a multiple of 32.
+    private static func nearest32(_ side: CGFloat) -> CGFloat { max(32, (side / 32).rounded() * 32) }
+
+    /// The picture in `file` stretched to exactly `size`, in place.
+    @discardableResult
+    private static func stretch(_ file: URL, to size: CGSize) -> Bool {
+        guard let picture = CIImage(contentsOf: file), picture.extent.size != size else { return false }
+        return write(picture, at: size, to: file)
+    }
+
+    private static func write(_ picture: CIImage, at size: CGSize, to file: URL) -> Bool {
+        let extent = picture.extent
+        guard extent.width > 0, extent.height > 0, let space = CGColorSpace(name: CGColorSpace.sRGB) else { return false }
+        let made = picture
+            .transformed(by: CGAffineTransform(translationX: -extent.minX, y: -extent.minY))
+            .transformed(by: CGAffineTransform(scaleX: size.width / extent.width, y: size.height / extent.height))
+            .cropped(to: CGRect(origin: .zero, size: size))
+        return (try? CIContext().writePNGRepresentation(of: made, to: file, format: .RGBA8, colorSpace: space)) != nil
     }
 
     private static func url(_ path: String, on base: String? = nil) -> URL? {
@@ -219,13 +295,16 @@ final class DiffuserClient: ObservableObject {
 
     /// Generate a picture and write it into `folder`, named after the prompt.
     ///
-    /// Steps and size default to what a 4-step turbo model wants; a slower
-    /// model just takes longer. The timeout is generous because the first
-    /// request after a model loads can be minutes.
+    /// The size defaults to 768×768. Qwen-Image-2.1 makes only sides that are
+    /// multiples of 32 — the app's own sizes all are, a tool's may not be — so
+    /// another size is drawn at the nearest one and stretched to what was
+    /// asked. The timeout is generous because the first request after a model
+    /// loads can be minutes.
     @discardableResult
-    /// `steps` nil lets the server use the model's own — 4 for boogu's turbo,
-    /// 25 for Qwen-Image-2.1. A fixed 4 sent to every model was boogu's number,
-    /// and Qwen asked for four steps draws a smudge.
+    /// `steps` nil lets the server use the model's own — 8 on the schedule that
+    /// ships with Qwen-Image-2.1-Turbo, 4 for boogu's turbo, 25 for the base
+    /// Qwen-Image-2.1. A fixed 4 sent to every model was boogu's number, and
+    /// Qwen asked for four steps draws a smudge.
     func generate(prompt: String, into folder: URL, steps: Int? = nil,
                   width: Int = 768, height: Int = 768,
                   seed: Int? = nil, timeout: TimeInterval = 600) async throws -> URL {
@@ -234,13 +313,17 @@ final class DiffuserClient: ObservableObject {
         }
         let cleaned = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { throw Failure.message("要画什么？提示词是空的") }
+        await takeTurn()
+        defer { endTurn() }
         _ = await BoxServices.shared.ensure(.draw)
 
         busy = true
         defer { busy = false }
 
+        let asked = CGSize(width: width, height: height)
+        let drawn = CGSize(width: Self.nearest32(asked.width), height: Self.nearest32(asked.height))
         var body: [String: Any] = [
-            "prompt": cleaned, "width": width, "height": height,
+            "prompt": cleaned, "width": Int(drawn.width), "height": Int(drawn.height),
         ]
         if let seed { body["seed"] = seed }
         if let steps { body["steps"] = steps }
@@ -253,10 +336,11 @@ final class DiffuserClient: ObservableObject {
         let (data, response) = try await URLSession.shared.data(for: request)
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard code == 200 else {
-            throw Failure.message("出图失败（HTTP \(code)）：\(Self.host)")
+            throw Failure.message("出图失败（HTTP \(code)）：\(Self.host)" + Self.refusal(data))
         }
-        // A model that fails mid-generation still answers 200 with a small
-        // error image drawn by the server, so the size is the tell.
+        // Before OllamaDiffuser 2.3.0 a model that failed mid-generation still
+        // answered 200 with a small error image drawn by the server, so the
+        // size is the tell.
         guard data.count > 20_000, NSImage(data: data) != nil else {
             throw Failure.message("服务返回的不是一张正常的图（\(data.count) 字节），看看它的日志")
         }
@@ -267,6 +351,7 @@ final class DiffuserClient: ObservableObject {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let file = folder.appendingPathComponent(Self.fileName(for: cleaned))
         try data.write(to: file)
+        if drawn != asked { Self.stretch(file, to: asked) }
         // The prompt is the picture's description, and the companion's art
         // matcher reads these sidecars when it picks by subject.
         try? cleaned.write(to: file.appendingPathExtension("txt"),

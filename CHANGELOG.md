@@ -8,6 +8,40 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Changed — 画 and 改 on Qwen-Image-2.1-Turbo
+
+「qwen-image-2.1-turbo-mlx装在盒子上了，你看看」 → measured on the box → 「画和改都换吧」.
+
+- **画** (:8000) runs `qwen-image-2.1-turbo-mlx` on the 8-step schedule that ships with the checkpoint, CFG 1,
+  the weights unquantized and the arithmetic in float16: 768² in 22 s, 1024² in 37 s (8-bit was 56 s for the
+  same picture). Boogu Turbo was 17 s at 768² but wrote 「月满」 twice on a Chinese poster and lost its
+  layout; Qwen wrote it once and right. Before this, the live 画 model was an override nothing in the app
+  shows — `kinclaw.box.model.draw` = the base Qwen-Image-2.1, 25 steps — now removed.
+- **改** (:8002) runs `qwen-image-2.1-turbo-edit-mlx`: the same weights through mflux's Qwen-Image-2.1
+  editor, 8 steps. 「月满中秋」 became 「花好月圆」 in the same brush, gold and place with nothing else
+  moved; a tea farmer got a bamboo hat and snow and kept his face. 48–60 s at 1024² (FLUX.2 klein 4B was
+  10–22 s). Up to ten references.
+- Qwen-Image-2.1 makes only sides that are multiples of 32 and refuses the rest. Every size the app draws
+  at already is; a size from a tool that is not is drawn at the nearest one and stretched to it, and an
+  edit's picture of another size goes over stretched to the nearest one and the answer comes back
+  stretched to the original, so it still lines up with what it was made from.
+- `image_generate` leaves the steps to the server (it sent 4, Boogu's number; the Turbo runs its own 8
+  whatever it is asked) and its description says what the model is now: 25 s at 768², 40 at 1024²,
+  lettering in quotes. Through the app: a shop window with 「今晚营业到十点」 written right in 30 s, the
+  service started cold; her anchor in a bookshop at night, same face, in 40 s, the drawing server stopped
+  first.
+- **They take turns.** Each server holds all of the model — 29 GB after a drawing, 30 GB after an edit, and
+  more while it decodes — and both beside ComfyUI and a language model is more than the box has (it went
+  down on memory on 2026-10-09). Starting one stops the other first (about 3 s; the next picture spends
+  about 8 s loading, since OllamaDiffuser 2.3.0 loads on the first request), and `DiffuserClient` makes
+  one picture at a time, so the server let go is never in the middle of one of ours.
+- OllamaDiffuser 2.3.0 refuses to load a model with less memory free than it needs (46 GB for these — the
+  edit entry gets the same guard from a user registry, `~/.ollamadiffuser/models.yaml`) and answers a
+  failure with an HTTP error; the app now says what the server said, not just the status code.
+- Both entries are in the box's `~/.ollamadiffuser/config.json` (the old one beside it as
+  `config.json.bak-20261010-qwen`). The weights are under the Qwen Research License: research and
+  evaluation only.
+
 ### Added — 智能卡片 that choose and compare, 画给我看 as paintings with music, and 活山水 beside her
 
 「秒出组件卡我没看见啊」 → 「都要」; 「没什么好玩的了」 → 「把这几个做了」.

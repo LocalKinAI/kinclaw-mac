@@ -6,7 +6,7 @@
   "runs": "本地要下载",
   "download_gb": 20.7,
   "best_for": "8 步快速出写实照片，中英文提示都懂，适合大量试稿",
-  "caution": "要下 20.7 GB；想要 Z-Image-Turbo 就下 int8 版（12.2 GB），盒子上「画」服务（Boogu）也能快速出草图",
+  "caution": "要下 20.7 GB；想要 Z-Image-Turbo 就下 int8 版（12.2 GB），盒子上「画」服务（Qwen-Image-2.1-Turbo，768² 约 22 秒）也能快速出图",
   "minutes": null,
   "minutes_note": null
  },
@@ -215,7 +215,7 @@
   "runs": "本地要下载",
   "download_gb": 18.5,
   "best_for": "可微调的 Klein 改图底模，控制力最强",
-  "caution": "要下 18.5 GB，需在 HF 上同意 BFL 许可；盒子上「改」服务已是 Klein 4B（MLX，10–22 秒）",
+  "caution": "要下 18.5 GB，需在 HF 上同意 BFL 许可；盒子上「改」服务是 Qwen-Image-2.1-Turbo（MLX，1024² 50–60 秒）",
   "minutes": null,
   "minutes_note": null
  },
@@ -710,7 +710,7 @@
   "runs": "本地要下载",
   "download_gb": 22.3,
   "best_for": "Boogu 指令改图",
-  "caution": "要下 22.3 GB；改图盒子上已有「改」服务（Klein 4B）和 Qwen 2.1 编辑；未测",
+  "caution": "要下 22.3 GB；改图盒子上已有「改」服务（Qwen-Image-2.1-Turbo）和 Qwen 2.1 编辑；未测",
   "minutes": null,
   "minutes_note": null
  },
@@ -864,7 +864,7 @@
   "runs": "本地要下载",
   "download_gb": 18.4,
   "best_for": "Klein 9B 快速改图，适合交互式修图",
-  "caution": "要下 18.4 GB，需在 HF 上同意 BFL 许可；「改」服务的 Klein 4B 已能做大部分",
+  "caution": "要下 18.4 GB，需在 HF 上同意 BFL 许可；「改」服务（Qwen-Image-2.1-Turbo）已能做大部分，只是一张要 50–60 秒",
   "minutes": null,
   "minutes_note": null
  },
@@ -875,7 +875,7 @@
   "runs": "本地要下载",
   "download_gb": 12.4,
   "best_for": "Klein 4B 未蒸馏底模，适合微调",
-  "caution": "要下 12.4 GB；日常改图直接用盒子上的「改」服务（同家族 4B，MLX）",
+  "caution": "要下 12.4 GB；日常改图直接用盒子上的「改」服务（Qwen-Image-2.1-Turbo，MLX）",
   "minutes": null,
   "minutes_note": null
  },
@@ -886,7 +886,7 @@
   "runs": "本地要下载",
   "download_gb": 21.2,
   "best_for": "4 步出写实图，中英双语文字",
-  "caution": "盒子上「画」服务就是 Boogu Turbo（MLX，768² 14–16 秒），不用在 ComfyUI 再下 21 GB",
+  "caution": "要下 21 GB；盒子上「画」服务现在是 Qwen-Image-2.1-Turbo（768² 约 22 秒，中文字更准），Boogu 的 MLX 版也还在 ollamadiffuser 里",
   "minutes": null,
   "minutes_note": null
  },
@@ -1007,7 +1007,7 @@
   "runs": "本地要下载",
   "download_gb": 17.6,
   "best_for": "Flux Kontext 指令改图，节点全展开，适合学结构",
-  "caution": "旧一代；盒子上测过「改」服务的 Klein 4B 比 Kontext 更准更快（10–22 秒对 181 秒）",
+  "caution": "旧一代；Kontext 在盒子上一张 181 秒，「改」服务（Qwen-Image-2.1-Turbo）50–60 秒",
   "minutes": null,
   "minutes_note": null
  },
@@ -1018,7 +1018,7 @@
   "runs": "本地要下载",
   "download_gb": 23.9,
   "best_for": "Klein 4B 出图（蒸馏版和底模对比）",
-  "caution": "要下 23.9 GB；「改」服务的 Klein（mflux）只能改不能画，想用 Klein 画图才需要它",
+  "caution": "要下 23.9 GB；想用 Klein 画图才需要它（盒子上「画」「改」服务现在都是 Qwen-Image-2.1-Turbo）",
   "minutes": null,
   "minutes_note": null
  },
@@ -1040,7 +1040,7 @@
   "runs": "本地要下载",
   "download_gb": 12.4,
   "best_for": "Klein 家族最快的改图，交互式预览",
-  "caution": "和盒子上「改」服务是同一个模型（那边 MLX 10–22 秒一张），不用在 ComfyUI 重复下",
+  "caution": "盒子上的「改」服务已换成 Qwen-Image-2.1-Turbo（一张 50–60 秒，中文字和脸更准）；要 Klein 的速度（MLX 10–22 秒）才用它",
   "minutes": null,
   "minutes_note": null
  },

@@ -110,21 +110,23 @@ enum PanelTools {
             "name": "image_generate",
             "description": """
                 Draw a picture from a description, on the user's own diffusion \
-                server, and save it where the KinClaw companion keeps her art. \
-                Use it when they ask for an image — a scene, a portrait, a \
-                background — rather than describing one in words. Takes about \
-                15 seconds. The answer is where the file landed.
+                server (Qwen-Image-2.1-Turbo on the box), and save it where the \
+                KinClaw companion keeps her art. Use it when they ask for an \
+                image — a scene, a portrait, a background, a poster — rather \
+                than describing one in words. Takes about 25 seconds at 768², \
+                40 at 1024² (8 s more right after an edit: the two servers take \
+                turns). The answer is where the file landed.
                 """,
             "inputSchema": [
                 "type": "object",
                 "properties": [
                     "prompt": ["type": "string",
-                               "description": "What to draw, in English — the models were trained on it."],
+                               "description": "What to draw, in English or Chinese. Words that should appear in the picture go in quotes, e.g. 「月满中秋」 — the model writes Chinese and English lettering correctly."],
                     "mood": ["type": "string",
                              "description": "Save it under one of the companion's moods (开心/温柔/好奇/困/担心) or states (idle/listening/thinking/speaking) so she shows it then. Default: the rotating pool."],
                     "width": ["type": "integer", "description": "Pixels wide (default 768)."],
                     "height": ["type": "integer", "description": "Pixels tall (default 768)."],
-                    "steps": ["type": "integer", "description": "Denoising steps (default 4, which is what the turbo models want)."],
+                    "steps": ["type": "integer", "description": "Denoising steps. Leave it out: the server uses the model's own (Qwen-Image-2.1-Turbo always runs its 8-step schedule)."],
                     "seed": ["type": "integer", "description": "Fixed seed, to repeat a picture."],
                 ],
                 "required": ["prompt"],
@@ -386,8 +388,11 @@ enum PanelTools {
             "name": "box_services",
             "description": """
                 The model servers on the user's LAN box: see which are up, \
-                start one, or stop one. `draw` (text-to-image), `edit` \
-                (changes her scene, clothes, plates), `film` (video), `filmHQ` \
+                start one, or stop one. `draw` (text-to-image) and `edit` \
+                (changes her scene, clothes, plates) both run \
+                Qwen-Image-2.1-Turbo, about 30 GB each, and take turns: \
+                starting one stops the other, and the LocalKin console stops \
+                one left idle for ten minutes. `film` (video), `filmHQ` \
                 (the slow high-quality video model, ~45 GB while it works), \
                 `laya` (the small decision model that scores film shots and \
                 plays in the Jev tab — 2 GB, 23 ms a question on the box), \
@@ -2773,7 +2778,7 @@ enum PanelTools {
         do {
             let file = try await client.generate(
                 prompt: prompt, into: folder,
-                steps: args["steps"] as? Int ?? 4,
+                steps: args["steps"] as? Int,
                 width: args["width"] as? Int ?? 768,
                 height: args["height"] as? Int ?? 768,
                 seed: args["seed"] as? Int

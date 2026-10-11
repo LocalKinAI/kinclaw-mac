@@ -10,15 +10,15 @@ import Foundation
 ///
 /// The pipeline, and why each step uses the model it does:
 ///
-///   1. **Candidates** — the text-to-image server (Boogu Image Turbo, 14s a
-///      picture) draws several faces from one description, different seeds.
-///      Cheap enough to be picky, which matters: this is the only step where
-///      you get to choose what she looks like.
+///   1. **Candidates** — the text-to-image server (Qwen-Image-2.1-Turbo,
+///      about 22s a picture at 768²) draws several faces from one description,
+///      different seeds. Cheap enough to be picky, which matters: this is the
+///      only step where you get to choose what she looks like.
 ///   2. **The anchor** — the chosen candidate goes through the edit server
 ///      once ("same woman, neutral background") and *that* is the anchor.
-///      Without this pass the anchor is Boogu's rendering while every scene
-///      is Kontext's, and her skin and light change between pictures even
-///      though her face does not.
+///      Without this pass the anchor is the drawing model's rendering while
+///      every scene is the editor's, and her skin and light change between
+///      pictures even though her face does not.
 ///   3. **Scenes** — every later picture is an instruction edit of the
 ///      anchor: somewhere else, wearing something else, another time of day.
 ///      Identity comes from the input image, not from the words.
