@@ -42,7 +42,12 @@ targets:
       - path: KinClawMac
         excludes:
           - "Resources/vrm/**"
+          - "Resources/anatomy/**"
       - path: KinClawMac/Resources/vrm
+        type: folder
+      # anatomy, the skill 「做成一台机器」 builds with: its build scripts import
+      # ../../kit/*.mjs, and its .ts/.tsx examples are for reading, not compiling.
+      - path: KinClawMac/Resources/anatomy
         type: folder
     dependencies:
       - package: KeyboardShortcuts

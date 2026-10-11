@@ -1,0 +1,6 @@
+anatomy — https://github.com/wheresryan22/anatomy (MIT, see LICENSE)
+commit dbf697a527bbf7d358668e1557cb1e35ff725d46 (2026-10-10)
+
+Kept as it is, for 「做成一台机器」 (LiveDraw's second way to draw). Left out: the repository's
+own files (.github, README, CHANGELOG, CONTRIBUTING, CODE_OF_CONDUCT, SECURITY, evals) and the
+examples' built pages (examples/*/*.html, which `node build.mjs` writes again).
