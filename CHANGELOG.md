@@ -435,6 +435,35 @@ fourth route. The reference's movement, camera and layout stay; who and where ch
   「整场白模 · 换人换景」 in the route menu, the grey model under 「白模」, and both pictures.
   First test: three seconds of tai chi → an old man in white hanfu in a bamboo courtyard.
 
+### Added — Montage: narrated motion films in the box's own voice, and templates
+
+"你觉得是否要个你这个加一个新的tab到studio呢" → not a tab: what a Claude Code session
+did by hand for faith.localkin.ai's timeline film (「这版好太多了」) goes into Montage,
+where the HyperFrames route already was.
+
+- **`box_narration`** — the box's own voices as OpenMontage's narrator. 8102 designs
+  a new voice on every call, so the whole script is read in one take — and read
+  several times, because even whole takes differ (the audition picked was 201 Hz
+  and slow; five full takes came back 164–188 Hz): the take closest to the chosen
+  audition in pitch and pace is kept, faster-whisper's timings are pinned onto the
+  script's own characters, and it comes back cut per line with every character
+  (and "/"-marked word) timed, and captions grouped by Chinese clause.
+  **`box_tts`** puts 8102/8101 into tts_selector for single lines.
+- **`music_bed`** fits a generated score under the film: its climax moved onto
+  the end card (a straight score had faded out by the title), low under the
+  voice, lifted in the holds after the lines that should land.
+- **`hf_captions`** writes the captions sub-composition right for Chinese — one
+  clause a caption, words flush, every family its own `@font-face`, the last
+  caption cleared — the three things that went wrong the first time.
+- **The `narrated-motion-film` skill** — the method, and what took the film
+  from 「不够惊艳」 to 「好太多了」: hero lines that take the frame with the scene
+  out of focus, light that moves, the metaphor made literal, music with a shape.
+- **Templates** in ~/OpenMontage/templates: 「照 X 再做一部」 starts from one,
+  「存成模板」 keeps a finished film. The first is `golden-scroll`, the timeline
+  film itself: its look, storyboard, voice, music brief, fonts, frame builder and
+  a contact sheet.
+- The guide has the route and the Montage card says it; the agent is told.
+
 ### Added — Easel's workbench: 选题库, 内容日历, 爆款拆解, 一稿多发, subtitles, 公众号排版
 
 "你去挖掘一下那个easel项目，似乎他有很多我们没有的功能啊" → "开干吧". The whole

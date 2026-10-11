@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>一卷展开的手卷 · 分镜草图 v1</title>
+<style>
+@font-face{font-family:"Cormorant Garamond";src:url("assets/fonts/CormorantGaramond.woff2") format("woff2");font-weight:300 700;font-style:normal}
+@font-face{font-family:"Cormorant Garamond";src:url("assets/fonts/CormorantGaramond-Italic.woff2") format("woff2");font-weight:300 700;font-style:italic}
+@font-face{font-family:"Noto Serif SC";src:url("assets/fonts/NotoSerifSC-subset.woff2") format("woff2");font-weight:200 900}
+:root{--paper:#0a0a14;--paper-deep:#12121e;--sun:#c8a45e;--sun-soft:#e8d4a0;--haze:#8a7040;--ink:#e8e4dc;
+  --ember:#d4af37;--muted:#8a8678;--serif:"Cormorant Garamond","Noto Serif SC",serif;--cjk:"Noto Serif SC",serif}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#06060b;color:var(--ink);font-family:var(--cjk);padding:40px 28px 64px}
+header{max-width:1680px;margin:0 auto 26px;display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px 28px;
+  border-bottom:1px solid rgba(138,112,64,.5);padding-bottom:18px}
+header h1{font-weight:400;font-size:30px;color:var(--sun);letter-spacing:.04em}
+header h1 small{font-family:var(--serif);font-size:18px;color:var(--muted);margin-left:10px;letter-spacing:.08em}
+header p{flex:1 1 420px;color:var(--ink);opacity:.8;font-size:15px;line-height:1.6}
+header .tag{font-family:var(--serif);font-size:15px;letter-spacing:.14em;color:var(--sun);border:1px solid rgba(200,164,94,.45);padding:4px 12px}
+main{max-width:1680px;margin:0 auto;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:30px 26px}
+@media (max-width:1100px){main{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:700px){main{grid-template-columns:1fr}body{padding:24px 16px 48px}}
+.act{grid-column:1/-1;font-size:14px;letter-spacing:.4em;color:var(--sun);padding:8px 0 0;border-top:1px solid rgba(200,164,94,.25)}
+figure.cell{display:flex;flex-direction:column;gap:10px}
+.frame{position:relative;aspect-ratio:16/9;container-type:inline-size;overflow:hidden;background:var(--paper);
+  outline:1px solid rgba(138,112,64,.35)}
+.frame::after{content:"";position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(ellipse at 50% 45%,transparent 55%,rgba(0,0,0,.42) 100%)}
+figcaption .lab{display:flex;justify-content:space-between;gap:12px;font-size:13px;color:var(--sun);letter-spacing:.06em}
+figcaption .lab span:last-child{font-family:var(--serif);color:var(--muted);letter-spacing:.1em}
+.note{font-size:13.5px;line-height:1.65;color:rgba(232,228,220,.82)}
+.note b{color:var(--sun-soft);font-weight:600}
+.chip{align-self:flex-start;font-family:var(--serif);font-size:13px;letter-spacing:.12em;color:var(--sun);
+  border:1px solid rgba(200,164,94,.4);padding:1px 10px}
+
+/* ── inside a frame: everything in cqw (1920 px = 100cqw) ── */
+.scroll{position:absolute;left:-2cqw;right:-2cqw;top:7.5cqw;height:37cqw;
+  background:linear-gradient(180deg,rgba(232,212,160,.045),rgba(232,212,160,0) 16%,rgba(232,212,160,0) 84%,rgba(232,212,160,.045)),var(--paper-deep);
+  border-top:1px solid var(--haze);border-bottom:1px solid var(--haze)}
+.scroll .edge{position:absolute;left:0;right:0;height:0;border-top:1px solid rgba(138,112,64,.38)}
+.scroll .edge.t{top:.9cqw}.scroll .edge.b{bottom:.9cqw}
+.scroll.open{-webkit-mask-image:linear-gradient(90deg,#000 55%,rgba(0,0,0,.35) 88%,transparent);mask-image:linear-gradient(90deg,#000 55%,rgba(0,0,0,.35) 88%,transparent)}
+.scroll.f01{left:20cqw;right:-2cqw;top:13cqw;height:28.8cqw;
+  -webkit-mask-image:linear-gradient(90deg,#000 30%,rgba(0,0,0,.55) 75%,rgba(0,0,0,.25));mask-image:linear-gradient(90deg,#000 30%,rgba(0,0,0,.55) 75%,rgba(0,0,0,.25))}
+.scroll.f02{top:24.9cqw;height:13.2cqw;left:2.8cqw}
+.scroll.f10{top:36cqw;height:4.2cqw;opacity:.45}
+.roller{position:absolute;width:1.15cqw;background:linear-gradient(90deg,#3a2f1a,#8a7040 45%,#5a4a2a 70%,#2a2213)}
+.ink{position:absolute;top:14.25cqw;height:.32cqw;border-radius:.2cqw;background:var(--sun)}
+.bloom{position:absolute;transform:translate(-50%,-50%);border-radius:50%;pointer-events:none;
+  background:radial-gradient(closest-side,rgba(200,164,94,.30),rgba(232,212,160,.11) 45%,rgba(138,112,64,.05) 72%,transparent)}
+.bloom.wide{background:radial-gradient(closest-side,rgba(200,164,94,.16),rgba(232,212,160,.07) 50%,rgba(138,112,64,.03) 75%,transparent)}
+.bloom.ember{background:radial-gradient(closest-side,rgba(212,175,55,.17),rgba(212,175,55,.05) 60%,transparent)}
+.bloom.deep{background:radial-gradient(closest-side,rgba(200,164,94,.40),rgba(232,212,160,.15) 45%,rgba(138,112,64,.07) 72%,transparent)}
+.thread{position:absolute;left:-2cqw;right:-2cqw;top:16.95cqw;height:1px;background:rgba(200,164,94,.62)}
+.thread.open{-webkit-mask-image:linear-gradient(90deg,#000 60%,rgba(0,0,0,.6));mask-image:linear-gradient(90deg,#000 60%,rgba(0,0,0,.6))}
+.thread.f02{top:31.5cqw;left:3.4cqw}
+.st{position:absolute;top:12cqw;width:31cqw}
+.st .yr{font-family:var(--serif);font-size:3.2cqw;line-height:3.4cqw;height:3.4cqw;color:var(--sun);letter-spacing:-.005em}
+.st .dot{position:absolute;left:.15cqw;top:4.6cqw;width:.7cqw;height:.7cqw;background:var(--sun);transform:rotate(45deg)}
+.st .dot.now{background:var(--sun-soft);box-shadow:0 0 1.2cqw .2cqw rgba(232,212,160,.55)}
+.st .era{margin-top:2.6cqw;font-size:1.45cqw;letter-spacing:.35em;color:var(--sun)}
+.st .nm{margin-top:.7cqw;font-size:4.2cqw;line-height:1.15;color:var(--ink);white-space:nowrap}
+.st .nm.now{color:var(--sun-soft)}
+.st .nm .nt{font-size:1.55cqw;color:var(--muted);margin-left:1.4cqw;letter-spacing:.06em;vertical-align:.5cqw}
+.st .sub{margin-top:.5cqw;font-size:1.9cqw;color:var(--sun);letter-spacing:.06em;white-space:nowrap}
+.st .grp{margin-top:1.4cqw;font-size:1.5cqw;line-height:1.65;color:rgba(232,228,220,.62);letter-spacing:.05em}
+.st .grp.cols{display:flex;gap:3.2cqw}
+.count{position:absolute;left:6.2cqw;top:6.4cqw;display:flex;align-items:baseline;gap:.9cqw;white-space:nowrap}
+.count .num{font-family:var(--serif);font-size:7.5cqw;line-height:.92;color:var(--sun);letter-spacing:-.01em}
+.count .unit{font-size:2.4cqw;color:var(--ink)}
+.count .sep{font-family:var(--serif);font-size:3cqw;color:var(--haze);margin:0 1.6cqw}
+.tk{position:absolute;top:31.5cqw;width:0}
+.tk i{position:absolute;left:-.28cqw;top:-.28cqw;width:.56cqw;height:.56cqw;background:var(--sun);transform:rotate(45deg)}
+.tk span{position:absolute;left:0;transform:translateX(-50%);font-family:var(--serif);font-size:1.18cqw;color:var(--sun);white-space:nowrap;
+  font-family:"Cormorant Garamond","Noto Serif SC",serif}
+.tk.up span{bottom:.9cqw}.tk.dn span{top:.9cqw}
+.glint{position:absolute;top:38.1cqw;width:.5cqw;height:.5cqw;margin-left:-.25cqw;background:var(--sun-soft);transform:rotate(45deg);
+  box-shadow:0 0 .9cqw .15cqw rgba(232,212,160,.5);opacity:.8}
+.end{position:absolute;left:0;right:0;top:12.5cqw;text-align:center}
+.end .title{font-size:5.2cqw;color:var(--sun);letter-spacing:.12em;line-height:1.1}
+.end .url{margin-top:2.2cqw;font-family:var(--serif);font-size:2.5cqw;color:var(--ink);letter-spacing:.06em}
+.end .invite{margin-top:1.1cqw;font-size:1.5cqw;color:var(--muted);letter-spacing:.5em}
+.chrome{position:absolute;right:4cqw;bottom:2.3cqw;font-family:var(--serif);font-weight:600;font-size:.72cqw;
+  letter-spacing:.18em;color:rgba(200,164,94,.55);z-index:3}
+.cap{position:absolute;left:11cqw;right:11cqw;top:46.9cqw;height:9.35cqw;display:flex;align-items:center;justify-content:center;
+  font-size:2.5cqw;letter-spacing:.04em;white-space:nowrap;z-index:2}
+.c-sp{color:var(--ink)}.c-act{color:var(--sun-soft)}.c-up{color:rgba(232,228,220,.38)}
+
+/* closing cells */
+.frame.meta{padding:3.2cqw 4cqw;display:flex;flex-direction:column;gap:2cqw}
+.frame.meta::after{display:none}
+.mh{font-size:2.2cqw;color:var(--sun);letter-spacing:.2em}
+.seams{display:grid;grid-template-columns:1fr 1fr;gap:.6cqw 4cqw}
+.sr{display:flex;align-items:baseline;gap:1.2cqw;border-bottom:1px solid rgba(232,228,220,.14);padding:.5cqw 0;font-size:2cqw}
+.sn{font-family:var(--serif);color:var(--ink);font-size:2.4cqw}.sa{color:var(--haze)}
+.sk{margin-left:auto;font-family:var(--serif);color:var(--sun);font-size:2.1cqw;letter-spacing:.06em}
+.mfoot{margin-top:auto;font-size:1.7cqw;line-height:1.6;color:rgba(232,228,220,.7)}
+.swatches{display:grid;grid-template-columns:repeat(4,1fr);gap:1.4cqw 2cqw}
+.sw{display:grid;grid-template-columns:3.4cqw 1fr;grid-template-rows:auto auto;column-gap:1.2cqw;align-items:center}
+.sw i{grid-row:1/3;width:3.4cqw;height:3.4cqw;outline:1px solid rgba(232,228,220,.2)}
+.sw b{font-family:var(--serif);font-weight:500;font-size:1.7cqw;color:var(--ink)}
+.sw span{font-size:1.3cqw;color:var(--muted)}
+.types{display:flex;flex-direction:column;gap:.8cqw;font-size:1.55cqw;color:rgba(232,228,220,.8)}
+.types .lat{font-family:var(--serif);font-size:2.6cqw;color:var(--sun);margin-right:1.2cqw}
+.types .cjk{font-size:2.6cqw;color:var(--ink);margin-right:1.2cqw}.types .cjk.sm{font-size:2cqw;color:var(--sun-soft)}
+.bans{margin-top:auto;font-size:1.45cqw;line-height:1.7;color:var(--muted);border-top:1px solid rgba(138,112,64,.45);padding-top:1.2cqw}
+</style></head>
+<body>
+<header><h1>一卷展开的手卷<small>storyboard v1</small></h1>
+<p>faith.localkin.ai 的时间卷轴：跨越十九个世纪的属灵先贤是一条从未断过的传承——他们今天仍在说话。每格是该帧的关键一刻（静止草图，动作见每格下方的说明）。</p>
+<span class="tag">1920×1080 · 100s · 10 FRAMES · 女声旁白</span></header>
+<main>
+<div class="act">第一幕 · 开卷</div>
+<figure class="cell"><div class="frame" id="frame-01"><div class="scroll f01"><i class="edge t"></i><i class="edge b"></i><i class="ink" style="left:3.5cqw;width:2.6cqw;opacity:0.55"></i><i class="ink" style="left:6.8cqw;width:1.4cqw;opacity:0.5"></i><i class="ink" style="left:8.9cqw;width:3.1cqw;opacity:0.45"></i><i class="ink" style="left:12.6cqw;width:1.9cqw;opacity:0.4"></i><i class="ink" style="left:15.2cqw;width:2.4cqw;opacity:0.34"></i><i class="ink" style="left:18.3cqw;width:1.2cqw;opacity:0.28"></i><i class="ink" style="left:20.2cqw;width:2.8cqw;opacity:0.22"></i><i class="ink" style="left:23.7cqw;width:1.6cqw;opacity:0.16"></i><i class="ink" style="left:26.0cqw;width:2.2cqw;opacity:0.11"></i><i class="ink" style="left:29.1cqw;width:1.3cqw;opacity:0.07"></i></div><i class="roller" style="left:19.4cqw;top:12.2cqw;height:30.4cqw"></i><i class="bloom " style="left:29cqw;top:27cqw;width:64cqw;height:64cqw"></i><div class="chrome">faith.localkin.ai</div><div class="cap"><span class="c-sp">每一寸 都写着</span><span class="c-act">一个名字</span><span class="c-up"></span></div></div><figcaption><div class="lab"><span>01 · 把一千九百年铺成一卷纸</span><span>frame-01 · 0.0–10.3s</span></div><p class="note"><b>烛光先亮。</b>黑场里只有一团烛光（约 0.8 秒），手卷从左端的轴往右展开；说到「每一寸」时，纸上浮出一行看不清的金墨字迹——是质感，不是内容。</p><span class="chip">→ cut</span></figcaption></figure>
+<figure class="cell"><div class="frame" id="frame-02"><div class="count"><span class="num">15</span><span class="unit">个时代</span><span class="sep">·</span><span class="num">57</span><span class="unit">位先贤</span></div><div class="scroll f02"><i class="edge t"></i><i class="edge b"></i></div><i class="roller" style="left:2.2cqw;top:24.4cqw;height:14.2cqw"></i><i class="bloom wide" style="left:50cqw;top:31cqw;width:96cqw;height:96cqw"></i><i class="thread f02"></i><div class="tk up" style="left:6.20cqw"><i></i><span>130</span></div><div class="tk dn" style="left:12.50cqw"><i></i><span>296–430</span></div><div class="tk up" style="left:18.80cqw"><i></i><span>14–15c</span></div><div class="tk dn" style="left:25.10cqw"><i></i><span>1483–1564</span></div><div class="tk up" style="left:31.40cqw"><i></i><span>1515–1717</span></div><div class="tk dn" style="left:37.70cqw"><i></i><span>1554–1633</span></div><div class="tk up" style="left:44.00cqw"><i></i><span>1615–1714</span></div><div class="tk dn" style="left:50.30cqw"><i></i><span>1700–1760</span></div><div class="tk up" style="left:56.60cqw"><i></i><span>1703–1791</span></div><div class="tk dn" style="left:62.90cqw"><i></i><span>1792–1899</span></div><div class="tk up" style="left:69.20cqw"><i></i><span>1832–1951</span></div><div class="tk dn" style="left:75.50cqw"><i></i><span>1859–1936</span></div><div class="tk up" style="left:81.80cqw"><i></i><span>1885–1981</span></div><div class="tk dn" style="left:88.10cqw"><i></i><span>1900–1991</span></div><div class="tk up" style="left:94.40cqw"><i></i><span>1623–至今</span></div><div class="chrome">faith.localkin.ai</div><div class="cap"><span class="c-sp">一条从未断过的</span><span class="c-act">线</span><span class="c-up"></span></div></div><figcaption><div class="lab"><span>02 · 十五个时代，五十七位先贤，一条线</span><span>frame-02 · 10.3–17.1s</span></div><p class="note"><b>镜头往后拉。</b>从第一站「130」的特写一路拉远到整卷；「15」「57」跟着旁白出现，说到「一条从未断过的线」时，金线从左到右穿过十五站。</p><span class="chip">→ crossfade</span></figcaption></figure>
+<div class="act">第二幕 · 沿卷而行</div>
+<figure class="cell"><div class="frame" id="frame-03"><div class="scroll "><i class="edge t"></i><i class="edge b"></i></div><i class="bloom " style="left:61cqw;top:24.5cqw;width:58cqw;height:58cqw"></i><i class="thread"></i><div class="st" style="left:7cqw"><div class="yr">130</div><i class="dot"></i><div class="era">使徒时代</div><div class="nm">爱任纽<span class="nt">← 坡旅甲 ← 使徒约翰</span></div></div><div class="st" style="left:52cqw"><div class="yr">296–430</div><i class="dot now"></i><div class="era">教父</div><div class="nm now">亚他那修</div><div class="grp">金口约翰 · 奥古斯丁</div></div><div class="chrome">faith.localkin.ai</div><div class="cap"><span class="c-sp">亚他那修 为三位一体 </span><span class="c-act">独对全世界</span><span class="c-up"></span></div></div><figcaption><div class="lab"><span>03 · 使徒时代 · 教父</span><span>frame-03 · 17.1–30.3s</span></div><p class="note"><b>落回卷面，向右平移。</b>说到「爱任纽」时金墨写上，「坡旅甲、使徒约翰」是灰色小注（网站名单里没有他们，不算一站）；写上「亚他那修」时烛光移过去，金口约翰、奥古斯丁成组淡入。</p><span class="chip">→ push-slide ←</span></figcaption></figure>
+<figure class="cell"><div class="frame" id="frame-04"><div class="scroll "><i class="edge t"></i><i class="edge b"></i></div><i class="bloom ember" style="left:17cqw;top:27.5cqw;width:30cqw;height:30cqw"></i><i class="bloom " style="left:59cqw;top:24.5cqw;width:58cqw;height:58cqw"></i><i class="thread"></i><div class="st" style="left:7cqw"><div class="yr">14–15c</div><i class="dot"></i><div class="era">中世纪</div><div class="nm">肯培多默</div><div class="sub">《效法基督》</div><div class="grp">不知之云</div></div><div class="st" style="left:52cqw"><div class="yr">1483–1564</div><i class="dot now"></i><div class="era">宗教改革</div><div class="nm now">路德</div><div class="sub">「义人必因信得生」</div><div class="grp">加尔文 · 克兰麦</div></div><div class="chrome">faith.localkin.ai</div><div class="cap"><span class="c-sp">路德读到 </span><span class="c-act">义人必因信得生</span><span class="c-up"></span></div></div><figcaption><div class="lab"><span>04 · 中世纪 · 宗教改革</span><span>frame-04 · 30.3–39.9s</span></div><p class="note"><b>沿卷继续右移。</b>中世纪一站只有一盏暗灯；说到「效法基督」时书名写在肯培多默下面；到路德那站烛光变亮，「义人必因信得生」写成一行。</p><span class="chip">→ push-slide ←</span></figcaption></figure>
+<figure class="cell"><div class="frame" id="frame-05"><div class="scroll "><i class="edge t"></i><i class="edge b"></i></div><i class="bloom " style="left:62cqw;top:24.5cqw;width:58cqw;height:58cqw"></i><i class="thread"></i><div class="st" style="left:7cqw"><div class="yr">1515–1717</div><i class="dot"></i><div class="era">神秘主义</div><div class="nm">大德兰</div><div class="grp cols"><div class="gcol"><div>十字若望</div><div>方济各·沙雷氏</div><div>莫利诺斯</div><div>劳伦斯弟兄</div><div>盖恩夫人</div></div></div></div><div class="st" style="left:52cqw"><div class="yr">1554–1633</div><i class="dot now"></i><div class="era">圣公会古典</div><div class="nm now">安德鲁斯</div><div class="grp">胡克 · 乔治·赫伯特</div></div><div class="chrome">faith.localkin.ai</div><div class="cap"><span class="c-sp">安德鲁斯 钦定本圣经的</span><span class="c-act">主译者</span><span class="c-up"></span></div></div><figcaption><div class="lab"><span>05 · 神秘主义 · 圣公会古典</span><span>frame-05 · 39.9–49.8s</span></div><p class="note"><b>最挤的一站之一。</b>「大德兰」写上后，另外五位成一列轻轻淡入；再写「安德鲁斯」，胡克、乔治·赫伯特跟着淡入。</p><span class="chip">→ push-slide ←</span></figcaption></figure>
+<figure class="cell"><div class="frame" id="frame-06"><div class="scroll "><i class="edge t"></i><i class="edge b"></i></div><i class="bloom " style="left:76cqw;top:24.5cqw;width:50cqw;height:50cqw"></i><i class="thread"></i><div class="st" style="left:5cqw"><div class="yr">1615–1714</div><i class="dot"></i><div class="era">清教徒</div><div class="nm">本仁约翰</div><div class="grp cols"><div class="gcol"><div>巴克斯特</div><div>约翰·欧文</div><div>托马斯·华森</div><div>马太·亨利</div></div></div></div><div class="st" style="left:37cqw"><div class="yr">1700–1760</div><i class="dot"></i><div class="era">敬虔派</div><div class="nm">辛生道夫</div></div><div class="st" style="left:69cqw"><div class="yr">1703–1791</div><i class="dot now"></i><div class="era">大觉醒</div><div class="nm now">卫斯理</div><div class="grp">爱德华兹 · 怀特腓</div></div><div class="chrome">faith.localkin.ai</div><div class="cap"><span class="c-sp">卫斯理说 全世界是我的</span><span class="c-act">牧区</span><span class="c-up"></span></div></div><figcaption><div class="lab"><span>06 · 清教徒 · 敬虔派 · 大觉醒</span><span>frame-06 · 49.8–64.0s</span></div><p class="note"><b>平移稍快，一口气过三站。</b>本仁约翰 → 辛生道夫（这个时代只有他一位，站很短）→ 卫斯理；每个名字都在旁白说到时写上。</p><span class="chip">→ push-slide ←</span></figcaption></figure>
+<figure class="cell"><div class="frame" id="frame-07"><div class="scroll "><i class="edge t"></i><i class="edge b"></i></div><i class="bloom " style="left:60cqw;top:24.5cqw;width:58cqw;height:58cqw"></i><i class="thread"></i><div class="st" style="left:7cqw"><div class="yr">1792–1899</div><i class="dot"></i><div class="era">十九世纪复兴</div><div class="nm">司布真</div><div class="grp cols"><div class="gcol"><div>芬尼</div><div>慕勒</div><div>纽曼</div></div><div class="gcol"><div>慕迪</div><div>慕安德烈</div><div>小德兰</div></div></div></div><div class="st" style="left:52cqw"><div class="yr">1832–1951</div><i class="dot now"></i><div class="era">宣教时代</div><div class="nm now">戴德生</div><div class="grp">賈艾梅</div></div><div class="chrome">faith.localkin.ai</div><div class="cap"><span class="c-sp">戴德生 为中国</span><span class="c-act">焚烧的</span><span class="c-up">宣教士</span></div></div><figcaption><div class="lab"><span>07 · 十九世纪复兴 · 宣教时代</span><span>frame-07 · 64.0–71.4s</span></div><p class="note"><b>最宽的一站。</b>司布真写上，另外六位分两列淡入；写「戴德生」时烛光移到宣教时代，賈艾梅淡入。</p><span class="chip">→ push-slide ←</span></figcaption></figure>
+<figure class="cell"><div class="frame" id="frame-08"><div class="scroll "><i class="edge t"></i><i class="edge b"></i></div><i class="bloom deep" style="left:77cqw;top:24.5cqw;width:56cqw;height:56cqw"></i><i class="thread"></i><div class="st" style="left:5cqw"><div class="yr">1859–1936</div><i class="dot"></i><div class="era">二十世纪复兴</div><div class="nm">古约翰</div><div class="grp">宾路易师母 · 罗伯斯</div></div><div class="st" style="left:37cqw"><div class="yr">1885–1981</div><i class="dot"></i><div class="era">现代</div><div class="nm">潘霍华</div><div class="grp">史百克 · 陶恕 · 钟马田</div></div><div class="st" style="left:69cqw"><div class="yr">1900–1991</div><i class="dot now"></i><div class="era">中国教会</div><div class="nm now">王明道</div><div class="sub">「我们是为了信仰！」</div><div class="grp">倪柝声 · 宋尚节</div></div><div class="chrome">faith.localkin.ai</div><div class="cap"><span class="c-sp">王明道说 我们是为了</span><span class="c-act">信仰</span><span class="c-up"></span></div></div><figcaption><div class="lab"><span>08 · 二十世纪复兴 · 现代 · 中国教会</span><span>frame-08 · 71.4–82.6s</span></div><p class="note"><b>平移放慢。</b>古约翰、潘霍华、王明道依次写上；最后一站「中国教会」烛光最深，比之前任何一站多停一会儿，「我们是为了信仰！」写在名字下面。</p><span class="chip">→ push-slide ←</span></figcaption></figure>
+<figure class="cell"><div class="frame" id="frame-09"><div class="scroll open"><i class="edge t"></i><i class="edge b"></i></div><i class="bloom " style="left:20cqw;top:24.5cqw;width:58cqw;height:58cqw"></i><i class="thread open"></i><div class="st" style="left:9cqw"><div class="yr">1623–至今</div><i class="dot now"></i><div class="era">改革宗系统神学</div><div class="nm now">巴刻</div><div class="sub">「认识神 ≠ 认识关于神的知识」</div><div class="grp cols"><div class="gcol"><div>杜瑞田</div><div>查理·贺智</div><div>霍志恒</div><div>伯克富</div><div>克劳尼</div></div><div class="gcol"><div>高慈宏</div><div>卡森</div><div>凯勒</div><div>查普尔</div><div>傅瑞姆</div></div></div></div><div class="chrome">faith.localkin.ai</div><div class="cap"><span class="c-sp">认识神 不等于认识关于神的</span><span class="c-act">知识</span><span class="c-up"></span></div></div><figcaption><div class="lab"><span>09 · 一直到今天</span><span>frame-09 · 82.6–90.6s</span></div><p class="note"><b>最后一站，卷没有收口。</b>巴刻写上，「认识神 ≠ 认识关于神的知识」写在下面，其余十位分两列淡入；卷的右边一直开着，金线伸出画面——这卷纸还没写完。</p><span class="chip">→ crossfade</span></figcaption></figure>
+<div class="act">第三幕 · 仍在说话</div>
+<figure class="cell"><div class="frame" id="frame-10"><div class="scroll f10"><i class="edge t"></i><i class="edge b"></i></div><i class="glint" style="left:6.20cqw"></i><i class="glint" style="left:12.50cqw"></i><i class="glint" style="left:18.80cqw"></i><i class="glint" style="left:25.10cqw"></i><i class="glint" style="left:31.40cqw"></i><i class="glint" style="left:37.70cqw"></i><i class="glint" style="left:44.00cqw"></i><i class="glint" style="left:50.30cqw"></i><i class="glint" style="left:56.60cqw"></i><i class="glint" style="left:62.90cqw"></i><i class="glint" style="left:69.20cqw"></i><i class="glint" style="left:75.50cqw"></i><i class="glint" style="left:81.80cqw"></i><i class="glint" style="left:88.10cqw"></i><i class="glint" style="left:94.40cqw"></i><i class="bloom " style="left:50cqw;top:23cqw;width:70cqw;height:70cqw"></i><div class="end"><div class="title">他们今天仍在说话</div><div class="url">faith.localkin.ai</div><div class="invite">和他们对话</div></div></div><figcaption><div class="lab"><span>10 · 他们今天仍在说话</span><span>frame-10 · 90.6–100.2s</span></div><p class="note"><b>最后一次拉远。</b>整卷从头到尾亮起，十五站的金点微微发光；随后画面清空成居中的标题和网址，旁白结束后无声停约 4 秒。网址只显示，不念。</p><span class="chip">→ end · hold</span></figcaption></figure>
+<figure class="cell"><div class="frame meta"><div class="mh">转场一览 · seam map</div><div class="seams"><div class="sr"><span class="sn">01</span><span class="sa">→</span><span class="sn">02</span><span class="sk">cut</span></div><div class="sr"><span class="sn">02</span><span class="sa">→</span><span class="sn">03</span><span class="sk">crossfade</span></div><div class="sr"><span class="sn">03</span><span class="sa">→</span><span class="sn">04</span><span class="sk">push-slide ←</span></div><div class="sr"><span class="sn">04</span><span class="sa">→</span><span class="sn">05</span><span class="sk">push-slide ←</span></div><div class="sr"><span class="sn">05</span><span class="sa">→</span><span class="sn">06</span><span class="sk">push-slide ←</span></div><div class="sr"><span class="sn">06</span><span class="sa">→</span><span class="sn">07</span><span class="sk">push-slide ←</span></div><div class="sr"><span class="sn">07</span><span class="sa">→</span><span class="sn">08</span><span class="sk">push-slide ←</span></div><div class="sr"><span class="sn">08</span><span class="sa">→</span><span class="sn">09</span><span class="sk">push-slide ←</span></div><div class="sr"><span class="sn">09</span><span class="sa">→</span><span class="sn">10</span><span class="sk">crossfade</span></div><div class="sr"><span class="sn">10</span><span class="sa">→</span><span class="sn">END</span><span class="sk">end · hold</span></div></div><div class="mfoot">全片一个方向：镜头沿卷向右走，画面往左推。只有进出「整卷」的两处用交叉淡化。</div></div><figcaption><div class="lab"><span>SEAMS</span><span>10 frames</span></div></figcaption></figure>
+<figure class="cell"><div class="frame meta"><div class="mh">设计规则 · tokens</div><div class="swatches"><div class="sw"><i style="background:#0a0a14"></i><b>#0a0a14</b><span>底色 · 夜</span></div><div class="sw"><i style="background:#12121e"></i><b>#12121e</b><span>卷面</span></div><div class="sw"><i style="background:#c8a45e"></i><b>#c8a45e</b><span>金墨 · 年份/时代</span></div><div class="sw"><i style="background:#e8d4a0"></i><b>#e8d4a0</b><span>正在说的名字</span></div><div class="sw"><i style="background:#8a7040"></i><b>#8a7040</b><span>卷边细线</span></div><div class="sw"><i style="background:#e8e4dc"></i><b>#e8e4dc</b><span>名字/正文</span></div><div class="sw"><i style="background:#d4af37"></i><b>#d4af37</b><span>暗处的余光</span></div><div class="sw"><i style="background:#8a8678"></i><b>#8a8678</b><span>次要</span></div></div><div class="types"><div><span class="lat">1483–1564</span> 年份、网址 · Cormorant Garamond 400</div><div><span class="cjk">路德</span> 名字、时代、正文 · 思源宋体 Noto Serif SC</div><div><span class="cjk sm">字幕</span> 无底框；已说的字白、正在说的字金、未说的字暗</div></div><div class="bans">不用 emoji 头像 · 不用人像 · 不铺亮黄色块 · 没有阴影和圆角 · 名单一个不少、不编史实</div></div><figcaption><div class="lab"><span>TOKENS</span><span>frame.md</span></div></figcaption></figure>
+</main>
+</body></html>

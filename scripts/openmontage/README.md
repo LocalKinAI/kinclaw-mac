@@ -14,6 +14,12 @@ models already there instead of paid APIs:
 | `tools/audio/music_extend.py` | `~/OpenMontage/tools/audio/` | `music_extend` — a score made as long as the film: loops back where the music matches itself (one or two seams, crossfaded), keeps its own ending unless `exact` |
 | `patches/checkpoint-all-errors.patch` | `git apply` in `~/OpenMontage` | `lib/checkpoint.py`: every schema problem listed at once (not one per try), and a project folder passed as `pipeline_dir` refused instead of nesting the checkpoints |
 | `skills/minimax-h3-local/SKILL.md` | `~/OpenMontage/.agents/skills/minimax-h3-local/` | how to film with them (the pinned-first-frame method) |
+| `tools/audio/box_tts.py` | `~/OpenMontage/tools/audio/` | `box_tts` — the box's own voices (8102 a voice from a description, 8101 presets); a `tts` provider for tts_selector |
+| `tools/audio/box_narration.py` | `~/OpenMontage/tools/audio/` | `box_narration` — a whole script in one take, read several times, the take closest to the chosen voice kept, cut per line, every character timed, captions by Chinese clause |
+| `tools/audio/music_bed.py` | `~/OpenMontage/tools/audio/` | `music_bed` — a score fitted under a narrated film: climax on the end card, low under the voice, lifted in holds |
+| `tools/subtitle/hf_captions.py` | `~/OpenMontage/tools/subtitle/` | `hf_captions` — a HyperFrames captions sub-composition, right for Chinese |
+| `skills/narrated-motion-film/SKILL.md` | `~/OpenMontage/.agents/skills/narrated-motion-film/` | narrated films made of designed motion: the voice, reveals on the word, hero moments, music, captions, templates |
+| `templates/golden-scroll/` | `~/OpenMontage/templates/golden-scroll/` | the first template — faith.localkin.ai's timeline film (「照 golden-scroll 再做一部」) |
 
 OpenMontage finds tools by walking its `tools` package, so copying a file in is all it takes. `.env` on the box sets
 `COMFYUI_SERVER_URL=http://127.0.0.1:8188`.
@@ -28,6 +34,12 @@ scp tools/video/h3_video.py jackysub@192.168.0.21:OpenMontage/tools/video/
 scp tools/audio/minimax_music.py jackysub@192.168.0.21:OpenMontage/tools/audio/
 ssh jackysub@192.168.0.21 'mkdir -p ~/OpenMontage/.agents/skills/minimax-h3-local'
 scp skills/minimax-h3-local/SKILL.md jackysub@192.168.0.21:OpenMontage/.agents/skills/minimax-h3-local/
+scp tools/audio/box_tts.py tools/audio/box_narration.py tools/audio/music_bed.py jackysub@192.168.0.21:OpenMontage/tools/audio/
+scp tools/subtitle/hf_captions.py jackysub@192.168.0.21:OpenMontage/tools/subtitle/
+ssh jackysub@192.168.0.21 'mkdir -p ~/OpenMontage/.agents/skills/narrated-motion-film ~/OpenMontage/templates'
+scp skills/narrated-motion-film/SKILL.md jackysub@192.168.0.21:OpenMontage/.agents/skills/narrated-motion-film/
+scp -r templates/golden-scroll jackysub@192.168.0.21:OpenMontage/templates/
+ssh jackysub@192.168.0.21 'cd ~/OpenMontage && ~/.local/bin/uv pip install --python .venv/bin/python fonttools brotli'
 ```
 
 Check on the box: `cd ~/OpenMontage && source .venv/bin/activate && make preflight` — the three tools are listed as
@@ -37,6 +49,12 @@ Tested on the box on 2026-09-25 with a shot of 五饼二鱼 (`projects/box-test`
 frame from the set and two portraits in 135 s; `h3_video` filmed 141 frames from it in 712 s with the first frame
 pinned exactly, faces kept and its own ambient sound; `minimax_music` wrote a 14 s cue in 982 s (−26.5 LUFS,
 peak −6.4 dBFS).
+
+Tested on the box on 2026-09-30 (`/tmp/nmf-test`): `box_narration` read a three-line script twice in the
+voice 「温柔清澈的中年女声…」, kept the take nearer 3 字/s (2.9, heard 95 % exactly), cut three clips and timed every
+character (路德 at 4.81 s into its line) in 55 s; `music_bed` found a 32 s score's climax at 28 s and moved it onto
+the end of a 24 s narration (+18 %, the limit); `hf_captions` wrote nine clause captions with each font its own
+`@font-face`, one quote left to the picture. The method and its example film: `skills/narrated-motion-film`.
 
 ## All twelve pipelines on the box (2026-10-04)
 

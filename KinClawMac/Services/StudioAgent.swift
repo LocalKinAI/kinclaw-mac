@@ -971,7 +971,15 @@ final class StudioAgent: ObservableObject {
                 localization-dub, character-animation, documentary-montage and the rest), Chinese transcription and \
                 captions included: read .agents/skills/localkin-pipelines/SKILL.md before choosing one. A video into \
                 another language is video_translate: their own voice cloned from the video, lips moved to the new words \
-                (Ditto draws the face again), an .srt — call it once for the lines, translate them yourself, call it again. A project already under \
+                (Ditto draws the face again), an .srt — call it once for the lines, translate them yourself, call it again. A narrated film made of \
+                designed motion instead of AI pictures (an explainer, a documentary, a timeline; Chinese above all) \
+                follows .agents/skills/narrated-motion-film/SKILL.md: the narration from the box's own voices with \
+                box_narration (the whole script in one take, read several times, the take closest to the voice they \
+                chose kept, every character timed), reveals written on the word, the lines the film is about taking \
+                the whole frame, hf_captions for captions by Chinese clause, music_bed to fit the score under the \
+                voice. Films they liked are kept as templates in ~/OpenMontage/templates (golden-scroll is the first: \
+                faith.localkin.ai's timeline film): 「照 X 再做一部」 starts from templates/X/TEMPLATE.md, and \
+                「存成模板」 saves the finished film there. A project already under \
                 projects/ can be carried on from its checkpoints. A score shorter than the film (MiniMax picks its own \
                 length) is made long enough with music_extend — it loops back where the music matches itself and lists \
                 each seam to listen to — rather than asked for again. A long job: start, then wait (up to fifteen \
