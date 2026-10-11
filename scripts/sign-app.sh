@@ -30,10 +30,12 @@
 #   `codesign --sign -` on each piece separately produces a fresh
 #   synthetic team ID per call, breaking any inter-binary checks.
 #
-# Helper binaries (kinclaw + kincode) get signed by their own
-# install.sh in sibling repos — those handle stable identifiers
-# (dev.localkin.kinclaw / dev.localkin.kincode) and place the result
-# in ~/.localkin/bin/ where the supervisors look first.
+# The kernel has two copies. The developer's is built and signed by
+# kinclaw's own install.sh into ~/.localkin/bin/ (dev.localkin.kinclaw).
+# The one inside the app, at Contents/Helpers/kinclaw, is put there by
+# scripts/bundle-kernel.sh; the --deep pass below re-signs it with a
+# generic identifier, so it gets its own back afterwards and the app is
+# sealed again around it (nested code first, the bundle last).
 #
 # Usage:
 #   scripts/sign-app.sh <path-to-KinClawMac.app>
@@ -62,13 +64,20 @@ codesign --force --deep --sign - \
   --identifier "$IDENTIFIER" \
   "$APP"
 
+KERNEL="$APP/Contents/Helpers/kinclaw"
+if [[ -x "$KERNEL" ]]; then
+  echo "  → the kernel inside keeps dev.localkin.kinclaw; app sealed again around it"
+  codesign --force --sign - --identifier dev.localkin.kinclaw "$KERNEL"
+  codesign --force --sign - --identifier "$IDENTIFIER" "$APP"
+fi
+
 # Verify the signature is valid + the identifier stuck. Without this
 # check a corrupted Info.plist would silently produce an unverifiable
 # bundle that fails to launch later (silent dyld error, no obvious
-# log).
+# log). --deep: the kernel inside is checked too.
 echo
 echo "Verifying signature..."
-codesign --verify --verbose=2 "$APP" 2>&1 | sed 's/^/  /'
+codesign --verify --deep --verbose=2 "$APP" 2>&1 | sed 's/^/  /'
 
 ACTUAL_ID="$(codesign -dv "$APP" 2>&1 | awk -F= '/^Identifier=/{print $2}')"
 if [[ "$ACTUAL_ID" != "$IDENTIFIER" ]]; then
@@ -98,8 +107,8 @@ fi
 # bridge, which rewrote ~/.localkin/panel.json with its own token and
 # died a second later — every panel tool the kernel has then got a 403
 # from the app that was really running. And its supervisors spawned
-# kinclaw and kincode, so afterwards this script waited for them and
-# pkill'd whatever kinclaw and kincode were left: with the app already
+# kinclaw (and kincode, then), so afterwards this script waited for them
+# and pkill'd whatever kernels were left: with the app already
 # running, that was the app's own kernel, and any turn it was in.
 ( sleep 5 | "$EXECUTABLE" --mcp-stdio >/dev/null 2>&1 & echo $! > /tmp/.kinclawmac-smoketest-pid )
 SMOKE_PID="$(cat /tmp/.kinclawmac-smoketest-pid)"

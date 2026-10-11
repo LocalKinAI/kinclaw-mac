@@ -23,7 +23,7 @@ struct KinClawEvent: Codable {
     let name: String?
     let params: [String: String]?
     /// Pre-computed display string for tool_call ("ls -la /tmp",
-    /// "src/main.go"). Emitted by kincode; kinclaw events leave this
+    /// "src/main.go"). Emitted by the old kincode; kinclaw events leave this
     /// nil and the UI derives a label from `params`. For kinclaw
     /// `permission_request` events it is the one-line call summary.
     let summary: String?
@@ -37,7 +37,7 @@ struct KinClawEvent: Codable {
     let path: String?
     let url: String?
 
-    // usage stats — kincode emits at end of turn; kinclaw emits a
+    // usage stats — the old kincode emitted at end of turn; kinclaw emits a
     // `usage` event after every model call with context_length so the
     // UI can draw a meter.
     let input_tokens: Int?
@@ -54,7 +54,7 @@ struct KinClawEvent: Codable {
     // workspace: the folder relative paths resolve against.
     let workspace: String?
 
-    // user_message: image-attachment count (kincode plan mode).
+    // user_message: image-attachment count.
     let image_count: Int?
 
     // plan_mode broadcast: true = entered plan mode, false = exited.
@@ -87,7 +87,7 @@ extension KinClawEvent {
         /// Someone answered (or the wait was cancelled) — drop the card.
         case permissionResolved = "permission_resolved"
         case permissionMode     = "permission_mode"
-        /// kincode built the project after an edit. `summary` is
+        /// The old kincode built the project after an edit. `summary` is
         /// "ok" or "failed"; `output` carries the compiler's complaint.
         case verified           = "verified"
         /// Token accounting after each model call.
@@ -225,7 +225,7 @@ final class KinClawAPIClient {
     /// Server tracks conversation history per-soul so we send only
     /// the new user message.
     ///
-    /// `images` is non-nil when the user attached pictures. kincode
+    /// `images` is non-nil when the user attached pictures. The kernel
     /// translates these into Anthropic vision blocks / OpenAI
     /// image_url parts at the provider level — non-vision models
     /// will reject the turn at API time.
@@ -248,7 +248,7 @@ final class KinClawAPIClient {
 
     /// One image attached to a chat turn. mediaType ∈ {image/png,
     /// image/jpeg, image/gif, image/webp}. data is the raw base64
-    /// (no data: URL prefix — kincode provider layer adds prefix
+    /// (no data: URL prefix — the kernel's provider layer adds prefix
     /// when calling OpenAI; Anthropic uses raw base64 directly).
     struct ImageAttachment: Encodable, Identifiable, Hashable {
         let id: UUID
@@ -268,7 +268,7 @@ final class KinClawAPIClient {
         }
     }
 
-    /// `POST /api/plan_mode {enabled}` — flip kincode's plan-mode
+    /// `POST /api/plan_mode {enabled}` — flip the kernel's plan-mode
     /// gate. While on, the agent denies write/exec/spawn tools and
     /// prepends a directive teaching the model to emit a markdown
     /// plan instead. Returns the post-toggle state (server may
@@ -533,98 +533,12 @@ final class KinClawAPIClient {
     }
 }
 
-// MARK: - Kincode flavor (Code mode)
+// MARK: - Brain and session
 
-/// kincode (Code mode) shares the kinclaw transport shape — same
-/// POST /api/chat, GET /api/events, DELETE /api/chat — so we reuse
-/// KinClawAPIClient with a different baseURL. The kincode-specific
-/// surface (`/api/repo` to chdir the agent, `/api/state` for status)
-/// is added here as an extension.
+/// The kernel's runtime switches. (These sat beside the calls of
+/// kincode, the old Code mode's kernel on :5002, retired 2026-10-10:
+/// Code is Claude Code and Codex now.)
 extension KinClawAPIClient {
-
-    /// Singleton pointing at the local kincode server (default :5002).
-    /// Used by Code mode (CodePane) for chat and repo control.
-    static let kincode = KinClawAPIClient(
-        baseURL: URL(string: "http://localhost:5002")!
-    )
-
-    /// `GET /api/undo` — what taking back the last turn would restore,
-    /// without doing it, so the button can be labelled and disabled
-    /// honestly.
-    func peekUndo() async throws -> (prompt: String, files: [String], available: Bool) {
-        let url = baseURL.appendingPathComponent("api/undo")
-        let (data, response) = try await sessionData(from: url)
-        try checkOK(response as? HTTPURLResponse, body: data)
-        struct Reply: Decodable {
-            let available: Bool
-            let prompt: String?
-            let files: [String]?
-        }
-        let r = try JSONDecoder().decode(Reply.self, from: data)
-        return (r.prompt ?? "", r.files ?? [], r.available)
-    }
-
-    /// `POST /api/undo` — put back the files the last turn changed.
-    /// Returns the paths restored.
-    func undoLastTurn() async throws -> [String] {
-        let url = baseURL.appendingPathComponent("api/undo")
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        let (data, response) = try await sessionDataFor(request: request)
-        try checkOK(response as? HTTPURLResponse, body: data)
-        struct Reply: Decodable { let restored: [String]?; let error: String? }
-        let r = try JSONDecoder().decode(Reply.self, from: data)
-        if let e = r.error, (r.restored ?? []).isEmpty {
-            throw KinClawAPIError.server(status: 409, body: e)
-        }
-        return r.restored ?? []
-    }
-
-    /// `POST /api/repo {"path": "..."}` — chdir the kincode subprocess
-    /// into the user's chosen repo. All subsequent bash / file_* tool
-    /// calls operate relative to this dir.
-    func setRepo(_ path: String) async throws {
-        let url = baseURL.appendingPathComponent("api/repo")
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(["path": path])
-        let (data, response) = try await sessionDataFor(request: request)
-        try checkOK(response as? HTTPURLResponse, body: data)
-    }
-
-    /// `GET /api/state` — current repo / model / provider / message
-    /// count. Used by CodePane to label the repo header.
-    struct ServerState: Codable {
-        let repo: String?
-        let model: String?
-        let provider: String?
-        let message_count: Int?
-        let plan_mode: Bool?
-        /// "ask" or "auto" — what kincode's approval gate is doing, so
-        /// the footer shows the truth after a reconnect rather than its
-        /// own last guess.
-        let permission_mode: String?
-    }
-    func fetchState() async throws -> ServerState {
-        let url = baseURL.appendingPathComponent("api/state")
-        let (data, response) = try await sessionData(from: url)
-        try checkOK(response as? HTTPURLResponse, body: data)
-        return try decoder.decode(ServerState.self, from: data)
-    }
-
-    /// `POST /api/clear` — wipe the agent's conversation memory back
-    /// to system-prompt-only state. Cancels any in-flight turn first.
-    /// Used by Code mode's "new session" button to recover from
-    /// stuck error states (e.g. a malformed history that 400s on
-    /// every retry) without restarting the kincode subprocess.
-    func clearConversation() async throws {
-        let url = baseURL.appendingPathComponent("api/clear")
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        let (data, response) = try await sessionDataFor(request: request)
-        try checkOK(response as? HTTPURLResponse, body: data)
-    }
 
     /// `POST /api/brain` — switch the running agent's provider/model
     /// at runtime. Cancels any in-flight turn first server-side.

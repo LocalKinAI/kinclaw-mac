@@ -23,27 +23,37 @@ final class KinClawSupervisor: ObservableObject {
 
     /// Where kinclaw could be installed, plus the matching working
     /// directory and souls/ location for each. First found wins.
-    /// `Resources/` will get populated in M6 when we ship the
-    /// embedded binary inside the .app bundle.
     struct KinClawInstall {
         let binary: String
         let workingDir: String?    // for relative `souls/...` paths
         let soulsDir: String?
     }
 
+    /// The kernel the app carries (scripts/bundle-kernel.sh): the binary
+    /// in Contents/Helpers, its souls and skills side by side under
+    /// Resources/kinclaw — run from there, ./skills is the bundled skills
+    /// and the soul's ../skills too. What makes downloading the app all
+    /// anybody needs.
+    private static var bundled: KinClawInstall? {
+        let binary = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/kinclaw")
+        guard FileManager.default.isExecutableFile(atPath: binary.path),
+              let home = Bundle.main.resourceURL?.appendingPathComponent("kinclaw") else { return nil }
+        return .init(binary: binary.path,
+                     workingDir: home.path,
+                     soulsDir: home.appendingPathComponent("souls").path)
+    }
+
     private static var candidates: [KinClawInstall] {
         let home = NSHomeDirectory()
         var c = [KinClawInstall]()
 
-        // 1. Embedded inside the .app (M6 will populate after codesign).
-        if let bundled = Bundle.main.url(forResource: "kinclaw",
-                                          withExtension: nil) {
-            c.append(.init(
-                binary: bundled.path,
-                workingDir: bundled.deletingLastPathComponent().path,
-                soulsDir: bundled.deletingLastPathComponent()
-                    .appendingPathComponent("souls").path))
-        }
+        // 1. The one inside the .app — first, except in a debug build:
+        //    a developer's edited soul has to reach the running kernel
+        //    (days went to stale copies once), so there the developer's
+        //    own kernel and repo come first and this one last.
+        #if !DEBUG
+        if let bundled { c.append(bundled) }
+        #endif
 
         // 2. ~/.localkin/bin/kinclaw — STABLE INSTALLED BINARY.
         // The dev's `scripts/install.sh` copies the freshly-built
@@ -131,6 +141,9 @@ final class KinClawSupervisor: ObservableObject {
                 soulsDir: "\(home)/.localkin/souls"))
         }
 
+        #if DEBUG
+        if let bundled { c.append(bundled) }
+        #endif
         return c
     }
 

@@ -142,7 +142,7 @@ struct ToolCallView: View {
     private func renderedOutput(_ out: String) -> some View {
         if Self.isFileEdit(call.name), looksLikeDiff(out) {
             // kinclaw ≥ 1.18 appends a coloured unified diff to file_edit /
-            // file_write results, in kincode's format — DiffView parses both.
+            // file_write results, in the format DiffView parses.
             DiffView(raw: out)
         } else if looksLikeMarkdown(out) {
             MarkdownView(text: out)

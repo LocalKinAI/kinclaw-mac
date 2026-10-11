@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// Renders kincode's `file_edit` tool output as a colored unified diff.
+/// Renders a `file_edit` / `file_write` tool output as a colored unified diff.
 ///
-/// kincode's tool_result for file_edit has the shape:
+/// The kernel's tool_result for file_edit has the shape (the old kincode's
+/// format, which kinclaw ≥ 1.18 adopted):
 ///
 ///     replaced 1 occurrence in src/main.go
 ///     <ESC>[90m unchanged context line<ESC>[0m
@@ -10,7 +11,7 @@ import SwiftUI
 ///     <ESC>[32m+added line<ESC>[0m
 ///     <ESC>[90m unchanged context line<ESC>[0m
 ///
-/// We strip the ANSI escapes (kincode emits them so the terminal REPL
+/// We strip the ANSI escapes (the kernel emits them so the terminal REPL
 /// shows colors; the Mac UI does its own coloring), parse the +/-/space
 /// prefix, and render each line with a background tint matching git's
 /// terminal diff palette.
@@ -176,7 +177,7 @@ struct DiffView: View {
                                     marker: " ",
                                     body: String(line.dropFirst())))
             } else if line.isEmpty {
-                // Skip blank lines — kincode's diff doesn't emit them
+                // Skip blank lines — the kernel's diff doesn't emit them
                 // intentionally; any blanks are formatting artifacts.
                 continue
             } else {

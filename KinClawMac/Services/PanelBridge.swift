@@ -30,7 +30,7 @@ import UniformTypeIdentifiers
 final class PanelBridge {
     static let shared = PanelBridge()
 
-    /// After 5001 (kinclaw) and 5002 (kincode). Fixed rather than ephemeral so
+    /// After 5001 (kinclaw) and 5002 (the old kincode's). Fixed rather than ephemeral so
     /// a stale panel.json cannot point the relay at somebody else's port.
     static let preferredPort: UInt16 = 5003
 

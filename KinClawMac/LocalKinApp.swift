@@ -59,11 +59,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Local kinclaw subprocess manager (port 5001 — Chat / Cowork).
     let supervisor = KinClawSupervisor()
 
-    /// Local kincode subprocess manager (port 5002 — Code mode).
-    /// Eager-spawned by default; the user can opt out via Settings →
-    /// Backend → Kincode autostart.
-    let kincodeSupervisor = KinCodeSupervisor()
-
     /// Clicking the icon — in the Dock, in Finder, or `open -a KinClawMac`
     /// — summons the panel, the same as the hotkey. Without this, an app
     /// whose only surface is a hotkey panel looks broken to anyone who
@@ -167,13 +162,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         //    block on the boot probe.
         Task { await supervisor.start() }
 
-        // 7. Bring up kincode on :5002 in parallel — Code mode's
-        //    backend. Independent of kinclaw: if kinclaw fails the
-        //    user still gets Code mode, and vice versa. Runs async
-        //    too; both probes happen concurrently.
-        Task { await kincodeSupervisor.start() }
-
-        // 8. Local notifications: a task finished, needs approval, or
+        // 7. Local notifications: a task finished, needs approval, or
         //    has a question while the panel is hidden. Clicking one
         //    brings the panel back. Asked once; macOS remembers.
         let center = UNUserNotificationCenter.current()
@@ -182,10 +171,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        // Clean shutdown of our owned subprocesses. Adopted externals
-        // (either kernel) are left alone — they belong to the user.
+        // Clean shutdown of our owned subprocess. An adopted external
+        // kernel is left alone — it belongs to the user.
         supervisor.stop()
-        kincodeSupervisor.stop()
         // The OpenMontage agent's ssh session and the board's tunnel: an ssh
         // left running after the app is gone holds the port for nobody.
         MontageStudio.shared.shutdown()

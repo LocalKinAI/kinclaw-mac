@@ -80,7 +80,7 @@ struct SpotlightContentView: View {
     ///
     ///   Chat   → cloud personalities (Selah / Heal / Core / Faith)
     ///   Cowork → KinClaw computer-use souls (Pilot / Coder / etc.)
-    ///   Code   → fixed kincode kernel (no picker)
+    ///   Code   → Claude Code / Codex sessions (no picker)
     ///
     /// Without this separation, "I was chatting with Selah, switched
     /// to Cowork" would leave Selah selected — and Selah can't drive
@@ -1227,8 +1227,8 @@ struct SpotlightContentView: View {
             // Cowork-only: brain dropdown next to the soul picker.
             // Soul (Pilot/Coder/...) and brain (kimi/claude/qwen) are
             // independent — pick Pilot then swap brain without
-            // reloading. Mirrors Code mode's brainMenu but hits
-            // kinclaw on :5001 instead of kincode on :5002.
+            // reloading. (It began as a copy of the old Code mode's brain
+            // menu, which hit kincode on :5002; this one hits kinclaw on :5001.)
             // (The brain picker moved to the composer's bottom-right
             // corner — the agent bar is about who and where, the
             // composer footer about what brain, as in Claude Desktop.)
@@ -1361,8 +1361,7 @@ struct SpotlightContentView: View {
             // computer-use souls. This is the conceptual heart of the
             // three-tab split: each tab has a distinct purpose, so its
             // agent pool is distinct too. Code mode never reaches this
-            // menu (kincode is fixed; the picker is replaced upstream
-            // with a static label).
+            // menu (it has no picker).
 
             switch mode {
             case .cowork:
@@ -1434,9 +1433,8 @@ struct SpotlightContentView: View {
                 }
 
             case .code, .term, .web, .film, .motion, .jev, .comfy, .montage, .pixelle, .social:
-                // Unreachable — these modes have no agent picker: Code shows a
-                // static "🦞 kincode" label, Term and Web have toolbars of
-                // their own. Defensive empty case.
+                // Unreachable — these modes have no agent picker: Code, Term and
+                // Web have toolbars of their own. Defensive empty case.
                 EmptyView()
             }
 
@@ -3522,7 +3520,7 @@ struct SpotlightContentView: View {
     ///             else first Core, else first Faith, else first cloud
     ///   .cowork → last-used KinClaw soul (kinclaw.cowork.lastSoul),
     ///             else KinClaw Pilot, else first KinClaw soul
-    ///   .code   → no agent (kincode is fixed)
+    ///   .code   → no agent (retired; lands on .term)
     private func pickDefaultAgent(for mode: ChatMode) -> Agent? {
         switch mode {
         case .code, .term, .web, .film, .motion, .jev, .comfy, .montage, .pixelle, .social:

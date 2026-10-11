@@ -8,6 +8,30 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Changed — one download: the kernel inside the app, and kincode gone
+
+「我的意思用户只要下载kinclaw-mac就可以不知道kinclaw也可以用啊」 — so the app carries its kernel; and
+「kincode已经不需要了啊，我们都换成claude和codex了」.
+
+- **The kernel inside the app.** `make bundle-kernel` (part of `make sign` / `make run`, after the build)
+  builds kinclaw into `Contents/Helpers/kinclaw` and puts the souls and skills git tracks under
+  `Contents/Resources/kinclaw/` — side by side, so the kernel run from there finds `./skills` and the soul's
+  `../skills` with nothing changed in it. 836 KB of them (the repo's skills/ also holds ~450 MB of indexes and
+  caches, left out); `VERSION` names the commit, `-dirty` when the working tree had edits. Signed with
+  `dev.localkin.kinclaw`, the identifier of the developer's copy; `scripts/sign-app.sh` gives it back after its
+  `--deep` pass and seals the app again around it — a strict deep verify passes.
+- `KinClawSupervisor` runs that copy first in a release build. A debug build still runs the developer's
+  `~/.localkin/bin/kinclaw` with the kinclaw repo's souls first — an edited soul has to be live on the next
+  restart — and the bundled one last.
+- Still to come for anybody else's Mac: a Developer ID signature and notarization (the $99 certificate), and
+  the first-run permission dialogs, which only a person at that Mac can click.
+- **kincode retired.** Code has been Claude Code and Codex since 2026-09-26, but kincode kept starting on :5002
+  with every launch. Gone: `KinCodeSupervisor`, the old Code pane (`CodePane`, 1,946 lines, no longer
+  reachable) and its tool row, the Kincode card in Settings, the client calls only it made, and every kincode
+  step in the Makefile (bootstrap clone, install, start, kill, doctor, tcc-reset). The diff, checklist and
+  tool-call views stay: kinclaw's own `file_edit` / `todo_write` use them. A saved `.code` mode still lands on
+  the terminal tab.
+
 ### Changed — 画 and 改 on Qwen-Image-2.1-Turbo
 
 「qwen-image-2.1-turbo-mlx装在盒子上了，你看看」 → measured on the box → 「画和改都换吧」.

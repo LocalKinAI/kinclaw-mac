@@ -1,30 +1,17 @@
 import Foundation
 
-/// Curated list of common (provider, model) combos kincode can run
-/// against. Surfaced as a dropdown in two places:
+/// One (provider, model) a brain menu can offer: Cowork's brain, the
+/// terminal agents' model, the Studio agents' seats. Most rows come from
+/// whatever the configured Ollama has pulled (`OllamaCatalog.loadPresets`);
+/// `fallbackPresets` is what a menu shows before that answers.
 ///
-///   1. **Code tab → repoBar** — live switch via POST /api/brain.
-///      Affects the *running* kincode subprocess only; the next turn
-///      uses the new brain. Doesn't persist to UserDefaults.
-///   2. **Settings → Backend → Kincode** — picks the *default* brain
-///      that KinCodeSupervisor passes via -provider / -model when
-///      it spawns kincode at app launch. Persisted to UserDefaults
-///      under `kinclaw.kincode.brain.provider` / `.brain.model`.
-///
-/// The two are independent on purpose: the Code-tab dropdown lets
-/// you experiment ("does Claude do this better than Kimi?") without
-/// changing the default. Settings is for "I always want Claude" —
-/// reflects across relaunches.
-///
-/// Adding a new preset: append to `presets` below. The list is
-/// hardcoded — power users with custom Ollama models can edit
-/// UserDefaults directly or extend this list, but the curated set
-/// keeps the dropdown short.
+/// (It began as the brain menu of kincode, the old Code mode's kernel,
+/// retired 2026-10-10.)
 struct BrainPreset: Identifiable, Hashable {
     /// Stable identifier — `<provider>/<model>`.
     var id: String { "\(provider)/\(model)" }
 
-    /// Provider name as kincode expects: "ollama", "anthropic", "openai".
+    /// Provider name as the kernels expect: "ollama", "anthropic", "openai".
     let provider: String
 
     /// Model identifier as the provider expects (e.g. "kimi-k2.6:cloud",

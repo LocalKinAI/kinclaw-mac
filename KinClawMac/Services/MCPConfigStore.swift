@@ -13,7 +13,7 @@ final class MCPConfigStore: ObservableObject {
     /// One server as stored in mcp.json.
     ///
     /// Field names match the ecosystem-standard `mcpServers` block used by
-    /// Claude Desktop and kincode, so a config can be copied between them and
+    /// Claude Desktop and Claude Code, so a config can be copied between them and
     /// a server's published install snippet pasted in unchanged.
     struct ServerConfig: Codable, Equatable {
         var command: String

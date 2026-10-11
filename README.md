@@ -10,7 +10,7 @@ Native macOS Spotlight-style shell for the LocalKin family. One floating window,
 
 - 💬 **Chat** — 98 cloud agents (Selah / Heal / Core / Faith) via `api.localkin.dev`
 - 👁️ **Cowork** — local [KinClaw](https://github.com/LocalKinAI/kinclaw) kernel + 5 claws (screen / ui / input / record / web). Pilot operates your Mac.
-- 💻 **Code** — local [kincode](https://github.com/LocalKinAI/kincode) kernel, repo-aware coding agent. Pick a repo, kincode reads + edits + tests it.
+- 💻 **Code** — Claude Code and Codex in real terminals, every session by folder (the local kincode kernel that used to be here was retired on 2026-10-10).
 
 Same window, same agent picker shape, three different brains. Switch tabs to switch modes.
 
@@ -64,12 +64,12 @@ Forked from [localkin-ios](https://github.com/LocalKinAI/localkin-ios) for the c
                         │            │            │
             ┌───────────┘            │            └────────────┐
             ▼                        ▼                          ▼
-  api.localkin.dev/v1         localhost:5001              localhost:5002
-  (cloud agents)              (kinclaw kernel,            (kincode kernel,
-                               5 claws)                    coding agent)
+  api.localkin.dev/v1         localhost:5001              claude / codex
+  (cloud agents)              (kinclaw kernel,            (terminal sessions,
+                               5 claws)                    by folder)
 ```
 
-Two subprocess supervisors (`KinClawSupervisor` + `KinCodeSupervisor`) auto-spawn the local kernels at app launch. Both spawn through `DisclaimedProcess` (posix_spawn + `responsibility_spawnattrs_setdisclaim` SPI) so the subprocesses own their TCC identity — `kinclaw` granted Accessibility from your Terminal runs is automatically valid in the Mac app spawn too.
+`KinClawSupervisor` auto-spawns the local kernel at app launch. The app carries its own: `Contents/Helpers/kinclaw`, with its souls and skills under `Contents/Resources/kinclaw/` (put there by `make bundle-kernel`), so downloading the app is all anybody needs — a release build runs that copy first; a debug build runs the developer's `~/.localkin/bin/kinclaw` with the kinclaw repo's souls first, so an edited soul is live on the next restart. It spawns through `DisclaimedProcess` (posix_spawn + `responsibility_spawnattrs_setdisclaim` SPI) so the subprocess owns its TCC identity — `kinclaw` granted Accessibility from your Terminal runs is automatically valid in the Mac app spawn too.
 
 ---
 
@@ -256,20 +256,21 @@ make run
 
 That's it. `make run` will:
 
-1. **Bootstrap** — find or clone the helper kernels [`kinclaw`](https://github.com/LocalKinAI/kinclaw) and [`kincode`](https://github.com/LocalKinAI/kincode). Search order:
-   - `KINCLAW_REPO` / `KINCODE_REPO` env vars (explicit override)
-   - `../kinclaw` / `../kincode` (the documented sibling layout)
+1. **Bootstrap** — find or clone the kernel, [`kinclaw`](https://github.com/LocalKinAI/kinclaw). Search order:
+   - `KINCLAW_REPO` env var (explicit override)
+   - `../kinclaw` (the documented sibling layout)
    - `~/Documents/Workspace/<name>`, `~/code/<name>`, `~/dev/<name>`, `~/src/<name>` (common conventions)
    - Last resort: `git clone` into `../<name>`
 
-   If you already have one or both checked out anywhere on this list, **bootstrap re-uses your existing copy — no second clone**. To override on a one-off basis: `KINCLAW_REPO=/my/path make run`.
+   If you already have it checked out anywhere on this list, **bootstrap re-uses your existing copy — no second clone**. To override on a one-off basis: `KINCLAW_REPO=/my/path make run`.
 2. **Build** — run XcodeGen, then `xcodebuild` for the .app
-3. **Sign helpers** — `go build` + ad-hoc codesign `kinclaw` and `kincode` into `~/.localkin/bin/` with stable bundle IDs (`dev.localkin.kinclaw` / `dev.localkin.kincode`)
-4. **Sign app** — codesign `KinClawMac.app` with stable ID `dev.localkin.kinclawmac` (NO hardened runtime — would block dlopen of ad-hoc dylibs like libkinrec_writer)
-5. **Start helpers** — launch `kinclaw` on `:5001` and `kincode` on `:5002` as detached daemons (PPID=1, survive shell exit), wait for both ports to bind
-6. **Launch app** — `open KinClawMac.app`. Each supervisor finds its helper already running and adopts it cleanly (no spawn race)
+3. **Bundle the kernel** — `go build` kinclaw into `Contents/Helpers/`, with the souls and skills git tracks under `Contents/Resources/kinclaw/` and the commit in `VERSION`
+4. **Sign the developer's kernel** — `go build` + ad-hoc codesign `kinclaw` into `~/.localkin/bin/` with the stable bundle ID `dev.localkin.kinclaw`
+5. **Sign app** — codesign `KinClawMac.app` with stable ID `dev.localkin.kinclawmac` (NO hardened runtime — would block dlopen of ad-hoc dylibs like libkinrec_writer)
+6. **Start the kernel** — launch `kinclaw` on `:5001` as a detached daemon (PPID=1, survives shell exit), wait for the port to bind
+7. **Launch app** — `open KinClawMac.app`. The supervisor finds the kernel already running and adopts it cleanly (no spawn race)
 
-Skills, souls, and built-in tools come from the sibling repos directly — kinclaw and kincode discover them at runtime via `KINCLAW_SKILL_DIRS` / `KINCODE_SKILL_DIRS` env vars (set by the Makefile) and `~/.localkin/skill-sources.txt` (registered by each install.sh). No copy step, no stale duplicates — edit a SKILL.md in the dev repo, restart the helper, the change is live.
+In development, skills, souls, and built-in tools come from the kinclaw repo directly — kinclaw discovers them at runtime via the `KINCLAW_SKILL_DIRS` env var (set by the Makefile) and `~/.localkin/skill-sources.txt` (registered by its install.sh). No copy step, no stale duplicates — edit a SKILL.md in the dev repo, restart the kernel, the change is live.
 
 Stable bundle IDs are the whole point of the codesign step: macOS TCC keys Accessibility / Screen Recording grants by bundle identifier + path, so re-signing with the same ID across rebuilds survives the user's "Allow" — no more re-authorizing on every code change.
 
@@ -277,11 +278,12 @@ Other targets (run `make help` for the full list):
 
 | Target          | What it does |
 |-----------------|--------------|
-| `make bootstrap`| Just clone missing sibling repos — runs automatically as part of `make sign` and `make run` |
+| `make bootstrap`| Just clone kinclaw if it is missing — runs automatically as part of `make sign` and `make run` |
 | `make sign`     | Bootstrap + build + sign everything, but don't launch |
 | `make build`    | Just `xcodebuild`, no signing |
-| `make start-helpers` | Start `kinclaw` + `kincode` detached, without launching the GUI |
-| `make kill`     | Stop the app + helper subprocesses |
+| `make bundle-kernel` | Put the kernel, its souls and skills inside the built .app |
+| `make start-helpers` | Start `kinclaw` detached, without launching the GUI |
+| `make kill`     | Stop the app + the kernel |
 | `make doctor`   | Show signing state + running processes — first thing to run when something looks off |
 | `make clean`    | Drop DerivedData + kill (forces a full rebuild next time) |
 

@@ -8,8 +8,8 @@ import Darwin
 /// Calling this with disclaim=1 flips that — the subprocess takes
 /// on its own TCC identity.
 ///
-/// Why we need this: KinClaw Mac spawns kinclaw + kincode as
-/// subprocesses. Without disclaim, when kinclaw asks the kernel
+/// Why we need this: KinClaw Mac spawns kinclaw as a
+/// subprocess. Without disclaim, when kinclaw asks the kernel
 /// "can I do AX queries?", macOS asks "who's responsible for the
 /// kinclaw process?" → "KinClawMac.app" → "does KinClawMac.app have
 /// AX permission?" → "no" → denied. Even though the user granted

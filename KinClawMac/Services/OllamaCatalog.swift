@@ -3,8 +3,8 @@ import Foundation
 
 /// Queries the user's local Ollama install (default :11434) for the
 /// chat-capable models they have pulled, and surfaces them as
-/// `BrainPreset` rows for the Code-mode brain dropdown + Settings →
-/// Backend → Default brain.
+/// `BrainPreset` rows for the model menus: Cowork's brain, the
+/// terminal agents' model, the Studio agents' seats.
 ///
 /// kinfer fits the same slot: it serves Ollama's /api/tags and
 /// OpenAI's /v1/chat/completions, which is everything the dropdowns
@@ -319,9 +319,6 @@ enum OllamaCatalog {
 
     /// Short badge for the current source in the brain label.
     static var sourceBadge: String { isRemote ? hostLabel(baseURL) : "local" }
-
-    /// The endpoint kincode wants for an Ollama brain (full chat URL).
-    static var kincodeEndpoint: String { baseURL + "/v1/chat/completions" }
 
     /// Fetch installed models and map to BrainPreset rows. Returns an
     /// empty array if Ollama is unreachable or no models match the

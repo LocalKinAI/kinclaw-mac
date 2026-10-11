@@ -338,41 +338,10 @@ private struct BackendSettingsTab: View {
     @AppStorage(DiffuserClient.editHostKey) private var diffuserEditHost = ""
     @AppStorage(DiffuserClient.videoHostKey) private var diffuserVideoHost = ""
 
-    // Kincode (Code mode kernel — Stage 1 / 5).
-    @AppStorage("kinclaw.kincode.autostart") private var kincodeAutostart = true
-    @AppStorage("kinclaw.kincode.port") private var kincodePort = 5002
-
-    // Default brain — what the supervisor passes via -provider/-model
-    // when it spawns kincode at app launch. Live-switch in the Code
-    // tab (POST /api/brain) doesn't touch these.
-    @AppStorage("kinclaw.kincode.brain.provider") private var defaultBrainProvider = ""
-    @AppStorage("kinclaw.kincode.brain.model") private var defaultBrainModel = ""
-
     @State private var localStatus = "Probing…"
     /// Result of the Ollama host test button, or nil before pressing it.
     @State private var ollamaProbe: String?
     @State private var ollamaCommit: DispatchWorkItem?
-    @State private var kincodeStatus = "Probing…"
-
-    /// Brain presets loaded from local Ollama. Same source as
-    /// CodePane's dropdown — Settings just persists the choice
-    /// instead of live-switching. Defaults to the static fallback
-    /// while loading; replaced when /api/tags returns.
-    @State private var brainPresets: [BrainPreset] = BrainPreset.fallbackPresets
-
-    /// Human-readable label for the current Default brain selection.
-    /// Empty pref = use whatever soul says (kimi-k2.6:cloud).
-    private var brainDefaultLabel: String {
-        if defaultBrainProvider.isEmpty {
-            return "From soul"
-        }
-        if let preset = BrainPreset.find(provider: defaultBrainProvider,
-                                          model: defaultBrainModel,
-                                          in: brainPresets) {
-            return preset.label
-        }
-        return defaultBrainModel.isEmpty ? "From soul" : defaultBrainModel
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -401,91 +370,6 @@ private struct BackendSettingsTab: View {
                     }
                 }
                 SettingsCaption("Port / binary changes apply on next supervisor restart. Quit + relaunch to apply.")
-            }
-
-            SettingsCard("Kincode (Code mode)") {
-                SettingsRow(label: "Autostart") {
-                    Toggle("", isOn: $kincodeAutostart)
-                        .toggleStyle(.switch)
-                        .labelsHidden()
-                }
-                SettingsRow(label: "Port") {
-                    TextField("5002", value: $kincodePort, format: .number)
-                        .frame(width: 80)
-                        .textFieldStyle(.roundedBorder)
-                }
-                SettingsRow(label: "Default brain") {
-                    Menu {
-                        Button {
-                            defaultBrainProvider = ""
-                            defaultBrainModel = ""
-                        } label: {
-                            HStack {
-                                Text("From soul (kimi-k2.6:cloud)")
-                                Spacer()
-                                if defaultBrainProvider.isEmpty {
-                                    Image(systemName: "checkmark")
-                                }
-                            }
-                        }
-                        Divider()
-                        if brainPresets.isEmpty {
-                            Text("Ollama not reachable on :11434")
-                                .foregroundColor(.secondary)
-                        }
-                        ForEach(brainPresets) { preset in
-                            Button {
-                                defaultBrainProvider = preset.provider
-                                defaultBrainModel = preset.model
-                            } label: {
-                                HStack {
-                                    Text(preset.label)
-                                    Spacer()
-                                    if let tag = preset.tag {
-                                        Text(tag)
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                    }
-                                    if defaultBrainProvider == preset.provider
-                                        && defaultBrainModel == preset.model {
-                                        Image(systemName: "checkmark")
-                                    }
-                                }
-                            }
-                        }
-                        Divider()
-                        Button("Reload from Ollama") {
-                            Task {
-                                let fresh = await OllamaCatalog.loadPresets()
-                                if !fresh.isEmpty {
-                                    await MainActor.run { brainPresets = fresh }
-                                }
-                            }
-                        }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Text(brainDefaultLabel)
-                                .font(.system(size: 12))
-                                .lineLimit(1)
-                            Image(systemName: "chevron.down")
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
-                }
-                SettingsRow(label: "Status") {
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(kincodeStatus.contains("Running")
-                                  ? Theme.good : Color.red)
-                            .frame(width: 6, height: 6)
-                        Text(kincodeStatus)
-                            .font(.system(size: 12))
-                    }
-                }
-                SettingsCaption("Coding agent on :5002. Default brain is what the supervisor spawns kincode with — switch live in the Code tab without touching this. Apply on relaunch.")
             }
 
             SettingsCard("Companion mode") {
@@ -579,21 +463,7 @@ private struct BackendSettingsTab: View {
             }
         }
         .task {
-            // All three probes run concurrently — neither blocks
-            // the others.
-            async let kc: Void = refreshStatus()
-            async let kk: Void = refreshKincodeStatus()
-            async let ol: Void = loadBrainPresets()
-            _ = await (kc, kk, ol)
-        }
-    }
-
-    /// Load installed Ollama models for the Default-brain dropdown.
-    /// Empty result keeps the static fallback list visible.
-    private func loadBrainPresets() async {
-        let fresh = await OllamaCatalog.loadPresets()
-        if !fresh.isEmpty {
-            await MainActor.run { brainPresets = fresh }
+            await refreshStatus()
         }
     }
 
@@ -603,41 +473,6 @@ private struct BackendSettingsTab: View {
             localStatus = "Running — \(souls.count) soul\(souls.count == 1 ? "" : "s")"
         } catch {
             localStatus = "Not reachable"
-        }
-    }
-
-    /// Hits kincode's /api/health (and /api/state for the model
-    /// label, when the health probe succeeds). State JSON is cheap
-    /// — the agent has at most one assistant message in memory at
-    /// idle so the response is tiny.
-    private func refreshKincodeStatus() async {
-        guard let url = URL(string: "http://localhost:\(kincodePort)/api/health") else {
-            kincodeStatus = "Not reachable"
-            return
-        }
-        var req = URLRequest(url: url)
-        req.timeoutInterval = 1.5
-        do {
-            let (_, response) = try await URLSession.shared.data(for: req)
-            if let http = response as? HTTPURLResponse,
-               (200...299).contains(http.statusCode) {
-                // Optionally fetch the model + provider label for richer status.
-                if let stateURL = URL(string: "http://localhost:\(kincodePort)/api/state") {
-                    var sreq = URLRequest(url: stateURL)
-                    sreq.timeoutInterval = 1.0
-                    if let (data, _) = try? await URLSession.shared.data(for: sreq),
-                       let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                       let model = obj["model"] as? String {
-                        kincodeStatus = "Running — \(model)"
-                        return
-                    }
-                }
-                kincodeStatus = "Running"
-            } else {
-                kincodeStatus = "Not reachable"
-            }
-        } catch {
-            kincodeStatus = "Not reachable"
         }
     }
 

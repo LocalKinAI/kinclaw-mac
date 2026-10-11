@@ -1,20 +1,23 @@
 # KinClawMac — stable build/sign/run loop
 #
 # The whole point of this Makefile: kill the old process, build the
-# .app, sign it (and the kinclaw + kincode helpers in ~/.localkin/bin/)
-# with stable bundle identifiers, then launch — so macOS TCC remembers
-# the user's accessibility / screen-recording grants across rebuilds.
+# .app with the kinclaw kernel inside it, sign it (and the developer's
+# kinclaw in ~/.localkin/bin/) with stable bundle identifiers, then
+# launch — so macOS TCC remembers the user's accessibility /
+# screen-recording grants across rebuilds.
 #
 # Common workflow:
 #   make run        # one-shot: kill + sign everything + launch
 #   make sign       # build + sign without launching
-#   make kill       # stop the running app + helper subprocesses
+#   make kill       # stop the running app + the kernel
 #   make doctor     # show what's signed where + what's running
 #
 # Stable bundle identifiers (re-applied on every signing pass):
 #   dev.localkin.kinclawmac   — KinClawMac.app
-#   dev.localkin.kinclaw      — kinclaw kernel binary
-#   dev.localkin.kincode      — kincode coding agent binary
+#   dev.localkin.kinclaw      — kinclaw kernel binary (both copies)
+#
+# (kincode, the old Code mode's kernel, is gone since 2026-10-10: Code
+# is Claude Code and Codex.)
 
 # ─── Paths ─────────────────────────────────────────────────────────────
 SHELL              := /bin/bash
@@ -26,9 +29,10 @@ APP_BUNDLE_NAME    := $(SCHEME).app
 BUILD_PRODUCTS_DIR := $(shell find $(DERIVED_DATA) -maxdepth 5 -name '$(APP_BUNDLE_NAME)' -path '*/Build/Products/$(CONFIGURATION)/*' -print 2>/dev/null | head -1 | xargs -I{} dirname {})
 APP_PATH           := $(BUILD_PRODUCTS_DIR)/$(APP_BUNDLE_NAME)
 
-# Sibling repos. Discovery order — first hit wins:
-#   1. KINCLAW_REPO / KINCODE_REPO env var (explicit override)
-#   2. ../kinclaw / ../kincode (sibling layout, the documented one)
+# The kinclaw repo, built into the app and run from in development.
+# Discovery order — first hit wins:
+#   1. KINCLAW_REPO env var (explicit override)
+#   2. ../kinclaw (sibling layout, the documented one)
 #   3. ~/Documents/Workspace/<name> (Jacky's layout)
 #   4. ~/code/<name> / ~/dev/<name> / ~/src/<name> (other common
 #      conventions)
@@ -43,14 +47,6 @@ KINCLAW_REPO       ?= $(shell \
 	         $(HOME)/src/kinclaw; do \
 	  if [ -d "$$d/.git" ]; then echo "$$d"; exit 0; fi; \
 	done; echo $(REPO_ROOT)/../kinclaw)
-KINCODE_REPO       ?= $(shell \
-	for d in $(REPO_ROOT)/../kincode \
-	         $(HOME)/Documents/Workspace/kincode \
-	         $(HOME)/code/kincode \
-	         $(HOME)/dev/kincode \
-	         $(HOME)/src/kincode; do \
-	  if [ -d "$$d/.git" ]; then echo "$$d"; exit 0; fi; \
-	done; echo $(REPO_ROOT)/../kincode)
 # localkin (private/optional) — if the user has the LocalKin family
 # core repo checked out, its skills/ dir holds 130+ cloud-side
 # SKILL.md files (knowledge_search wraps grep-is-all-you-need,
@@ -66,27 +62,25 @@ LOCALKIN_REPO      ?= $(shell \
 	  if [ -d "$$d/.git" ]; then echo "$$d"; exit 0; fi; \
 	done)
 KINCLAW_REMOTE     := https://github.com/LocalKinAI/kinclaw.git
-KINCODE_REMOTE     := https://github.com/LocalKinAI/kincode.git
 
-# Stable install path. Both supervisors look here first (priority 2,
-# after the in-bundle Resources/ which we don't currently use).
+# Stable install path of the developer's kernel. The supervisor runs it
+# before the copy inside the app in a debug build, after it in release.
 LOCALKIN_BIN       := $(HOME)/.localkin/bin
 
 # Where the helpers' detached stdout/stderr land. Tail these when
 # something looks off (`tail -f $(LOG_DIR)/kinclaw.log`).
 LOG_DIR            := /tmp
 
-# Default souls for the helpers. Read directly from each repo so
-# edits are immediately live — no install/copy step needed.
-# (Earlier these pointed at ~/.localkin/{souls,bin}/ family location
+# Default soul for the kernel. Read directly from the repo so edits
+# are immediately live — no install/copy step needed.
+# (Earlier this pointed at ~/.localkin/{souls,bin}/ family location
 # but install.sh's cp -n meant the copies went stale and never updated;
-# repo edits never reached the running helper. Reading repo paths
+# repo edits never reached the running kernel. Reading repo paths
 # straight is the simpler architecture.)
 PILOT_SOUL         := $(KINCLAW_REPO)/souls/pilot.soul.md
-CODER_SOUL         := $(KINCODE_REPO)/souls/coder.soul.md
 
 # Process names we kill on `make kill` / before re-signing.
-PROC_PATTERNS      := KinClawMac kinclaw kincode
+PROC_PATTERNS      := KinClawMac kinclaw
 
 .DEFAULT_GOAL := help
 
@@ -100,10 +94,10 @@ help: ## Show this help (default)
 	@printf "\nCommon flow: \033[33mmake run\033[0m  (kill → sign → launch)\n"
 
 .PHONY: bootstrap
-bootstrap: ## Clone missing sibling repos (kinclaw, kincode) — only clones if not found anywhere
+bootstrap: ## Clone the kinclaw repo if it is not found anywhere
 	@# Goal: "git clone kinclaw-mac && cd kinclaw-mac && make run" should
-	@# yield a fully working app. The KINCLAW_REPO / KINCODE_REPO
-	@# variables already searched common locations
+	@# yield a fully working app. The KINCLAW_REPO
+	@# variable already searched common locations
 	@# (../kinclaw, ~/Documents/Workspace/kinclaw, ~/code/kinclaw, etc.)
 	@# — bootstrap just clones the *fallback* path if nothing was found.
 	@# So if you already have kinclaw at ~/code/kinclaw, this target
@@ -113,12 +107,6 @@ bootstrap: ## Clone missing sibling repos (kinclaw, kincode) — only clones if 
 	else \
 	  echo "==> Cloning kinclaw → $(KINCLAW_REPO) ..."; \
 	  git clone "$(KINCLAW_REMOTE)" "$(KINCLAW_REPO)"; \
-	fi
-	@if [ -d "$(KINCODE_REPO)/.git" ]; then \
-	  echo "  ✓ kincode at $(KINCODE_REPO)"; \
-	else \
-	  echo "==> Cloning kincode → $(KINCODE_REPO) ..."; \
-	  git clone "$(KINCODE_REMOTE)" "$(KINCODE_REPO)"; \
 	fi
 
 .PHONY: gen
@@ -155,20 +143,22 @@ _refresh-app-path:
 	  -path '*/Build/Products/$(CONFIGURATION)/*' -print 2>/dev/null \
 	  | head -1 > .last-app-path
 
+.PHONY: bundle-kernel
+bundle-kernel: ## Put the kinclaw kernel, its souls and skills inside the built .app
+	@APP="$$(cat .last-app-path 2>/dev/null)"; \
+	if [[ -z "$$APP" || ! -d "$$APP" ]]; then \
+	  echo "✗ No built .app found. Run 'make build' first." >&2; \
+	  exit 1; \
+	fi; \
+	$(REPO_ROOT)/scripts/bundle-kernel.sh "$$APP" "$(KINCLAW_REPO)"
+
 .PHONY: sign-helpers
-sign-helpers: ## Build + sign + install kinclaw and kincode binaries (sibling repos)
-	@echo "==> Signing helper binaries (kinclaw + kincode) ..."
+sign-helpers: ## Build + sign + install the developer's kinclaw into ~/.localkin/bin (sibling repo)
+	@echo "==> Signing the developer's kernel (kinclaw) ..."
 	@if [[ -x "$(KINCLAW_REPO)/scripts/install.sh" ]]; then \
-	  echo "  → kinclaw ..."; \
 	  "$(KINCLAW_REPO)/scripts/install.sh" 2>&1 | sed 's/^/    /'; \
 	else \
 	  echo "  ⚠ skipped kinclaw (sibling repo $(KINCLAW_REPO) not found)"; \
-	fi
-	@if [[ -x "$(KINCODE_REPO)/scripts/install.sh" ]]; then \
-	  echo "  → kincode ..."; \
-	  "$(KINCODE_REPO)/scripts/install.sh" 2>&1 | sed 's/^/    /'; \
-	else \
-	  echo "  ⚠ skipped kincode (sibling repo $(KINCODE_REPO) not found)"; \
 	fi
 
 .PHONY: sign-app
@@ -182,22 +172,22 @@ sign-app: ## Sign the built .app with stable identifier (assumes build ran)
 	$(REPO_ROOT)/scripts/sign-app.sh "$$APP"
 
 .PHONY: sign
-sign: kill bootstrap build sign-helpers sign-app ## Full sign loop: bootstrap siblings + kill + build + sign all
+sign: kill bootstrap build bundle-kernel sign-helpers sign-app ## Full sign loop: bootstrap kinclaw + kill + build + bundle the kernel + sign all
 	@printf "\n✓ Signed everything. Launch with: \033[33mmake run\033[0m\n"
 
 .PHONY: start-helpers
-start-helpers: ## Start kinclaw + kincode as detached daemons (PPID=1, survive shell exit)
-	@# Start helpers BEFORE KinClawMac so the supervisors find them
-	@# already on :5001 / :5002 and adopt them cleanly. No spawn race.
+start-helpers: ## Start kinclaw as a detached daemon (PPID=1, survives shell exit)
+	@# Start the kernel BEFORE KinClawMac so the supervisor finds it
+	@# already on :5001 and adopts it cleanly. No spawn race.
 	@#
 	@# Detachment: `( cmd >log 2>&1 & )` — subshell-and-fork puts the
 	@# helper directly under launchd (PPID=1), bypassing kinclaw's
 	@# orphan-watch (which only fires when PPID changes from a non-1
 	@# starting value). Without this, the helper would exit ~2s after
 	@# `make` returns, when the make shell terminates.
-	@# Pass dev-repo skills/ to the helpers via env var. kinclaw and
-	@# kincode at boot read $KINCLAW_SKILL_DIRS / $KINCODE_SKILL_DIRS
-	@# (colon-separated) and scan each for SKILL.md files in addition
+	@# Pass dev-repo skills/ to the kernel via env var. kinclaw at
+	@# boot reads $KINCLAW_SKILL_DIRS
+	@# (colon-separated) and scans each for SKILL.md files in addition
 	@# to ~/.localkin/skills/. So a fresh `git clone kinclaw-mac` →
 	@# `make run` gives the user every dev-repo skill (location,
 	@# weather, web, music_*, imsg_send...) without any copy step.
@@ -250,7 +240,6 @@ print(",".join(parts).rstrip(","))' 2>/dev/null); \
 	else \
 	  echo "  → corelocationcli not installed (skip GPS context; \`brew install corelocationcli\` to enable)"; \
 	fi; \
-	KINCODE_DEV_SKILLS="$(KINCODE_REPO)/skills"; \
 	STT_VAL=$$(defaults read dev.localkin.kinclawmac kinclaw.backend.stt 2>/dev/null); \
 	TTS_VAL=$$(defaults read dev.localkin.kinclawmac kinclaw.backend.tts 2>/dev/null); \
 	[[ -n "$$STT_VAL$$TTS_VAL" ]] && echo "  → voice from Settings: STT=$${STT_VAL:-default} TTS=$${TTS_VAL:-default}"; \
@@ -284,47 +273,30 @@ print(",".join(parts).rstrip(","))' 2>/dev/null); \
 	      "$(LOCALKIN_BIN)/kinclaw" serve -port 5001 -no-record \
 	      >$(LOG_DIR)/kinclaw.log 2>&1 & ); \
 	  fi; \
-	fi; \
-	if pgrep -x kincode >/dev/null 2>&1; then \
-	  echo "  → kincode already running on :5002 (skipping)"; \
-	else \
-	  echo "  → starting kincode on :5002 (log: $(LOG_DIR)/kincode.log)"; \
-	  if [[ -f "$(CODER_SOUL)" ]]; then \
-	    ( KINCODE_SKILL_DIRS="$$KINCODE_DEV_SKILLS" \
-	      SEARXNG_ENDPOINT="$$SEARXNG_VAL" \
-	      "$(LOCALKIN_BIN)/kincode" -serve -port 5002 \
-	      -soul "$(CODER_SOUL)" >$(LOG_DIR)/kincode.log 2>&1 & ); \
-	  else \
-	    ( KINCODE_SKILL_DIRS="$$KINCODE_DEV_SKILLS" \
-	      SEARXNG_ENDPOINT="$$SEARXNG_VAL" \
-	      "$(LOCALKIN_BIN)/kincode" -serve -port 5002 \
-	      >$(LOG_DIR)/kincode.log 2>&1 & ); \
-	  fi; \
 	fi
-	@# Wait for both ports to bind before returning. Without this,
+	@# Wait for the port to bind before returning. Without this,
 	@# the immediately-following `open KinClawMac.app` could race
-	@# the helpers' bind() and the supervisors fail their initial
-	@# ping → spawn duplicate helpers → port-in-use cascade.
-	@printf "  → waiting for :5001 + :5002 to bind"
+	@# the kernel's bind() and the supervisor fail its initial
+	@# ping → spawn a duplicate kernel → port-in-use cascade.
+	@printf "  → waiting for :5001 to bind"
 	@deadline=$$(($$(date +%s) + 15)); \
 	while [[ $$(date +%s) -lt $$deadline ]]; do \
 	  k=$$(lsof -ti :5001 -sTCP:LISTEN 2>/dev/null | head -1); \
-	  c=$$(lsof -ti :5002 -sTCP:LISTEN 2>/dev/null | head -1); \
-	  if [[ -n "$$k" && -n "$$c" ]]; then \
-	    printf " ✓ (kinclaw=%s kincode=%s)\n" "$$k" "$$c"; \
+	  if [[ -n "$$k" ]]; then \
+	    printf " ✓ (kinclaw=%s)\n" "$$k"; \
 	    exit 0; \
 	  fi; \
 	  printf "."; \
 	  sleep 0.5; \
 	done; \
-	printf "\n  ⚠ helpers didn't bind within 15s — check $(LOG_DIR)/kinclaw.log + $(LOG_DIR)/kincode.log\n"
+	printf "\n  ⚠ the kernel didn't bind within 15s — check $(LOG_DIR)/kinclaw.log\n"
 
 .PHONY: run
-run: sign start-helpers ## kill + sign + start helpers detached + launch app
-	@# Helper-first ordering: by the time KinClawMac launches, kinclaw
-	@# and kincode are already serving. Each supervisor's adoption
-	@# path picks them up immediately (state = .adoptedExternal). No
-	@# spawn race, no orphan-watch confusion.
+run: sign start-helpers ## kill + sign + start the kernel detached + launch app
+	@# Kernel-first ordering: by the time KinClawMac launches, kinclaw
+	@# is already serving. The supervisor's adoption path picks it up
+	@# immediately (state = .adoptedExternal). No spawn race, no
+	@# orphan-watch confusion.
 	@APP="$$(cat .last-app-path 2>/dev/null)"; \
 	echo "==> Launching $$APP"; \
 	open "$$APP"
@@ -332,7 +304,7 @@ run: sign start-helpers ## kill + sign + start helpers detached + launch app
 	@$(MAKE) -s doctor
 
 .PHONY: kill
-kill: ## Stop KinClawMac + all helper subprocesses (kinclaw + kincode)
+kill: ## Stop KinClawMac + the kernel (kinclaw)
 	@# pgrep -x matches the executable's basename exactly — avoids the
 	@# self-match foot-gun where `pgrep -f kinclaw` also matches this
 	@# shell's command line which contains the word "kinclaw".
@@ -364,16 +336,21 @@ doctor: ## Show signing state + running processes (diagnostic)
 	  printf "  %-15s %s\n" "  → at" "$$APP"; \
 	else \
 	  printf "  %-15s not built yet\n" "KinClawMac.app"; \
+	fi; \
+	if [[ -x "$$APP/Contents/Helpers/kinclaw" ]]; then \
+	  printf "  %-15s " "kinclaw (app)"; \
+	  codesign -dv "$$APP/Contents/Helpers/kinclaw" 2>&1 | awk -F= '/^Identifier=/{printf "id=%s ", $$2} /^Signature/{printf "sig=%s ", $$2}'; \
+	  printf "%s\n" "$$(cat "$$APP/Contents/Resources/kinclaw/VERSION" 2>/dev/null)"; \
+	else \
+	  printf "  %-15s not bundled (make bundle-kernel)\n" "kinclaw (app)"; \
 	fi
-	@for bin in kinclaw kincode; do \
-	  path="$(LOCALKIN_BIN)/$$bin"; \
-	  if [[ -x "$$path" ]]; then \
-	    printf "  %-15s " "$$bin"; \
-	    codesign -dv "$$path" 2>&1 | awk -F= '/^Identifier=/{printf "id=%s ", $$2} /^Signature/{printf "sig=%s\n", $$2}'; \
-	  else \
-	    printf "  %-15s not installed\n" "$$bin"; \
-	  fi; \
-	done
+	@path="$(LOCALKIN_BIN)/kinclaw"; \
+	if [[ -x "$$path" ]]; then \
+	  printf "  %-15s " "kinclaw (dev)"; \
+	  codesign -dv "$$path" 2>&1 | awk -F= '/^Identifier=/{printf "id=%s ", $$2} /^Signature/{printf "sig=%s\n", $$2}'; \
+	else \
+	  printf "  %-15s not installed\n" "kinclaw (dev)"; \
+	fi
 	@printf "\n\033[1m─── Running processes ───\033[0m\n"
 	@found=0; \
 	for p in $(PROC_PATTERNS); do \
@@ -429,21 +406,18 @@ doctor: ## Show signing state + running processes (diagnostic)
 	@printf "  \033[2m(every \`make sign\` changes this; ad-hoc TCC may re-prompt for Screen Recording in particular)\033[0m\n"
 
 .PHONY: tcc-reset
-tcc-reset: ## Wipe TCC entries for kinclaw + kincode + KinClawMac (forces clean re-grant)
+tcc-reset: ## Wipe TCC entries for kinclaw + KinClawMac (forces clean re-grant)
 	@# When ad-hoc TCC entries get stale (multiple cdhashes accumulated,
 	@# user denied once and macOS suppresses re-prompts), tccutil reset
 	@# clears the slate. Next launch fires fresh dialogs.
 	@echo "==> Resetting Accessibility for the LocalKin family..."
 	@tccutil reset Accessibility dev.localkin.kinclaw 2>&1 | sed 's/^/  /' || true
-	@tccutil reset Accessibility dev.localkin.kincode 2>&1 | sed 's/^/  /' || true
 	@tccutil reset Accessibility dev.localkin.kinclawmac 2>&1 | sed 's/^/  /' || true
 	@echo "==> Resetting Screen Recording for the LocalKin family..."
 	@tccutil reset ScreenCapture dev.localkin.kinclaw 2>&1 | sed 's/^/  /' || true
-	@tccutil reset ScreenCapture dev.localkin.kincode 2>&1 | sed 's/^/  /' || true
 	@tccutil reset ScreenCapture dev.localkin.kinclawmac 2>&1 | sed 's/^/  /' || true
 	@echo "==> Resetting Apple Events for the LocalKin family..."
 	@tccutil reset AppleEvents dev.localkin.kinclaw 2>&1 | sed 's/^/  /' || true
-	@tccutil reset AppleEvents dev.localkin.kincode 2>&1 | sed 's/^/  /' || true
 	@tccutil reset AppleEvents dev.localkin.kinclawmac 2>&1 | sed 's/^/  /' || true
 	@printf "\n✓ TCC reset. Next \033[33mmake run\033[0m will re-prompt fresh.\n"
 

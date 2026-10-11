@@ -14,8 +14,8 @@ import Foundation
 ///                            at `souls/private/` (file-system scanned
 ///                            via PrivateSoulLoader, never network-
 ///                            registered, never uploaded)
-///   .code   → repo picker + file tree + diff viewer + chat,
-///             driven by kincode kernel running on :5002
+///   .code   → retired with kincode (2026-10-10); kept so a saved
+///             "code" still decodes, and it lands on .term
 ///   .term   → a third-party agent (Claude Code today) in a real
 ///             terminal, pointed at the Ollama and the model the model
 ///             menu is already using — or your own shell in the same
@@ -41,7 +41,7 @@ import Foundation
 ///             person's own click
 ///
 /// This mirrors Claude Code Desktop's three-mode top bar, but plugged
-/// into the LocalKin kernel family (kinclaw + kincode) instead of
+/// into the LocalKin kernel (kinclaw) instead of
 /// Anthropic-only. Mode persists across launches so the user doesn't
 /// have to re-pick on every summon.
 enum ChatMode: String, CaseIterable, Identifiable {
@@ -106,7 +106,7 @@ enum ChatMode: String, CaseIterable, Identifiable {
         case .cowork:
             return "Cowork — agent watches your screen (KinClaw souls, public + private)"
         case .code:
-            return "Code — repo-aware coding agent (kincode on :5002)"
+            return "Code — Claude Code 和 Codex（旧的 kincode 已经拆掉）"
         case .term:
             return "Code — Claude Code 和 Codex：通用的 agent，默认用这台 Mac 的 Claude 订阅；左边是你所有的会话，点一个接着聊，或者开新的"
         case .web:

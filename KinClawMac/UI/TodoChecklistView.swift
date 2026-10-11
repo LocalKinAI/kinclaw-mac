@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// One row from the agent's `todo_write` tool. JSON shape matches
-/// kincode's `TodoItem` struct in pkg/tools/todo_write.go — same
+/// kinclaw's `todo_write` (pkg/skill/todo.go) — same
 /// field names, same enum values for status.
 ///
 /// `activeForm` is decoded as Optional because the kernel's
@@ -32,8 +32,8 @@ struct TodoItem: Codable, Hashable {
     }
 }
 
-/// Renders a kincode `todo_write` tool call as a checklist UI inline
-/// in the Code mode message stream — replaces the generic blue
+/// Renders a `todo_write` tool call as a checklist UI inline
+/// in the message stream — replaces the generic blue
 /// tool-call pill so the user can see the agent's plan + progress
 /// at a glance.
 ///
