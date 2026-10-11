@@ -8,6 +8,31 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Added — 画 · 改 · 拍 · 声音 on the box or in the cloud, on the user's own key
+
+「把画、改、拍、声音这些能力，每一项都做成可以挂在三种地方……而我目前是第二个」 — for anybody without a box.
+The box stays the default and its path is untouched; each capability can instead be placed on a cloud API
+the user pays for with their own key, relayed without a markup (Settings → Backend → 「画 · 改 · 拍 · 声音 在哪」).
+This Mac as its own box is designed (docs/three-places-plan.md) and not built: there is no machine to test it
+on, and nothing more goes on the box.
+
+- **画 and 改**: OpenAI GPT Image 2.5 (flare draws, sunburst edits; up to 16 references), Google Nano Banana
+  2.1 (Gemini API, up to 14), xAI Grok Imagine 2.0 (up to 5), fal.ai — one key for Qwen-Image, GPT Image 2.5,
+  Grok Imagine 2.0 or Nano Banana 2.1 — and Alibaba Bailian (qwen-image-3.0, up to 3). 「Shouldn't drawing be
+  gpt image 2.5, grok imagine 2.0, gemini nano banana 2.1?」 — it is now, and the names were checked against
+  each provider's docs (GPT Image 2.5 is two models; Nano Banana 2.1 went GA on 2026-10-06). A picture comes
+  back the size asked (cut and scaled from the provider's shape); an edit comes back the size of image 1.
+- **拍**: fal.ai's Wan 2.7 image-to-video, 720p, 2–15 s; without a picture the first frame is drawn first,
+  wherever 画 is placed. A pose to follow, speech for the mouth and the q8 finish stay on the box.
+- **声音** (speaking and listening for a local soul): Bailian's qwen3-tts-flash and qwen3-asr-flash — the
+  family of the box's own voice, the best Chinese and the cheapest — or OpenAI's audio API. Cloning and
+  designed voices stay on the box. A failure falls back to the system voice and Apple's recognizer.
+- Keys go to the Keychain (JevKey's way: looking never raises a dialog, and nothing unattended does) or come
+  from OPENAI_API_KEY / GEMINI_API_KEY / XAI_API_KEY / FAL_KEY / DASHSCOPE_API_KEY. 「试一下」 checks a key
+  without spending anything: a model list, or an empty request that only shows whether the key is known.
+- Every provider tested against a mock server that checks the auth headers and request fields (24 checks,
+  wrong keys included); live calls wait for keys the user enters.
+
 ### Changed — one download: the kernel inside the app, and kincode gone
 
 「我的意思用户只要下载kinclaw-mac就可以不知道kinclaw也可以用啊」 — so the app carries its kernel; and

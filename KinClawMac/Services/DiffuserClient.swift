@@ -167,6 +167,10 @@ final class DiffuserClient: ObservableObject {
         }
         let cleaned = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { throw Failure.message("要改成什么样？指令是空的") }
+        let place = MediaPlacement.place(.edit)
+        if place.isCloud {
+            return try await editInCloud(cleaned, from: source, also: references, into: folder, seed: seed, on: place)
+        }
         await takeTurn()
         defer { endTurn() }
         _ = await BoxServices.shared.ensure(.edit)
@@ -221,6 +225,65 @@ final class DiffuserClient: ObservableObject {
         if let sent { Self.stretch(file, to: sent.size) }
         try? cleaned.write(to: file.appendingPathExtension("txt"),
                            atomically: true, encoding: .utf8)
+        lastImage = file
+        return file
+    }
+
+    // MARK: - In the cloud
+
+    /// 画 placed on a cloud API (MediaPlaces). The provider draws at a size of
+    /// its own choosing near the one asked; the picture is cut to the asked
+    /// shape and scaled to it, the way a film reshapes its stills, so a caller
+    /// gets the size it asked for wherever it was drawn.
+    private func drawInCloud(_ prompt: String, into folder: URL, width: Int, height: Int,
+                             seed: Int?, on place: MediaPlace) async throws -> URL {
+        if let trouble = CompanionArt.unreachableVolume(folder) {
+            throw Failure.message("画不了，存不下：" + trouble)
+        }
+        busy = true
+        defer { busy = false }
+        let data = try await MediaCloud.draw(prompt: prompt, width: width, height: height, seed: seed, on: place)
+        let file = try keep(data, prompt: prompt, in: folder)
+        FilmReference.reshape(file, to: CGSize(width: width, height: height))
+        return file
+    }
+
+    /// 改 placed on a cloud API: image 1 and the references go up, the answer
+    /// comes back the shape and size of image 1, as the box's editor's does.
+    private func editInCloud(_ prompt: String, from source: URL, also references: [URL], into folder: URL,
+                             seed: Int?, on place: MediaPlace) async throws -> URL {
+        guard FileManager.default.fileExists(atPath: source.path) else {
+            throw Failure.message("找不到要改的那张图：\(source.path)")
+        }
+        if let trouble = CompanionArt.unreachableVolume(folder) {
+            throw Failure.message("改不了，存不下：" + trouble)
+        }
+        busy = true
+        defer { busy = false }
+        let extras = references.filter { FileManager.default.fileExists(atPath: $0.path) }
+        let data = try await MediaCloud.edit(prompt: prompt, images: [source] + extras, seed: seed, on: place)
+        let file = try keep(data, prompt: prompt, in: folder)
+        if let size = CIImage(contentsOf: source)?.extent.size, size.width > 0, size.height > 0 {
+            FilmReference.reshape(file, to: size)
+        }
+        return file
+    }
+
+    /// A picture from anywhere, written the way the box's are: named after
+    /// its prompt, the prompt beside it (the art matcher reads these).
+    private func keep(_ data: Data, prompt: String, in folder: URL) throws -> URL {
+        guard data.count > 1_000, NSImage(data: data) != nil else {
+            throw Failure.message("云端返回的不是一张图（\(data.count) 字节）")
+        }
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let file = folder.appendingPathComponent(Self.fileName(for: prompt))
+        // Whatever the provider encoded it as, the file is a PNG, as its name says.
+        if let png = NSBitmapImageRep(data: data)?.representation(using: .png, properties: [:]) {
+            try png.write(to: file)
+        } else {
+            try data.write(to: file)
+        }
+        try? prompt.write(to: file.appendingPathExtension("txt"), atomically: true, encoding: .utf8)
         lastImage = file
         return file
     }
@@ -313,6 +376,10 @@ final class DiffuserClient: ObservableObject {
         }
         let cleaned = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { throw Failure.message("要画什么？提示词是空的") }
+        let place = MediaPlacement.place(.draw)
+        if place.isCloud {
+            return try await drawInCloud(cleaned, into: folder, width: width, height: height, seed: seed, on: place)
+        }
         await takeTurn()
         defer { endTurn() }
         _ = await BoxServices.shared.ensure(.draw)
@@ -415,6 +482,30 @@ final class DiffuserClient: ObservableObject {
         }
         let cleaned = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { throw Failure.message("要拍什么？提示词是空的") }
+        let place = MediaPlacement.place(.film)
+        if place.isCloud {
+            // A cloud clip is a picture (or words) set moving. A pose to
+            // follow, speech for the mouth, the q8 finish and an exact frame
+            // count are the box's LTX servers' own.
+            if control != nil || speech != nil || hq || frames != nil {
+                throw Failure.message("动作参考、说话视频、精修和指定帧数只能在盒子上拍：设置 → 画·改·拍·声音 里把「拍」放回盒子")
+            }
+            if let image, !FileManager.default.fileExists(atPath: image.path) {
+                throw Failure.message("找不到要动起来的那张图：\(image.path)")
+            }
+            // A cloud clip starts from a picture. Without one, the first frame
+            // is drawn first — wherever 画 is placed — and set moving.
+            var still = image
+            if still == nil {
+                still = try await generate(prompt: cleaned, into: file.deletingLastPathComponent(),
+                                           width: width, height: height, seed: seed)
+            }
+            let clip = try await MediaCloud.film(prompt: cleaned, image: still, seconds: seconds,
+                                                 width: width, height: height, on: place)
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try clip.write(to: file)
+            return file
+        }
         _ = await BoxServices.shared.ensure(service)
 
         // No `busy` here: a clip runs for minutes, and the jobs list is

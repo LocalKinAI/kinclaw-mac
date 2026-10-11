@@ -310,6 +310,15 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         isLocal: Bool,
         hostname: String
     ) async -> Data? {
+        // 声音 placed on a cloud API (Settings → 画·改·拍·声音): a local
+        // soul's words go there, in the voice chosen for that provider — the
+        // box's speaker names mean nothing to it. A failure falls back like
+        // any other.
+        let voicePlace = MediaPlacement.place(.voice)
+        if isLocal, voicePlace.isCloud {
+            guard let data = try? await MediaCloud.speak(segment.text, on: voicePlace) else { return nil }
+            return WAVTrim.trim(data)
+        }
         do {
             // Route to Kokoro directly when the agent is a local
             // soul (hostname marker is "localhost-kinclaw" — see

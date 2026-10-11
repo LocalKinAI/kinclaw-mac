@@ -109,13 +109,15 @@ enum PanelTools {
         [
             "name": "image_generate",
             "description": """
-                Draw a picture from a description, on the user's own diffusion \
-                server (Qwen-Image-2.1-Turbo on the box), and save it where the \
-                KinClaw companion keeps her art. Use it when they ask for an \
-                image — a scene, a portrait, a background, a poster — rather \
-                than describing one in words. Takes about 25 seconds at 768², \
-                40 at 1024² (8 s more right after an edit: the two servers take \
-                turns). The answer is where the file landed.
+                Draw a picture from a description and save it where the \
+                KinClaw companion keeps her art — on the user's box \
+                (Qwen-Image-2.1-Turbo: about 25 seconds at 768², 40 at 1024², 8 s \
+                more right after an edit) or on the cloud model chosen in \
+                Settings → 画·改·拍·声音 (GPT Image 2.5, Nano Banana 2.1, Grok \
+                Imagine 2.0, Qwen-Image on fal.ai or Bailian), paid with the \
+                user's own key. Use it when they ask for an image — a scene, a \
+                portrait, a background, a poster — rather than describing one in \
+                words. The answer is where the file landed.
                 """,
             "inputSchema": [
                 "type": "object",

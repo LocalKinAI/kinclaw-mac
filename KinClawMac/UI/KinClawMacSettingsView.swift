@@ -420,6 +420,7 @@ private struct BackendSettingsTab: View {
                 SettingsCaption("⇧⌘M turns the panel into a picture and a voice. Art comes from this folder: files at the top level rotate; subfolders named idle / listening / thinking / speaking, or 开心 / 温柔 / 好奇 / 困 / 担心, are used when the companion is in that state or mood (every reply carries one). Short mp4 / mov loops work anywhere a picture does. \"Go get a few\" inside companion mode searches Wikimedia Commons, which needs no account; a free key from pexels.com/api swaps in a better-looking source.")
             }
 
+            MediaPlacesCard()
             BoxServicesCard()
             LayaCard()
             JevJudgeCard()
@@ -1787,6 +1788,131 @@ private struct LayaCard: View {
                 answers = await FilmStudio.layaAnswers()
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
             }
+        }
+    }
+}
+
+/// Where 画 · 改 · 拍 · 声音 run: the box, or a cloud API on the user's own
+/// key — one row per capability, then the keys, which go to the Keychain.
+private struct MediaPlacesCard: View {
+    @State private var places: [MediaCapability: MediaPlace] = [:]
+    @State private var hasKey: [MediaPlace: Bool] = [:]
+    @State private var typed: [MediaPlace: String] = [:]
+    @State private var checking: MediaPlace?
+    @State private var checked: [MediaPlace: String] = [:]
+    @AppStorage(BailianClient.regionKey) private var bailianRegion = BailianClient.defaultRegion
+    @AppStorage(BailianClient.hostKey) private var bailianHost = ""
+    @AppStorage(BailianClient.voiceKey) private var bailianVoice = ""
+    @AppStorage(OpenAIVoice.baseKey) private var openaiBase = ""
+    @AppStorage(OpenAIVoice.voiceKey) private var openaiVoice = ""
+
+    @AppStorage(FalClient.familyKey) private var falFamily = FalClient.Family.qwen.rawValue
+    @AppStorage(OpenAIImages.qualityKey) private var gptQuality = OpenAIImages.defaultQuality
+
+    private let providers: [MediaPlace] = [.openai, .google, .xai, .fal, .bailian]
+
+    var body: some View {
+        SettingsCard("画 · 改 · 拍 · 声音 在哪") {
+            ForEach(MediaCapability.allCases) { capability in
+                SettingsRow(label: capability.title) {
+                    Picker("", selection: Binding(
+                        get: { places[capability] ?? MediaPlacement.place(capability) },
+                        set: { MediaPlacement.set($0, for: capability); places[capability] = $0 })) {
+                        ForEach(capability.places) { place in Text(place.title).tag(place) }
+                    }
+                    .labelsHidden().pickerStyle(.segmented).fixedSize()
+                    Text(capability.detail).font(.system(size: 10)).foregroundColor(.secondary).lineLimit(1)
+                }
+            }
+            Divider()
+            ForEach(providers) { place in
+                SettingsRow(label: "\(place.title) key") {
+                    HStack(spacing: 6) {
+                        Circle().fill(hasKey[place] == true ? Theme.good : Color.secondary.opacity(0.35)).frame(width: 8, height: 8)
+                        SecureField(hasKey[place] == true ? "在钥匙串里（填新的会替换）" : "粘贴 key", text: Binding(
+                            get: { typed[place] ?? "" }, set: { typed[place] = $0 }))
+                            .textFieldStyle(.roundedBorder).frame(maxWidth: 220)
+                            .onSubmit { save(place) }
+                        Button("存") { save(place) }.controlSize(.small)
+                            .disabled((typed[place] ?? "").trimmingCharacters(in: .whitespaces).isEmpty)
+                        if hasKey[place] == true {
+                            Button("试一下") { check(place) }.controlSize(.small).disabled(checking != nil)
+                            Button("删") { CloudKey.write("", for: place); refresh() }.controlSize(.small)
+                        }
+                    }
+                }
+                if checking == place {
+                    SettingsCaption("在试 \(place.title)…")
+                } else if let note = checked[place] {
+                    SettingsCaption(note)
+                }
+            }
+            SettingsRow(label: "fal 画图模型") {
+                Picker("", selection: $falFamily) {
+                    ForEach(FalClient.Family.allCases) { family in Text(family.title).tag(family.rawValue) }
+                }
+                .labelsHidden().pickerStyle(.segmented).fixedSize()
+            }
+            SettingsRow(label: "GPT Image 质量") {
+                Picker("", selection: $gptQuality) {
+                    Text("低").tag("low")
+                    Text("中").tag("medium")
+                    Text("高").tag("high")
+                }
+                .labelsHidden().pickerStyle(.segmented).fixedSize()
+                Text("直连 OpenAI 和经 fal 都按这个").font(.system(size: 10)).foregroundColor(.secondary)
+            }
+            SettingsRow(label: "阿里百炼地区") {
+                Picker("", selection: $bailianRegion) {
+                    Text("国内").tag("cn")
+                    Text("国际（新加坡）").tag("intl")
+                }
+                .labelsHidden().pickerStyle(.segmented).fixedSize()
+            }
+            SettingsRow(label: "OpenAI 地址") {
+                TextField(OpenAIVoice.defaultBase, text: $openaiBase)
+                    .textFieldStyle(.roundedBorder).frame(maxWidth: 260)
+                    .font(.system(size: 11, design: .monospaced))
+            }
+            SettingsRow(label: "说话的音色") {
+                HStack(spacing: 6) {
+                    Text("百炼").font(.system(size: 10)).foregroundColor(.secondary)
+                    TextField(BailianClient.defaultVoice, text: $bailianVoice)
+                        .textFieldStyle(.roundedBorder).frame(maxWidth: 100)
+                    Text("OpenAI").font(.system(size: 10)).foregroundColor(.secondary)
+                    TextField(OpenAIVoice.defaultVoice, text: $openaiVoice)
+                        .textFieldStyle(.roundedBorder).frame(maxWidth: 100)
+                }
+            }
+            SettingsRow(label: "百炼工作空间地址") {
+                TextField("可不填：https://<工作空间>.cn-beijing.maas.aliyuncs.com", text: $bailianHost)
+                    .textFieldStyle(.roundedBorder).frame(maxWidth: 320)
+                    .font(.system(size: 11, design: .monospaced))
+            }
+            SettingsCaption("选了云，画、改、拍、说话和听写就由那一家做，用你自己的 key、记在你自己的账上，这个 App 只转一手、不加价；提示词、参考图和录音会发到那一家。盒子照旧是默认。克隆声音、按描述造声音、动作参考和说话视频、Studio 的重活（H3、Motion、ComfyUI、Montage）仍然只在盒子上。\n画和改：OpenAI 是 GPT Image 2.5（画用 flare、改用 sunburst，1024² 中等质量约 $0.013、高 $0.053，最多 16 张参考图；有的账号要先在 OpenAI 做组织验证）；Google 是 Nano Banana 2.1（1K 约 $0.034，最多 14 张）；xAI 是 Grok Imagine 2.0（1K 中等 $0.06，最多 5 张）；fal.ai 一个 key 四个都能选（Qwen-Image 每百万像素 $0.02 最便宜，其余价格和官方差不多），拍是 Wan 2.7 图生视频 720p（每秒 $0.10）；阿里百炼 qwen-image-3.0（每张 $0.03，一次最多 3 张图）。\n声音：阿里百炼 qwen3-tts-flash（约每万字 $0.10）和 qwen3-asr-flash（约每小时 $0.13），和盒子上的声音同一家，中文最好；OpenAI 是 gpt-4o-mini-tts 和 gpt-4o-mini-transcribe。\nkey 存在钥匙串里，也认 OPENAI_API_KEY、GEMINI_API_KEY、XAI_API_KEY、FAL_KEY、DASHSCOPE_API_KEY。百炼的 key 分地区，国内的 key 在国际节点不认；阿里说 2026-09-30 以后新模型只上工作空间地址，老地址还能用。「试一下」不花钱：OpenAI、Google、xAI 读模型列表，fal.ai 和阿里百炼发一个空请求，只看认不认 key。")
+        }
+        .onAppear(perform: refresh)
+    }
+
+    private func refresh() {
+        for capability in MediaCapability.allCases { places[capability] = MediaPlacement.place(capability) }
+        for place in providers { hasKey[place] = CloudKey.present(place) }
+    }
+
+    private func save(_ place: MediaPlace) {
+        let key = (typed[place] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return }
+        checked[place] = CloudKey.write(key, for: place) ? "存进钥匙串了" : "没存进钥匙串"
+        typed[place] = ""
+        refresh()
+    }
+
+    private func check(_ place: MediaPlace) {
+        checking = place
+        Task {
+            do { checked[place] = try await MediaCloud.check(place) }
+            catch { checked[place] = "⚠︎ \(error.localizedDescription)" }
+            checking = nil
         }
     }
 }

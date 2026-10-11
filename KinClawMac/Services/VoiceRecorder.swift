@@ -446,6 +446,14 @@ class VoiceRecorder: NSObject, ObservableObject {
     /// route to the local SenseVoice server (default :8000), not
     /// the cloud gateway.
     private func serverSTT(audioURL: URL, hostname: String) async -> String? {
+        let local = hostname == "localhost-kinclaw" || hostname.hasPrefix("localhost")
+        // 声音 placed on a cloud API: a local soul's listening goes there.
+        // It says no emotion; Apple's recognizer still catches a failure.
+        let voicePlace = MediaPlacement.place(.voice)
+        if local, voicePlace.isCloud {
+            emotion = nil
+            return try? await MediaCloud.transcribe(audioURL, on: voicePlace)
+        }
         do {
             let isLocal = hostname == "localhost-kinclaw"
                 || hostname.hasPrefix("localhost")
