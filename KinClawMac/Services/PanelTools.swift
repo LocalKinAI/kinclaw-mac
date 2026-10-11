@@ -564,6 +564,8 @@ enum PanelTools {
                 "properties": [
                     "id": ["type": "string", "description": "The drawing's id (its folder's name)."],
                     "times": ["type": "array", "items": ["type": "number"], "description": "Seconds to look at."],
+                    "knobs": ["type": "object", "description": "Knobs to set first, by id: {\"weather\": 2}."],
+                    "script": ["type": "string", "description": "JavaScript run in the page before the frames (the film's own API: SS.paint('sea'))."],
                 ],
                 "required": ["id"],
             ],
@@ -2052,7 +2054,11 @@ enum PanelTools {
                 return ("live_check 要 id（这幅画的文件夹名）", true)
             }
             let times = (args["times"] as? [Any])?.compactMap { ($0 as? Double) ?? ($0 as? Int).map(Double.init) }
-            return await LiveDraw.shared.check(id, times: times)
+            var knobs: [String: Double] = [:]
+            for (key, value) in args["knobs"] as? [String: Any] ?? [:] {
+                if let number = (value as? Double) ?? (value as? Int).map(Double.init) { knobs[key] = number }
+            }
+            return await LiveDraw.shared.check(id, times: times, knobs: knobs, script: args["script"] as? String)
         case "talking_video_status":
             return (TalkingVideo.shared.report(args["name"] as? String), false)
         case "talking_video_continue":

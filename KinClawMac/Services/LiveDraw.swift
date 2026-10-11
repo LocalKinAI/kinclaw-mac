@@ -37,6 +37,8 @@ final class LiveDraw: ObservableObject {
         var report: String?
         /// Said out loud as soon as it is drawn (陪伴模式: she explains it while it moves).
         var narrate = false
+        /// What its music is doing ("在作配乐"), nil when there is nothing to wait for.
+        var scoring: String?
 
         enum State { case drawing, ready, failed }
     }
@@ -124,12 +126,38 @@ final class LiveDraw: ObservableObject {
         update(id) {
             $0.state = .ready; $0.title = title; $0.poster = poster; $0.finished = Date(); $0.report = report
         }
-        if jobs[id]?.narrate == true, note == nil {
-            update(id) { $0.state = .drawing; $0.step = "写解说、念出来" }
-            _ = try? await LiveOut.shared.narrate(id)
-            update(id) { $0.state = .ready }
-        }
         if jobs[id]?.message != nil { activate(id) } else { await LiveFilm.shared.show(id) }
+        // Its music, written on the box to its length while it already plays; then, in companion
+        // mode, her voice over it.
+        await score(id, folder: folder, seconds: checker.total)
+        if jobs[id]?.narrate == true, note == nil {
+            update(id) { $0.scoring = "写解说、念出来" }
+            _ = try? await LiveOut.shared.narrate(id)
+            update(id) { $0.scoring = nil }
+        }
+    }
+
+    /// The music Claude asked for (music.txt), as long as the drawing, by ACE-Step on the box; the
+    /// drawing then plays over it wherever it plays.
+    private func score(_ id: String, folder: URL, seconds: Double) async {
+        let brief = ((try? String(contentsOf: folder.appendingPathComponent("music.txt"), encoding: .utf8)) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !brief.isEmpty, var film = LiveFilm.shared.film(named: id), film.id == id else { return }
+        update(id) { $0.scoring = "在盒子上作配乐（约一分钟）" }
+        defer { update(id) { $0.scoring = nil } }
+        guard await FilmStudio.aceOnBox() else { return }
+        let music = LiveFilm.folder.appendingPathComponent(id).appendingPathComponent("music.wav")
+        do {
+            try await FilmStudio.composeACE(brief, seconds: seconds + 0.5, for: "live-\(id)", to: music)
+        } catch {
+            update(id) { $0.error = "配乐没作成：\(error.localizedDescription)" }
+            return
+        }
+        film.music = "music.wav"
+        if film.lines == nil { film.song = "music.wav" }
+        try? LiveFilm.write(film)
+        LiveFilm.shared.reload()
+        LiveOut.shared.reloadPlayers(film)
     }
 
     /// The drawing plays in its card; the one that played before goes back to its still.
@@ -249,7 +277,7 @@ final class LiveDraw: ObservableObject {
         回答（他们刚读到的）：
         \(job.answer.prefix(4000))
 
-        画给他们看：把这个回答里最要紧的那个道理，画成一段会动、能拧旋钮去试的画。
+        画给他们看：把这个回答里最要紧的那个道理，画成一幅会动、能拧旋钮去试的画——是画，不是图表。
         """
     }
 
@@ -287,12 +315,18 @@ final class LiveDraw: ObservableObject {
         that turning it changes the picture at once: the interest rate, the pendulum's length, how many planets. Labels \
         in their language, two to four characters. It is loaded after the scenes.
         - title.txt: one short line naming the drawing, in their language.
+        - music.txt: one line for the music the box writes to its length (ACE-Step): genre, instruments, mood, tempo, \
+        in English, made for the style — "guqin and bamboo flute, slow, misty, 70 bpm, instrumental" for ink; "gentle \
+        piano and strings, warm, 90 bpm, instrumental" for Ghibli.
 
-        How it should look: the grammar's palette, type and motion, as its card says; text in the language they wrote \
-        in, short — a title, labels, one sentence at a time; Chinese in "PingFang SC" (it has every character) or the \
-        engine's NotoSansSC-700 / LXGWWenKai-500. Every movement has a purpose: a line drawn on, a shape turning into \
-        the next, a number counting up, the camera easing in. One idea a shot; nothing cut off by the frame or hidden \
-        under something else; the last shot holds the answer on screen.
+        How it should look: a painting, not a chart. Pick one of huashu's painting styles for it — references/风格配方/ \
+        INDEX.md: ink 水墨, Ghibli, Monet, Van Gogh, ukiyo-e, Dunhuang, shadow puppets, Bauhaus, Kurzgesagt's flat \
+        colour… — the one the subject asks for, and paint it as its card says (its scene in scripts/engine/scenes/ is a \
+        worked example). Make the idea something seen: compound interest as a snowball gathering snow down an ink \
+        mountain, not a line going up; a chart only when they asked for data. The grammar card still says how things \
+        move and are shown. Words on screen in the language they wrote in, few and short; Chinese in "PingFang SC" (it \
+        has every character) or the engine's NotoSansSC-700 / LXGWWenKai-500. Every movement has a purpose; one idea a \
+        shot; nothing cut off by the frame or hidden under something else; the last shot holds the answer on screen.
 
         Check, then fix: after writing, call live_check with id "\(id)". It loads your drawing in the same WebKit they \
         will watch it in and answers with its errors, its speed and the frames at the times you give (default: four \
@@ -305,7 +339,7 @@ final class LiveDraw: ObservableObject {
 
     /// The drawing loaded off screen in the WebKit the person watches it in: what went wrong, how fast it
     /// draws, whether its knobs work, and the frames at `times` (default: four across it) as image:// lines.
-    func check(_ id: String, times: [Double]?) async -> (String, Bool) {
+    func check(_ id: String, times: [Double]?, knobs: [String: Double] = [:], script: String? = nil) async -> (String, Bool) {
         let folder = LiveFilm.folder.appendingPathComponent(id).appendingPathComponent("engine")
         guard id.range(of: #"^[a-z0-9_]+$"#, options: .regularExpression) != nil,
               FileManager.default.fileExists(atPath: folder.appendingPathComponent("eras_\(id).js").path) else {
@@ -335,6 +369,14 @@ final class LiveDraw: ObservableObject {
                 checker.setKnob(knob.id, knob.value)
             }
             if checker.errors.count > before { lines.append("拧到两头时出错了（见下面的错误）") }
+        }
+        // As asked: knobs set, then the film's own code called, before the frames are taken.
+        for (knob, value) in knobs { checker.setKnob(knob, value) }
+        if let script, !script.isEmpty {
+            _ = try? await checker.view.callAsyncJavaScript(script, arguments: [:], in: nil, contentWorld: .page)
+        }
+        if !knobs.isEmpty || script?.isEmpty == false {
+            lines.append("先设了：\(knobs.map { "\($0.key)=\($0.value)" }.joined(separator: " ")) \(script?.prefix(120) ?? "")")
         }
         let shots = LiveFilm.folder.appendingPathComponent(id).appendingPathComponent("check")
         try? FileManager.default.createDirectory(at: shots, withIntermediateDirectories: true)

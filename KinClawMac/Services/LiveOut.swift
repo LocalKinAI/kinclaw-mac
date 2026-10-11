@@ -68,6 +68,13 @@ final class LiveOut: ObservableObject {
             let folder = LiveFilm.folder.appendingPathComponent(id)
             try track.write(to: folder.appendingPathComponent("voice.wav"), options: .atomic)
             film.song = "voice.wav"
+            // With music: the voice over it, the music lower.
+            if let music = film.music, FileManager.default.fileExists(atPath: folder.appendingPathComponent(music).path) {
+                narrating[id] = "和配乐混在一起"
+                try await Self.mix(voice: folder.appendingPathComponent("voice.wav"), music: folder.appendingPathComponent(music),
+                                   into: folder.appendingPathComponent("mix.m4a"))
+                film.song = "mix.m4a"
+            }
             film.lines = zip(lines, placed).map { LiveFilm.Line(t: ($1 * 100).rounded() / 100, text: $0.text) }
             film.length = end + 0.6 > total ? ((end + 0.6) * 100).rounded() / 100 : nil
             try LiveFilm.write(film)
@@ -81,7 +88,7 @@ final class LiveOut: ObservableObject {
     }
 
     /// Wherever it plays — 活画's window, its card in a conversation — it plays again with its voice.
-    private func reloadPlayers(_ film: LiveFilm.Film) {
+    func reloadPlayers(_ film: LiveFilm.Film) {
         if LiveFilm.shared.current?.id == film.id { LiveFilm.load(film, into: LiveFilm.shared.player) }
         if LiveDraw.shared.playing == film.id { LiveDraw.shared.activate(film.id) }
     }
@@ -142,6 +149,31 @@ final class LiveOut: ObservableObject {
             return LiveFilm.Line(t: max(0, min(t, total)), text: text)
         }
         .sorted { $0.t < $1.t }
+    }
+
+    /// The voice at full level over the music at a third, as long as the longer of the two.
+    nonisolated private static func mix(voice: URL, music: URL, into out: URL) async throws {
+        let mixture = AVMutableComposition(), mixing = AVMutableAudioMix()
+        var parameters: [AVMutableAudioMixInputParameters] = []
+        for (file, level) in [(music, Float(0.32)), (voice, Float(1.0))] {
+            let asset = AVURLAsset(url: file)
+            guard let source = try await asset.loadTracks(withMediaType: .audio).first,
+                  let track = mixture.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) else {
+                throw Failure.message("声音读不出来：\(file.lastPathComponent)")
+            }
+            try track.insertTimeRange(CMTimeRange(start: .zero, duration: try await asset.load(.duration)), of: source, at: .zero)
+            let volume = AVMutableAudioMixInputParameters(track: track)
+            volume.setVolume(level, at: .zero)
+            parameters.append(volume)
+        }
+        mixing.inputParameters = parameters
+        try? FileManager.default.removeItem(at: out)
+        guard let export = AVAssetExportSession(asset: mixture, presetName: AVAssetExportPresetAppleM4A) else { throw Failure.message("混不了") }
+        export.outputURL = out
+        export.outputFileType = .m4a
+        export.audioMix = mixing
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in export.exportAsynchronously { done.resume() } }
+        guard export.status == .completed else { throw Failure.message("混音失败：\(export.error?.localizedDescription ?? "")") }
     }
 
     /// A WAV from the voice server, as samples.

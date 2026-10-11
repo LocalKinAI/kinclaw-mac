@@ -161,6 +161,23 @@ struct UICardView: View {
         let value = values[input.name] ?? input.value
         let binding = Binding(get: { value }, set: { changed[input.name] = $0 })
         switch input.kind {
+        case .choice:
+            HStack {
+                Text(input.label).font(.system(size: 13))
+                Spacer(minLength: 12)
+                let picker = Picker("", selection: binding) {
+                    ForEach(Array(input.options.enumerated()), id: \.offset) { _, option in
+                        Text(option.name).tag(option.value)
+                    }
+                }
+                .labelsHidden()
+                .fixedSize()
+                if input.options.count <= 4, input.options.allSatisfy({ $0.name.count <= 6 }) {
+                    picker.pickerStyle(.segmented)
+                } else {
+                    picker.pickerStyle(.menu)
+                }
+            }
         case .toggle:
             Toggle(input.label, isOn: Binding(get: { value != 0 }, set: { changed[input.name] = $0 ? 1 : 0 }))
                 .toggleStyle(.switch).controlSize(.small).font(.system(size: 13))
@@ -222,7 +239,7 @@ struct UICardView: View {
 /// in a row, steps in a list, a table).
 struct UICard {
     struct Input {
-        enum Kind { case number, slider, toggle }
+        enum Kind { case number, slider, toggle, choice }
         let kind: Kind
         let label: String
         let name: String
@@ -231,6 +248,8 @@ struct UICard {
         let max: Double
         let step: Double
         let unit: String
+        /// A choice's options, each a name and the number it stands for.
+        var options: [(name: String, value: Double)] = []
     }
 
     struct Calc {
@@ -312,6 +331,12 @@ struct UICard {
                 if card.title == nil { card.title = rest } else { add(.text("**\(rest)**")) }
             case "text", "note":
                 add(.text(rest))
+            case "choice", "select", "pick":
+                if let input = choice(rest) {
+                    card.inputs.removeAll { $0.name == input.name }
+                    card.inputs.append(input)
+                    add(.inputs([input]))
+                }
             case "input", "number", "slider", "toggle":
                 if let input = input(keyword, rest) {
                     card.inputs.removeAll { $0.name == input.name }
@@ -356,6 +381,8 @@ struct UICard {
             return true
         }
         guard words.count >= 2 else { return nil }
+        // `input 人数 3`: no name of its own — the label is the name (a formula may say 人数).
+        if words.count == 2 { words.insert(words[0], at: 0) }
         let toggle = keyword == "toggle"
         let last = words.last!.lowercased()
         let value: Double
@@ -364,13 +391,31 @@ struct UICard {
             value = number
         }
         let name = words[words.count - 2]
-        guard name.range(of: #"^[A-Za-z_][A-Za-z0-9_]*$"#, options: .regularExpression) != nil else { return nil }
+        guard name.range(of: #"^[\p{L}_][\p{L}\p{N}_]*$"#, options: .regularExpression) != nil else { return nil }
         let label = words.dropLast(2).joined(separator: " ")
         let low = options["min"].flatMap(Double.init) ?? (toggle ? 0 : min(0, value))
         let high = options["max"].flatMap(Double.init) ?? (toggle ? 1 : max(value * 2, value + 10))
         let step = options["step"].flatMap(Double.init) ?? (toggle ? 1 : (value == value.rounded() && high - low >= 10 ? 1 : (high - low) / 100))
         return Input(kind: toggle ? .toggle : keyword == "slider" ? .slider : .number, label: label.isEmpty ? name : label,
                      name: name, value: value, min: low, max: high, step: max(step, 0.000_001), unit: options["unit"] ?? "")
+    }
+
+    /// `label name | 二等座=590 | 一等座=930` — the first option may share the first cell; the first is chosen.
+    private static func choice(_ rest: String) -> Input? {
+        var cells = rest.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        guard !cells.isEmpty else { return nil }
+        var head = cells.removeFirst().split(separator: " ").map(String.init)
+        if let last = head.last, last.contains("="), head.count >= 3 { cells.insert(last, at: 0); head.removeLast() }
+        guard let name = head.last, name.range(of: #"^[\p{L}_][\p{L}\p{N}_]*$"#, options: .regularExpression) != nil else { return nil }
+        let options: [(name: String, value: Double)] = cells.enumerated().compactMap { index, cell in
+            guard let equals = cell.lastIndex(of: "=") else { return (cell, Double(index + 1)) }
+            let value = Double(cell[cell.index(after: equals)...].trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: ""))
+            return (cell[..<equals].trimmingCharacters(in: .whitespaces), value ?? Double(index + 1))
+        }
+        guard let first = options.first else { return nil }
+        let label = head.dropLast().joined(separator: " ")
+        return Input(kind: .choice, label: label.isEmpty ? name : label, name: name, value: first.value,
+                     min: options.map(\.value).min() ?? 0, max: options.map(\.value).max() ?? 1, step: 1, unit: "", options: options)
     }
 
     /// `label = formula key=value…`.
@@ -402,20 +447,22 @@ struct UICard {
     }
 }
 
-/// Arithmetic over named numbers: + - * / ^ %, parentheses, unary minus, and min max round abs sqrt pow
-/// log log10 exp floor ceil. Nothing else is evaluated; anything it does not know is nil.
+/// Arithmetic over named numbers: + - * / ^ %, parentheses, unary minus; comparisons (== != < <= > >=,
+/// 1 or 0), && || and or not, a ? b : c; and min max round abs sqrt pow log log10 exp floor ceil if(c, a, b).
+/// Nothing else is evaluated; anything it does not know is nil.
 enum UIFormula {
     static func evaluate(_ text: String, _ values: [String: Double]) -> Double? {
         var reader = Reader(tokens: tokens(text), values: values)
-        guard let value = reader.sum(), reader.at == reader.tokens.count, value.isFinite else { return nil }
+        guard let value = reader.expression(), reader.at == reader.tokens.count, value.isFinite else { return nil }
         return value
     }
 
-    enum Token: Equatable { case number(Double), name(String), symbol(Character) }
+    enum Token: Equatable { case number(Double), name(String), symbol(String) }
 
     private static func tokens(_ text: String) -> [Token] {
         var out: [Token] = []
-        let chars = Array(text.replacingOccurrences(of: "×", with: "*").replacingOccurrences(of: "÷", with: "/"))
+        let chars = Array(text.replacingOccurrences(of: "×", with: "*").replacingOccurrences(of: "÷", with: "/")
+            .replacingOccurrences(of: "≤", with: "<=").replacingOccurrences(of: "≥", with: ">=").replacingOccurrences(of: "≠", with: "!="))
         var i = 0
         while i < chars.count {
             let c = chars[i]
@@ -430,8 +477,11 @@ enum UIFormula {
                 while j < chars.count, chars[j].isLetter || chars[j].isNumber || chars[j] == "_" { j += 1 }
                 out.append(.name(String(chars[i..<j])))
                 i = j
+            } else if i + 1 < chars.count, ["==", "!=", "<=", ">=", "&&", "||"].contains(String(chars[i...i + 1])) {
+                out.append(.symbol(String(chars[i...i + 1])))
+                i += 2
             } else {
-                out.append(.symbol(c))
+                out.append(.symbol(String(c)))
                 i += 1
             }
         }
@@ -443,10 +493,46 @@ enum UIFormula {
         let values: [String: Double]
         var at = 0
 
-        mutating func take(_ symbol: Character) -> Bool {
-            guard at < tokens.count, tokens[at] == .symbol(symbol) else { return false }
-            at += 1
-            return true
+        mutating func take(_ symbol: String) -> Bool {
+            guard at < tokens.count else { return false }
+            if tokens[at] == .symbol(symbol) || tokens[at] == .name(symbol) { at += 1; return true }
+            return false
+        }
+
+        /// a ? b : c, lowest of all.
+        mutating func expression() -> Double? {
+            guard let condition = either() else { return nil }
+            guard take("?") else { return condition }
+            guard let yes = expression(), take(":"), let no = expression() else { return nil }
+            return condition != 0 ? yes : no
+        }
+
+        mutating func either() -> Double? {
+            guard var value = both() else { return nil }
+            while take("||") || take("or") { guard let next = both() else { return nil }; value = (value != 0 || next != 0) ? 1 : 0 }
+            return value
+        }
+
+        mutating func both() -> Double? {
+            guard var value = comparison() else { return nil }
+            while take("&&") || take("and") { guard let next = comparison() else { return nil }; value = (value != 0 && next != 0) ? 1 : 0 }
+            return value
+        }
+
+        mutating func comparison() -> Double? {
+            guard let left = sum() else { return nil }
+            for op in ["==", "!=", "<=", ">=", "<", ">", "="] where take(op) {
+                guard let right = sum() else { return nil }
+                switch op {
+                case "==", "=": return left == right ? 1 : 0
+                case "!=": return left != right ? 1 : 0
+                case "<=": return left <= right ? 1 : 0
+                case ">=": return left >= right ? 1 : 0
+                case "<": return left < right ? 1 : 0
+                default: return left > right ? 1 : 0
+                }
+            }
+            return left
         }
 
         mutating func sum() -> Double? {
@@ -477,6 +563,7 @@ enum UIFormula {
         mutating func unary() -> Double? {
             if take("-") { return unary().map { -$0 } }
             if take("+") { return unary() }
+            if take("!") || take("not") { return unary().map { $0 == 0 ? 1 : 0 } }
             return atom()
         }
 
@@ -488,7 +575,7 @@ enum UIFormula {
                 return n
             case .symbol("("):
                 at += 1
-                guard let value = sum(), take(")") else { return nil }
+                guard let value = expression(), take(")") else { return nil }
                 return value
             case .name(let name):
                 at += 1
@@ -496,7 +583,7 @@ enum UIFormula {
                     var arguments: [Double] = []
                     if !take(")") {
                         repeat {
-                            guard let value = sum() else { return nil }
+                            guard let value = expression() else { return nil }
                             arguments.append(value)
                         } while take(",")
                         guard take(")") else { return nil }
@@ -506,6 +593,8 @@ enum UIFormula {
                 switch name.lowercased() {
                 case "pi": return Double.pi
                 case "e": return M_E
+                case "true": return 1
+                case "false": return 0
                 default: return values[name]
                 }
             default:
@@ -527,6 +616,7 @@ enum UIFormula {
             case ("ceil", 1): return a[0].rounded(.up)
             case ("round", 1): return a[0].rounded()
             case ("round", 2): let k = pow(10, a[1]); return (a[0] * k).rounded() / k
+            case ("if", 3): return a[0] != 0 ? a[1] : a[2]
             default: return nil
             }
         }

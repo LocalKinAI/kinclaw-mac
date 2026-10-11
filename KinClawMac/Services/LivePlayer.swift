@@ -30,6 +30,8 @@ final class LivePlayer: NSObject, ObservableObject {
         let max: Double
         var value: Double
         let step: Double
+        /// Named choices instead of a range (天气: 晴 雾 雨 雪): the value is the index.
+        var options: [String] = []
     }
 
     @Published private(set) var ready = false
@@ -48,6 +50,9 @@ final class LivePlayer: NSObject, ObservableObject {
     private(set) var errors: [String] = []
     /// The film it has loaded, by its eras name.
     private(set) var film: String?
+    /// This load's tag: a message from the page before — still on its way when the next one is loaded —
+    /// carries the old one and is dropped (a stale "ready" let `live.*` run in a page not yet up).
+    private var generation = ""
 
     let view: WKWebView
     private let files: LiveFiles
@@ -93,7 +98,8 @@ final class LivePlayer: NSObject, ObservableObject {
         errors = []
         if trouble?.hasPrefix("这台 Mac") != true { trouble = nil }
         let longer = length.map { "&total=\(String(format: "%.2f", $0))" } ?? ""
-        view.load(URLRequest(url: URL(string: "\(LiveFiles.scheme)://film/index.html?film=\(film)&render=1\(longer)&v=\(Int(Date().timeIntervalSince1970))")!))
+        generation = String(UUID().uuidString.prefix(8)).lowercased()
+        view.load(URLRequest(url: URL(string: "\(LiveFiles.scheme)://film/index.html?film=\(film)&render=1\(longer)&v=\(generation)")!))
     }
 
     /// Put in a window off screen when nothing shows it, so that it loads and draws.
@@ -168,6 +174,12 @@ final class LivePlayer: NSObject, ObservableObject {
         view.evaluateJavaScript(js) { _, _ in }
     }
 
+    /// Something the film's own code offers, called as it is ("SS.paint('sea')").
+    func call(_ js: String) {
+        guard ready else { return }
+        run(js)
+    }
+
     // MARK: - Looking at it
 
     struct Shot {
@@ -220,6 +232,7 @@ final class LivePlayer: NSObject, ObservableObject {
     // MARK: - The page's messages
 
     fileprivate func receive(_ body: [String: Any]) {
+        guard (body["gen"] as? String) == generation else { return }
         switch body["type"] as? String {
         case "ready":
             total = body["total"] as? Double ?? 0
@@ -230,7 +243,8 @@ final class LivePlayer: NSObject, ObservableObject {
             knobs = (body["knobs"] as? [[String: Any]] ?? []).compactMap {
                 guard let id = $0["id"] as? String, let min = $0["min"] as? Double, let max = $0["max"] as? Double else { return nil }
                 return Knob(id: id, label: $0["label"] as? String ?? id, min: min, max: max,
-                            value: $0["value"] as? Double ?? min, step: $0["step"] as? Double ?? 0)
+                            value: $0["value"] as? Double ?? min, step: $0["step"] as? Double ?? 0,
+                            options: $0["options"] as? [String] ?? [])
             }
             hasSong = body["song"] as? Bool ?? false
             if body["filters"] as? Bool == false { trouble = "WebKit 的画布滤镜没开：雾和光会是硬边的" }
@@ -273,7 +287,8 @@ final class LivePlayer: NSObject, ObservableObject {
 
     private static let errorsScript = """
         (() => {
-          const post = m => window.webkit.messageHandlers.live.postMessage(m);
+          const gen = new URLSearchParams(location.search).get('v') || '';
+          const post = m => window.webkit.messageHandlers.live.postMessage(Object.assign({ gen }, m));
           window.addEventListener('error', e => post({ type: 'error', message: String(e.message || e) + (e.filename ? ' (' + e.filename.split('/').pop() + ':' + e.lineno + ')' : '') }));
           window.addEventListener('unhandledrejection', e => post({ type: 'error', message: String(e.reason) }));
           const said = console.error.bind(console);
@@ -285,7 +300,8 @@ final class LivePlayer: NSObject, ObservableObject {
     /// `live.*` is what the app calls. live_<film>.js, when the film has one, gives the knobs.
     private static let playerScript = #"""
         (() => {
-          const post = m => window.webkit.messageHandlers.live.postMessage(m);
+          const gen = new URLSearchParams(location.search).get('v') || '';
+          const post = m => window.webkit.messageHandlers.live.postMessage(Object.assign({ gen }, m));
           const css = document.createElement('style');
           css.textContent = 'html,body{margin:0;height:100%;background:#000;overflow:hidden} #ui{display:none!important} canvas#c{display:block;width:100vw;height:100vh;max-width:none;object-fit:contain}';
           document.head.appendChild(css);
@@ -314,7 +330,8 @@ final class LivePlayer: NSObject, ObservableObject {
             post({ type: 'ready', total: total(), song: !!audio.src,
                    filters: 'filter' in CanvasRenderingContext2D.prototype,
                    eras: ERAS.map(e => ({ id: e.id, t0: e.t0, t1: Math.min(e.t1, total()) })),
-                   knobs: (window.LIVE_KNOBS || []).map(k => ({ id: k.id, label: k.label || k.id, min: k.min, max: k.max, value: k.value, step: k.step || 0 })) });
+                   knobs: (window.LIVE_KNOBS || []).map(k => ({ id: k.id, label: k.label || k.id, options: (k.options || []).map(String),
+                     min: k.options ? 0 : k.min, max: k.options ? k.options.length - 1 : k.max, value: k.value, step: k.options ? 1 : (k.step || 0) })) });
             fpsWall = performance.now();
             requestAnimationFrame(tick);
           }

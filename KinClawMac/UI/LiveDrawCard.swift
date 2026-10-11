@@ -80,6 +80,12 @@ struct LiveDrawCard: View {
                 LiveControls(player: draw.inline, spaceBar: false)
                 LiveOptions(player: draw.inline, full: false)
             }
+            if let scoring = job.scoring {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.mini)
+                    Text(scoring).font(.kinCaption).foregroundStyle(.secondary)
+                }
+            }
             HStack(spacing: 10) {
                 Text(job.title ?? "").font(.kinCaption.weight(.semibold)).lineLimit(1)
                 Spacer(minLength: 8)

@@ -2512,6 +2512,13 @@ struct SpotlightContentView: View {
                           options: .regularExpression) != nil
     }
 
+    /// 「做成卡片」「把它做成卡片」「给我个卡片」… on its own.
+    static func asksForCard(_ text: String) -> Bool {
+        let said = text.trimmingCharacters(in: CharacterSet(charactersIn: " \n。！!？?，,~～"))
+        return said.range(of: #"^(请|你)?(把(它|这个|这些|上面的?|刚才的?)?)?(做成|弄成|变成|换成|给我)(一张|一个|个|张)?卡片?(吧|呗|看看)?$"#,
+                          options: .regularExpression) != nil
+    }
+
     /// The first ```ui block of a reply, as far as it is written.
     static func firstCard(in text: String) -> String? {
         guard let open = text.range(of: "```ui") else { return nil }
@@ -2522,9 +2529,14 @@ struct SpotlightContentView: View {
 
     /// Beside her in companion mode: her latest reply's card (as it is written), or its drawing.
     private func companionAside() -> AnyView? {
-        guard let reply = messages.last(where: { $0.role == .assistant }), !reply.content.isEmpty else { return nil }
+        guard let reply = messages.last(where: { $0.role == .assistant }), !reply.content.isEmpty else {
+            return ShanShui.shared.available ? AnyView(ShanShuiPanel()) : nil
+        }
         let card = Self.firstCard(in: reply.content)
-        guard card != nil || LiveDraw.shared.byMessage[reply.id] != nil else { return nil }
+        // Nothing of its own to show: 活山水, the painting that follows what you talk about.
+        guard card != nil || LiveDraw.shared.byMessage[reply.id] != nil else {
+            return ShanShui.shared.available ? AnyView(ShanShuiPanel()) : nil
+        }
         let streaming = isStreaming && reply.id == messages.last?.id
         let draw = streaming ? nil : AnyView(LiveDrawCard(message: reply, question: question(answering: reply), newest: true))
         let ask: (String) -> Void = { words in
@@ -3751,6 +3763,11 @@ struct SpotlightContentView: View {
         // user said, so it has no place in their bubble or the saved
         // session — but the model should know the sentence came in flat.
         var forKernel = text
+        // 「做成卡片」: their bubble says what they said; the model is told what it means.
+        if Self.asksForCard(typed) {
+            forKernel = "把你上一个回答做成一张 ```ui 卡片（照「智能卡片」的写法）：能算的做成能改的数和 calc，要比的做成 "
+                + "compare，有先后的做成 step 或 time，要紧的数做成 stat。只要卡片，卡片前后最多一句话。"
+        }
         if voiceMode, let cue = pendingVoiceCue {
             forKernel += "\n" + cue
         }
@@ -3768,6 +3785,8 @@ struct SpotlightContentView: View {
         // language model remembering to write `·market`.
         if companionMode {
             companionArt.hear(text)
+            // And the painting beside her: something it can paint in what was said.
+            ShanShui.shared.hear(text)
             // And the model is told where she is and which places she has, so
             // that the rest of the switching needs nobody to say "去": its tag
             // names a real place, and the picture follows the conversation.
@@ -3939,6 +3958,7 @@ struct SpotlightContentView: View {
             return
         }
         companionSubject = subject
+        ShanShui.shared.paint(subject)
         let n = (subjectSeen[subject] ?? 0) + 1
         subjectSeen[subject] = n
         if n >= 2 {

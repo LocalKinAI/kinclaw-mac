@@ -8,6 +8,26 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Added — 智能卡片 that choose and compare, 画给我看 as paintings with music, and 活山水 beside her
+
+「秒出组件卡我没看见啊」 → 「都要」; 「没什么好玩的了」 → 「把这几个做了」.
+
+- **Cards** (`UICard`): a `choice` element (one of a few, and the formulas after it follow the pick);
+  formulas with comparisons, `&&` / `||`, `? :` and `if()`; names in Chinese — `input 总账 486` names the
+  input 总账, which is how ornith writes its cards. 「做成卡片」, typed or said on its own, turns the last
+  answer into a card: the bubble says what was said, and the kernel is told what it means.
+- **画给我看** draws in a painting's manner and with music of its own: Claude picks a style for the drawing
+  and writes `music.txt`, and ACE-Step on the box scores it to the drawing's length while it already plays
+  (`LiveDraw.score`, a 「在作配乐」 row on the card). 讲给我听 lays the voice over that music (`LiveOut.mix`,
+  the music at 0.32).
+- **活山水** (`ShanShui`, `ShanShuiPanel`): beside her in companion mode, one ink scene of huashu's that
+  paints what the conversation is about — what the person says goes to `SS.hear`, the subject of her reply
+  to `SS.paint`, and a change of subject is an ink bloom. Its knobs are the play: 画题, 天气, 季节, 时辰, 风,
+  回眸. Twelve subjects, 2–13 ms a frame.
+- A knob with named options is a segmented control (five or fewer) or a menu. `live_check` sets knobs and
+  runs a script before it takes its frames. A page's messages carry the load they belong to, so a stale one
+  is dropped instead of reaching the next drawing (it showed as "Can't find variable: live").
+
 ### Added — 秒出组件卡: answers with a small interface of their own, and beside her
 
 The other speed of an answer (after OpenAI's Intelligent UI, 2026-10-08): the model writes a ```ui block,

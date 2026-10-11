@@ -146,9 +146,20 @@ struct LiveControls: View {
 struct LiveOptions: View {
     @ObservedObject var player: LivePlayer
     var full = true
+    /// One knob a line, for a narrow place (beside her in companion mode).
+    var stacked = false
 
     var body: some View {
-        HStack(spacing: 14) {
+        if stacked {
+            VStack(alignment: .leading, spacing: 8) { content }
+        } else {
+            HStack(spacing: 14) { content }
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        Group {
             if full {
                 Picker("", selection: Binding(get: { player.rate }, set: { player.setRate($0) })) {
                     Text("0.25×").tag(0.25)
@@ -166,6 +177,19 @@ struct LiveOptions: View {
                     .help("片子画在最上面的那一层：唱词、印章、字幕")
             }
             ForEach(player.knobs) { knob in
+                if !knob.options.isEmpty {
+                    HStack(spacing: 6) {
+                        Text(knob.label).font(.kinLabel)
+                        let picker = Picker("", selection: Binding(get: { knob.value.rounded() }, set: { player.setKnob(knob.id, $0) })) {
+                            ForEach(Array(knob.options.enumerated()), id: \.offset) { index, name in
+                                Text(name).tag(Double(index))
+                            }
+                        }
+                        .labelsHidden()
+                        .fixedSize()
+                        if knob.options.count <= 5 { picker.pickerStyle(.segmented) } else { picker.pickerStyle(.menu) }
+                    }
+                } else {
                 HStack(spacing: 6) {
                     Text(knob.label).font(.kinLabel)
                     Slider(value: Binding(get: { knob.value }, set: { player.setKnob(knob.id, $0) }),
@@ -174,6 +198,7 @@ struct LiveOptions: View {
                         .frame(width: 110)
                     Text(Self.number(knob.value)).font(.kinCaption.monospacedDigit()).foregroundStyle(.secondary)
                         .frame(width: 34, alignment: .leading)
+                }
                 }
             }
         }
@@ -206,7 +231,7 @@ struct LiveOutButtons: View {
             if let step = out.narrating[id] {
                 ProgressView().controlSize(.small)
                 Text(step).font(.kinCaption).foregroundStyle(.secondary)
-            } else if film?.song == nil || film?.lines != nil {
+            } else if film?.song == nil || film?.lines != nil || film?.music != nil {
                 Button { Task { try? await out.narrate(id) } } label: {
                     Label(film?.lines == nil ? "讲给我听" : "重新讲", systemImage: "speaker.wave.2")
                 }

@@ -38,6 +38,8 @@ final class LiveFilm: NSObject, ObservableObject {
         var lines: [Line]?
         /// How long it plays when its voice runs past its pictures.
         var length: Double?
+        /// Its music alone (music.wav, written on the box) — under the voice when it is told.
+        var music: String?
     }
 
     struct Line: Codable, Hashable {
