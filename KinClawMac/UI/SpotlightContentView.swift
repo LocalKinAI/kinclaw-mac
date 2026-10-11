@@ -2510,6 +2510,13 @@ struct SpotlightContentView: View {
                           options: .regularExpression) != nil
     }
 
+    /// 「做成一台机器」「把它做成机器」「做个机器给我看」… on its own.
+    static func asksForMachine(_ text: String) -> Bool {
+        let said = text.trimmingCharacters(in: CharacterSet(charactersIn: " \n。！!？?，,~～"))
+        return said.range(of: #"^(请|你)?(再)?(帮我)?(把(它|这个|这些|上面的?|刚才的?)?)?(做|做成|变成|弄成)(一台|一个|个|台)?(小)?(机器|机械|装置)(吧|呗|给我看|看看)?$"#,
+                          options: .regularExpression) != nil
+    }
+
     /// 「做成卡片」「把它做成卡片」「给我个卡片」… on its own.
     static func asksForCard(_ text: String) -> Bool {
         let said = text.trimmingCharacters(in: CharacterSet(charactersIn: " \n。！!？?，,~～"))
@@ -3710,6 +3717,17 @@ struct SpotlightContentView: View {
                                   message: answer.id, narrate: companionMode)
             if companionMode {
                 speaker.speak("好，我画给你看，一两分钟就好。", hostname: hostname) { resumeListeningIfConversing() }
+            }
+            return
+        }
+        // 「做成一台机器」: the same, made into a machine to touch — half an hour in the background.
+        if pendingAttachments.isEmpty, Self.asksForMachine(typed),
+           let answer = messages.last(where: { $0.role == .assistant && !$0.content.isEmpty }) {
+            inputText = ""
+            LiveDraw.shared.start(question: question(answering: answer), answer: answer.content,
+                                  message: answer.id, style: .machine)
+            if companionMode {
+                speaker.speak("好，我把它做成一台机器，要一刻钟到半小时，做好了告诉你。", hostname: hostname) { resumeListeningIfConversing() }
             }
             return
         }

@@ -545,16 +545,23 @@ enum PanelTools {
                 画给我看: has Claude (this Mac's subscription) draw a short live picture that explains something in \
                 huashu-art-motion's way — 8–15 seconds drawn in code, with knobs that let the person explore the \
                 idea — played live in the app; 活画's window opens by itself when it is done, in two to four \
-                minutes. `topic`: what to draw (their question); `context`: what to explain about it (the answer \
-                you gave). `action`: "draw" (default) starts one and answers at once with its id; "status" says \
-                where each one stands. In a conversation the person can also press 「画给我看」 under an answer.
+                minutes. `style: "machine"` (做成一台机器) has Claude build it with anatomy instead: a small \
+                isometric machine whose working is the idea, dozens of precise parts and a true readout, to press, \
+                turn and drag — a quarter to half an hour in the background; the person is told when it is made, \
+                and its window opens. `topic`: what to draw (their question); `context`: what to explain about it \
+                (the answer you gave). `action`: "draw" (default) starts one and answers at once with its id; \
+                "status" says where each one stands and names the machines kept; "open" shows a kept machine \
+                (`name`: its id or a piece of its title) in its window. In a conversation the person can also \
+                press 「画给我看」 or 「做成一台机器」 under an answer.
                 """,
             "inputSchema": [
                 "type": "object",
                 "properties": [
-                    "action": ["type": "string", "description": "draw (default) | status"],
+                    "action": ["type": "string", "description": "draw (default) | status | open"],
                     "topic": ["type": "string", "description": "What to draw: their question."],
                     "context": ["type": "string", "description": "What to explain about it: the answer you gave."],
+                    "style": ["type": "string", "description": "painting (default: huashu, minutes) | machine (anatomy, half an hour)"],
+                    "name": ["type": "string", "description": "open: the machine's id or a piece of its title."],
                 ],
             ],
         ],
@@ -573,6 +580,35 @@ enum PanelTools {
                     "times": ["type": "array", "items": ["type": "number"], "description": "Seconds to look at."],
                     "knobs": ["type": "object", "description": "Knobs to set first, by id: {\"weather\": 2}."],
                     "script": ["type": "string", "description": "JavaScript run in the page before the frames (the film's own API: SS.paint('sea'))."],
+                ],
+                "required": ["id"],
+            ],
+        ],
+        [
+            "name": "machine_check",
+            "description": """
+                做成一台机器's check, for the one machine it is: anatomy's drive.mjs and line check in the WebKit \
+                the person will use it in. Loads the machine's page (`id`: its folder under <art>/live; the page \
+                is machine/index.html) and runs `steps`, drive.mjs's actions with a picture's name instead of its \
+                path: ["wait", ms], ["scroll", sel], ["move", sel, fx, fy], ["click", sel, fx?, fy?], ["drag", \
+                sel, fx0, fy0, fx1, fy1, steps?], ["key", key, sel?, code?], ["slow", factor], ["until", js, \
+                ms?], ["eval", js], ["shot", name, sel?, scale?, [x, y, w, h]?], ["sheet", name, every, count, \
+                sel?, scale?, [x, y, w, h]?, columns?], ["lines", name?, sel?, {tolerance}?]. A null selector is \
+                the card (.iso-plate). Without steps: a picture of the card and the line check. Answers with the \
+                readout after each picture, the line ends that float, the console's errors and exceptions, \
+                whether the page scrolls sideways, and the pictures — the first six as images, the rest named. \
+                The events are the page's own (PointerEvent, KeyboardEvent), so CSS :hover does not follow them.
+                """,
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "id": ["type": "string", "description": "The machine's id (its folder's name)."],
+                    "steps": ["type": "array", "items": ["type": "array"], "description": "drive.mjs's actions, in order."],
+                    "width": ["type": "number", "description": "Viewport width in CSS px: 1440 (default), 390 for a phone."],
+                    "height": ["type": "number", "description": "Viewport height (default 1100); it grows when a picture reaches below."],
+                    "nowebgl": ["type": "boolean", "description": "Every getContext(\"webgl\") answers null: the SVG fallback."],
+                    "reduced": ["type": "boolean", "description": "matchMedia('(prefers-reduced-motion: reduce)') matches."],
+                    "preload": ["type": "string", "description": "JavaScript run before the page's own (window.__driveSpeed=0.04 …)."],
                 ],
                 "required": ["id"],
             ],
@@ -2050,12 +2086,43 @@ enum PanelTools {
                 return (live.player.ready ? live.report() : (live.player.trouble ?? live.trouble ?? "活画没开起来"), !live.player.ready)
             }
         case "live_draw":
-            if (args["action"] as? String ?? "draw").lowercased() == "status" { return (LiveDraw.shared.report(), false) }
+            switch (args["action"] as? String ?? "draw").lowercased() {
+            case "status":
+                return (LiveDraw.shared.report() + "\n" + LiveMachine.shared.report(), false)
+            case "open":
+                guard let machine = LiveMachine.shared.machine(named: args["name"] as? String) else {
+                    return (LiveMachine.shared.report(), true)
+                }
+                LiveMachine.shared.show(machine.id)
+                return ("开着「\(machine.title)」（\(machine.id)）的窗口", false)
+            default:
+                break
+            }
             guard let topic = (args["topic"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !topic.isEmpty else {
                 return ("live_draw 要 topic：画什么（他们的问题）", true)
             }
-            let id = LiveDraw.shared.start(question: topic, answer: (args["context"] as? String) ?? topic, message: nil)
+            let machine = (args["style"] as? String)?.lowercased() == "machine"
+            let id = LiveDraw.shared.start(question: topic, answer: (args["context"] as? String) ?? topic, message: nil,
+                                           style: machine ? .machine : .painting)
+            if machine {
+                return ("开始做「\(topic.prefix(40))」（\(id)）：Claude 在用 anatomy 做成一台机器，一刻钟到半小时，做好了会通知，它的窗口会自己打开。live_draw status 看进度", false)
+            }
             return ("开始画「\(topic.prefix(40))」（\(id)）：Claude 在用 huashu 的画法画，两到四分钟，画好后活画的窗口会自己打开。live_draw status 看进度", false)
+        case "machine_check":
+            guard let id = (args["id"] as? String)?.trimmingCharacters(in: .whitespaces), !id.isEmpty else {
+                return ("machine_check 要 id（这台机器的文件夹名）", true)
+            }
+            var steps = args["steps"] as? [[Any]]
+            if steps == nil, let text = args["steps"] as? String {
+                steps = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [[Any]]
+            }
+            var options = MachineCheck.Options()
+            if let width = MachineCheck.number(args["width"]) { options.width = min(max(width, 320), 2560) }
+            if let height = MachineCheck.number(args["height"]) { options.height = min(max(height, 400), 4000) }
+            options.noWebGL = args["nowebgl"] as? Bool ?? false
+            options.reduced = args["reduced"] as? Bool ?? false
+            options.preload = args["preload"] as? String
+            return await LiveMachine.shared.check(id, steps: steps, options: options)
         case "live_check":
             guard let id = (args["id"] as? String)?.trimmingCharacters(in: .whitespaces), !id.isEmpty else {
                 return ("live_check 要 id（这幅画的文件夹名）", true)

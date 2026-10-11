@@ -8,6 +8,40 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Added — 做成一台机器: 画给我看's second way
+
+「做吧，接成第二种画法」 — wheresryan22/anatomy, tried once by hand (a figure of the box's memory, 11
+minutes), is now one press away under every answer, beside 「画给我看」.
+
+- **What it makes**: Claude (this Mac's subscription) builds the answer into a small isometric machine whose
+  working is the idea — 40–80 precise parts, a readout that comes from a model of the real numbers, things to
+  press, turn and drag — as one standalone page, light theme, its words in the asker's language. A Figure
+  only: no WebGL, no 3D mode. It is made in the background, a quarter to half an hour (fifty minutes at
+  most); a notification says when, and it is touched right there in the conversation — a still until it is
+  clicked, then the page itself, as tall as it needs. 「大窗口」 opens it in a window of its own (the other
+  machines a menu away), 「浏览器」 in the browser: the page stands alone, so it can be kept or sent.
+  「改一下」 goes on in the same Claude conversation. Typed or said: 「做成一台机器」. Agents: `live_draw`
+  with `style: "machine"`; `action: "open"` shows a kept one.
+- **anatomy in the app**: MIT, commit dbf697a, 1.7 MB (the repository's own files and the examples' built
+  pages left out), a folder in Contents/Resources; copied once, read-only, to `<art>/live/_anatomy-<commit>`,
+  so a machine made with this commit still rebuilds after the app carries a newer one. Claude may run one
+  command, `node build.mjs` (Node 20.10 or later must be on the Mac); anatomy's Chrome scripts are not used.
+- **machine_check — anatomy's checks in WebKit**: anatomy looks at its figures in headless Chrome
+  (capture.mjs, drive.mjs, lines.mjs); the person sees them in WebKit, and a Mac with this app need not have
+  Chrome. machine_check runs drive.mjs's own actions — wait, scroll, move, click, drag, key, slow, until,
+  eval, shot (close-ups at 4×), sheet, lines — on the page loaded in a window far off screen and kept drawing
+  (WebKit's occlusion check off for it: a hidden page gets no animation frames), its pointer and keyboard
+  events dispatched in the page, pointer capture kept for them. anatomy's line check is page code and runs as
+  it is. On the hand-made figure: 60 animation frames a second off screen, a click moves the readout, 0 of 519
+  line ends float — what Chrome found — and every picture the size asked. An exception comes back with its
+  message: WebKit's stack holds only the frames.
+- **First run**, end to end with the app's own brief and permissions (「限流用的令牌桶是怎么回事？」, Claude
+  Sonnet 5.5): 「令牌桶：一台会放行也会拒绝的闸机」 in 15.7 minutes, 52 turns, 13 machine_check calls — 4× and
+  10× close-ups, a click on 「突发」 filmed in a contact sheet (the bucket 12 → 0, then refusals), a drag on its
+  copper ring, the 390 px layout, reduced motion — its own exception found and fixed through it, line ends
+  from 26 down to 0. Six times it reached for another command (node -e, sed, python) and was refused; the brief
+  now says to look things up with Read and Grep and to change files with Edit.
+
 ### Added — 画 · 改 · 拍 · 声音 on the box or in the cloud, on the user's own key
 
 「把画、改、拍、声音这些能力，每一项都做成可以挂在三种地方……而我目前是第二个」 — for anybody without a box.

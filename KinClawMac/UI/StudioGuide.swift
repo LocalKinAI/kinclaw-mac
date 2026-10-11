@@ -58,6 +58,8 @@ enum StudioGuide {
               why: "huashu-art-motion：画和动全是代码，能精确对上旁白的长度；14 秒 1080p60 的「艺术史速通」约 2 分钟渲完"),
         Route(want: "问一个问题，要它把答案画成一段会动、能拧旋钮去试的讲解", mode: .chat,
               why: "画给我看：Chat 里每个回答下面的按钮。Claude（这台 Mac 的订阅）照 huashu 的讲解语法（3b1b、白板、Kurzgesagt、图表……）写 8–15 秒的画，自己在 WebKit 里看一遍再改，就在对话里实时播；两到四分钟。agent 也能用 live_draw"),
+        Route(want: "把一个道理做成一台能摸的小机器：按一按、拧一拧，看它怎么动、读数怎么变", mode: .chat,
+              why: "做成一台机器：Chat 里回答下面「画给我看」旁边的按钮。Claude 照 anatomy 的做法造一台等轴测的小机器（几十个精细零件，读数来自真的模型），自己在 WebKit 里点、拖、放大检查再改；在后台做，一刻钟到半小时，做好了通知你，在对话里直接摸，也能开大窗口或在浏览器里打开。要这台 Mac 上有 Node 20 以上。agent 用 live_draw style: machine"),
         Route(want: "让做好的代码动画在 app 里实时播，边看边调", mode: .montage,
               why: "活画：huashu 渲视频用的同一份代码，在 app 里跟着歌实时画（60 帧），能拖、能慢放、能关题字，片子自己带旋钮（倩影：风、落花）；Montage 上的「活画」打开"),
         Route(want: "给一首歌做歌词视频（文字 PV）", mode: .montage,
