@@ -8,6 +8,65 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Changed — a relaunch no longer drops the work, and a slow box no longer reads as a failure
+
+「这个项目还有什么值得改进的吗……都做吧，先做1和2」. Two read-only surveys of the app first (what a
+relaunch kills; how every long job is waited on), then:
+
+- **What a relaunch used to cut, comes back.** `make run` killed the app with SIGTERM, which AppKit
+  does not turn into a quit: `applicationWillTerminate` never ran. Now SIGTERM quits the way the
+  menubar does. Each Studio agent and Code session that was running is remembered and, at the next
+  launch, starts again in its own conversation, waiting (one cut off in the middle of a step says so
+  and waits to be told 「接着做」 — nothing is spent unasked); a Studio agent spoken to after a relaunch
+  goes on in the conversation that was cut off, not quietly in a new one. Film, Motion and talking
+  videos pick up their unfinished work at launch (a talking video used to be marked failed). Drawings
+  and machines are kept as job.json and come back under the answers they were made for — chat
+  messages now keep their ids — and one cut off offers 「接着做」 in the same Claude conversation.
+- **`make run` quits the app alone.** Its panel relays (the same binary with `--mcp-stdio`) are left
+  running and reach the next app by themselves; the kernel is restarted only when its binary or its
+  souls changed since it started — its conversations and its brain stay. `make kill` still stops all.
+- **A render is queued once (ComfyJob).** Film's shots, pictures and music, Motion's takes and clay,
+  talking videos, a drawing's music and the Comfy tab now share one way of running a ComfyUI graph:
+  each carries a tag made from what it is, and before queueing — after a relaunch, or after a POST
+  whose answer was lost — the box's queue and recent history are searched for it, so a shot still
+  rendering there is taken up instead of rendered twice while the first finishes for nobody. The time
+  limit counts from when it starts running, not from the hour it waited behind another tab, and when it
+  runs out the job is stopped on the box. A job neither queued nor in ComfyUI's history is said to have
+  vanished; a file is fetched again when the fetch fails on the way (the Comfy tab used to drop it and
+  say 「没跑成」). Each tab queues under its own client id, so the box's desk names it right — Motion,
+  talking videos and drawings were all "Film". Measured on the box: the same graph twice is one job;
+  a missing one is called vanished in about two minutes.
+- **No answer is not a failure (BoxTrouble).** One judgement for every tab: a refused connection, a
+  timeout, a dropped connection, ssh's 255, curl's 6/7/28/52/56 are the road, not the job. The Pixelle
+  film of 2026-10-10 — 「失败：box call failed (rc 28)」 and 「上一个没做成」 while it ran on for an hour —
+  came from a 20-second curl timeout ending pv.py's wait, " failed" matched in the words, and a task
+  list that could not be read taken for "no tasks". pv.py now keeps following through a slow look,
+  tells "lost contact" (exit 3) and "done, not copied back" (exit 4) from a failed job (exit 1), and
+  the app decides by exit code; after a relaunch pixelle_wait asks the box before saying nothing runs.
+  A box service that takes longer than 3 s to answer its health check but is listening is busy, not
+  off — `ensure` no longer starts a second copy beside it. A video clip lost with its connection says
+  so, not 「失败了」. The Montage bridge's job whose shell is gone without an exit code is no longer
+  "running" for ever.
+- **A call the relay can't wait for answers in time (LateCalls).** The kernel's relay gives a tool 55 s;
+  a call still working then came back as 「连不上 LocalKin 的面板」 while it went on. Now it answers
+  「还在做」 with an id and keeps its result for the new `panel_result`.
+- **Where a job stands**: the box's progress line says how long the rest of a sampler node has to go,
+  and an old line says how old it is when the box does not answer.
+- **The cloud brain out of quota falls back to the box.** When Ollama Cloud says the week's quota is
+  spent, the kernel is switched at runtime to the box's ornith-1.5:35b, the reply says so, and the
+  question is asked again — once. (10-10: Chat and Talk were dead for an hour after a relaunch.)
+- **做成一台机器, cheaper** (「太费token了」): Claude reads SKILL.md and the smallest example, then only
+  what it calls; four checks at most, four pictures a check; forty turns at most, a built page kept when
+  they run out. The same question, before and after: $2.58, 15.7 minutes, 52 turns → $1.36, 8.3 minutes,
+  38 turns, line ends at 0 both times. Each drawing and machine shows what it cost and how long it took;
+  the machine button is not offered under a greeting. 「停」 is reported as stopped. (On the box's own
+  ornith through kinfer instead, it read for thirty minutes and wrote nothing — kinfer leaves pictures
+  out and keeps no prefix cache: not yet a way.)
+- **`make test`**: pv.py's waits, the bridge's jobs and the machine check in WebKit (clicks, readout,
+  the line check, picture sizes, exceptions with their message), without the app or the box. The check
+  now allows file access from file pages, as anatomy's Chrome runs do: an exception in a callback came
+  back as "Script error." with nothing in it.
+
 ### Added — 做成一台机器: 画给我看's second way
 
 「做吧，接成第二种画法」 — wheresryan22/anatomy, tried once by hand (a figure of the box's memory, 11

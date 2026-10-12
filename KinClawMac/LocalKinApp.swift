@@ -14,6 +14,13 @@ import KeyboardShortcuts
 // M3 will add the global hotkey + menubar; for now the panel just
 // shows on launch.
 
+/// Whether the app is on its way out: an agent or a terminal ending now is the
+/// app quitting, not the agent stopping — it is still remembered as running.
+@MainActor
+enum AppLifecycle {
+    static var quitting = false
+}
+
 // Launched from main.swift, not by @main: the same binary also serves the
 // panel's MCP tools over stdio, and that path must not start an app.
 struct KinClawMacApp: App {
@@ -168,9 +175,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let center = UNUserNotificationCenter.current()
         center.delegate = self
         center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+
+        // 8. SIGTERM — `make run`'s pkill, `kill`, a logout — quits the way
+        //    the menubar's Quit does. Without this AppKit just exits, and
+        //    nothing below runs: the agents were cut off unremembered.
+        signal(SIGTERM, SIG_IGN)
+        let terminating = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        terminating.setEventHandler { NSApp.terminate(nil) }
+        terminating.resume()
+        sigterm = terminating
+
+        // 9. What was going when the app last went away comes back: each
+        //    Studio agent and Code session that was running, in its own
+        //    conversation; a film, a take or a talking video half made, from
+        //    where it was (their studios pick it up as they come up, taking up
+        //    a render still running on the box rather than queueing it again).
+        //    A moment after launch, once the panel's tools answer.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            StudioAgent.resumeLive()
+            AgentTerminalSessions.shared.resumeLive()
+            _ = FilmStudio.shared
+            _ = MotionStudio.shared
+            _ = TalkingVideo.shared
+            LiveDraw.shared.restore()
+        }
     }
 
+    /// The SIGTERM handler: kept, or it is let go and the signal ignored.
+    private var sigterm: DispatchSourceSignal?
+
     func applicationWillTerminate(_ notification: Notification) {
+        AppLifecycle.quitting = true
         // Clean shutdown of our owned subprocess. An adopted external
         // kernel is left alone — it belongs to the user.
         supervisor.stop()
@@ -180,7 +215,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // pv.py following a Pixelle job over ssh: the job itself goes on on
         // the box, and the tab picks it up again next time.
         PixelleStudio.shared.shutdown()
-        StudioAgent.all.forEach { $0.stop() }
+        // Stopped with the app, but remembered as running: they come back at
+        // the next launch, in their conversations.
+        StudioAgent.all.forEach { $0.stopForQuit() }
+        AgentTerminalSessions.shared.rememberForQuit()
+        LiveDraw.shared.rememberForQuit()
         // The handshake file is a live claim about a port; a dead app should
         // not leave one lying around.
         PanelBridge.shared.stop()

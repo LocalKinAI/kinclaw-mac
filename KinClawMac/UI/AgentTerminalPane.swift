@@ -321,6 +321,7 @@ final class AgentTerminalSessions: ObservableObject {
             // Not while the view asking for the terminal is being drawn.
             DispatchQueue.main.async {
                 self.running.insert(id)
+                self.remember()
                 self.record(id) {
                     $0.conversation = s.conversation
                     if $0.started == nil { $0.started = Date() }
@@ -348,7 +349,7 @@ final class AgentTerminalSessions: ObservableObject {
                           environment: env,
                           currentDirectory: Self.folder(of: s))
         // Not published from here: this runs while a view is being built.
-        DispatchQueue.main.async { self.running.insert(id) }
+        DispatchQueue.main.async { self.running.insert(id); self.remember() }
         return view
     }
 
@@ -412,13 +413,40 @@ final class AgentTerminalSessions: ObservableObject {
         }
         relays[id] = nil
         running.remove(id)
+        remember()
     }
 
     /// `code` is waitpid's status, as SwiftTerm hands it on: the exit code
     /// in its second byte, or the signal in its first.
     private func exited(_ id: UUID, code: Int32?) {
         running.remove(id)
+        // Ended by itself — not one to bring back; the app going away is not that.
+        if !AppLifecycle.quitting { remember() }
         notes[id] = code.map { $0 & 0x7f == 0 ? "进程结束（退出码 \(($0 >> 8) & 0xff)）" : "进程被信号 \($0 & 0x7f) 结束" } ?? "进程结束了"
+    }
+
+    // MARK: Across a relaunch
+
+    private static let liveKey = "kinclaw.term.live"
+
+    /// The Code sessions running now, kept: the ones the next launch starts again.
+    private func remember() {
+        let live = codeSessions.map(\.id).filter(running.contains).map(\.uuidString)
+        UserDefaults.standard.set(live, forKey: Self.liveKey)
+    }
+
+    /// The app is going away: what runs now is what comes back.
+    func rememberForQuit() { remember() }
+
+    /// At launch: each Code session that was running when the app went away starts again, back in
+    /// its conversation — at once, not when its tab is next shown, so that one followed from the
+    /// phone (Remote Control) is there again. Shells are not: their commands died with them.
+    func resumeLive() {
+        let live = Set(UserDefaults.standard.stringArray(forKey: Self.liveKey) ?? [])
+        for session in codeSessions where live.contains(session.id.uuidString) && terminals[session.id] == nil {
+            _ = terminal(for: session)
+            notes[session.id] = "app 重启过：接回了这段对话"
+        }
     }
 
     // MARK: What the agent's tools need

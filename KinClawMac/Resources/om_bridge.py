@@ -150,6 +150,21 @@ def start(args):
     return text(f"started job {job}" + (f" ({args['label']})" if args.get("label") else ""))
 
 
+def alive(base):
+    """Whether a job's shell (its .pid) is still there. No pid file is taken as alive."""
+    try:
+        pid = int(open(base + ".pid").read().strip())
+    except (OSError, ValueError):
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def job_state(job, tail):
     base = os.path.join(JOBS, job)
     if not os.path.exists(base + ".json"):
@@ -158,6 +173,10 @@ def job_state(job, tail):
     ran = time.time() - meta.get("started", time.time())
     if os.path.exists(base + ".exit"):
         state = f"finished, exit {open(base + '.exit').read().strip()}"
+    elif not alive(base) and not os.path.exists(base + ".exit"):
+        # Its shell is gone without writing an exit code: killed, or the box restarted. Not
+        # "running" for ever (it used to be, whatever had happened to it).
+        state = "ended without an exit code (killed, or the box restarted)"
     else:
         state = "running"
     log = ""

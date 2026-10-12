@@ -41,6 +41,10 @@ final class ComfyWatch: ObservableObject {
             var out = node_class ?? "准备中"
             if let value, let max, max > 1 {
                 out += " 第 \(Int(value))/\(Int(max)) 步" + (step_s.map { "（这一步 \(ComfyWatch.clock($0))）" } ?? "")
+                // Its steps so far, at the pace they went: how long the rest of this node has to go.
+                if value >= 1, max > value, let node_s, node_s > 0 {
+                    out += "，这个节点还要约 \(ComfyWatch.clock((max - value) * node_s / value))"
+                }
             } else if let node_s {
                 out += "（这个节点 \(ComfyWatch.clock(node_s))）"
             }
@@ -94,6 +98,8 @@ final class ComfyWatch: ObservableObject {
     private var active: [String: (what: String, base: String)] = [:]
     private var order: [String] = []
     private var poller: Task<Void, Never>?
+    /// Each line as last read, and when: a read that gets no answer keeps the old line, saying how old.
+    private var read: [String: (line: String, at: Date)] = [:]
 
     /// A job of ours is on the box: keep its line fresh until `ended`.
     func began(_ id: String, what: String, base: String) {
@@ -103,8 +109,14 @@ final class ComfyWatch: ObservableObject {
         poller = Task { @MainActor in
             while !active.isEmpty, !Task.isCancelled {
                 for (id, job) in active {
-                    guard let line = await Self.line(for: id, what: job.what, base: job.base), active[id] != nil else { continue }
-                    lines[id] = line
+                    let line = await Self.line(for: id, what: job.what, base: job.base)
+                    guard active[id] != nil else { continue }
+                    if let line {
+                        read[id] = (line, Date())
+                        lines[id] = line
+                    } else if let last = read[id], Date().timeIntervalSince(last.at) > 12 {
+                        lines[id] = last.line + "（\(Int(Date().timeIntervalSince(last.at))) 秒前读到的；盒子这会儿没答）"
+                    }
                 }
                 now = order.last.flatMap { lines[$0] }
                 try? await Task.sleep(nanoseconds: 4_000_000_000)
@@ -115,6 +127,7 @@ final class ComfyWatch: ObservableObject {
 
     func ended(_ id: String) {
         active[id] = nil
+        read[id] = nil
         lines[id] = nil
         order.removeAll { $0 == id }
         now = order.last.flatMap { lines[$0] }

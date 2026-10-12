@@ -264,6 +264,7 @@ final class StudioAgent: ObservableObject {
         self.relay = relay
         terminal = view
         running = true
+        UserDefaults.standard.set(true, forKey: liveKey)
         shown = true
         note = nil
         let harness = self.harness, brain = self.brain, folder = self.folder
@@ -386,8 +387,9 @@ final class StudioAgent: ObservableObject {
         shown = true
         guard running, let terminal else {
             // After it has stopped, what is said goes on in the conversation
-            // still on its screen.
-            start(saying: text, continuing: self.terminal != nil)
+            // still on its screen — or in the one the app's relaunch cut off,
+            // not quietly in a new one.
+            start(saying: text, continuing: self.terminal != nil || wasLive)
             return
         }
         // A question on its screen — whether to trust the folder, the first
@@ -406,7 +408,9 @@ final class StudioAgent: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { terminal.send([13]) }
     }
 
-    func stop() {
+    /// Stopped. `remembered`: by the app going away, so still counted as running — it comes back
+    /// at the next launch.
+    func stop(remembered: Bool = false) {
         watcher?.cancel()
         watcher = nil
         if let terminal {
@@ -416,8 +420,45 @@ final class StudioAgent: ObservableObject {
         terminal = nil
         relay = nil
         running = false
+        if !remembered { UserDefaults.standard.set(false, forKey: liveKey) }
         if place == .montage { MontageStudio.shared.unfollow() }
         checkResumable()
+    }
+
+    // MARK: Across a relaunch
+
+    private var liveKey: String { "kinclaw.agent.\(place.rawValue).live" }
+    private var cutKey: String { "kinclaw.agent.\(place.rawValue).cut" }
+
+    /// It was running when the app last went away — quit, `make run`, a crash: what launch resumes.
+    var wasLive: Bool { UserDefaults.standard.bool(forKey: liveKey) }
+
+    /// In the middle of a turn: its harness shows "esc to interrupt" while it works.
+    var working: Bool {
+        guard running, let terminal else { return false }
+        return AgentTerminalSessions.visibleLines(terminal.getTerminal()).joined(separator: "\n")
+            .lowercased().contains("esc to interrupt")
+    }
+
+    /// The app is going away: it stops with it, remembered as running — and, when it was in the
+    /// middle of something, that it was cut off there.
+    func stopForQuit() {
+        guard running else { return }
+        UserDefaults.standard.set(working, forKey: cutKey)
+        stop(remembered: true)
+    }
+
+    /// At launch: each agent that was running when the app went away comes back in its last
+    /// conversation, waiting. One cut off in the middle of a step says so, and the person decides
+    /// whether it goes on — no turn is started on its own, nothing is spent unasked.
+    static func resumeLive() {
+        for agent in all where agent.wasLive && !agent.running {
+            let cut = UserDefaults.standard.bool(forKey: agent.cutKey)
+            UserDefaults.standard.set(false, forKey: agent.cutKey)
+            agent.start(continuing: true)
+            agent.note = cut ? "app 重启时它正在做事，那一步被打断了；要它接着做，跟它说「接着做」"
+                             : "app 重启过：接回了上一段对话"
+        }
     }
 
     /// `status` as waitpid gives it, which SwiftTerm hands on unchanged: the
@@ -425,6 +466,8 @@ final class StudioAgent: ObservableObject {
     /// — "退出码 256" was an exit code of 1.
     private func exited(_ status: Int32?) {
         running = false
+        // Ended by itself (/exit, a crash): not one to bring back — unless the app is going away.
+        if !AppLifecycle.quitting { UserDefaults.standard.set(false, forKey: liveKey) }
         watcher?.cancel()
         if place == .montage { MontageStudio.shared.unfollow() }
         let why = status.map { $0 & 0x7f == 0 ? "退出码 \(($0 >> 8) & 0xff)" : "被信号 \($0 & 0x7f) 结束" }
@@ -763,8 +806,9 @@ final class StudioAgent: ObservableObject {
         let social = ["social_status", "social_profile", "social_trends", "social_page", "social_card", "social_draft", "social_drafts",
                       "social_ideas", "social_calendar", "social_breakdown", "social_subtitles", "social_article"]
         // Each other: what the other tabs are doing and have made, and
-        // handing the person's request to one of them.
-        let team = ["studio_team", "studio_handoff"]
+        // handing the person's request to one of them; and the answer of a
+        // call that ran longer than the relay waits (LateCalls).
+        let team = ["studio_team", "studio_handoff", "panel_result"]
         switch place {
         case .film: return film + comfy + studio + team + ["studio_note"]
         case .motion: return ["motion_find", "motion_make", "motion_status", "motion_stop", "motion_continue", "video_frames"] + studio + team + ["studio_note"]

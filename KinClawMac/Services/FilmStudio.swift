@@ -2562,15 +2562,8 @@ final class FilmStudio: ObservableObject {
         BoxServices.localNetworkBlocked(error) ? BoxServices.blockedAdvice : "\(what)连不上（\(error.localizedDescription)）"
     }
 
-    static func isUnreachable(_ error: Error) -> Bool {
-        if let url = error as? URLError {
-            return [.cannotConnectToHost, .cannotFindHost, .networkConnectionLost, .notConnectedToInternet,
-                    .timedOut, .dnsLookupFailed].contains(url.code)
-        }
-        let text = error.localizedDescription.lowercased()
-        return ["could not connect", "连不上", "connection refused", "network connection was lost",
-                "timed out", "offline"].contains { text.contains($0) }
-    }
+    /// The road to the box, not the job: one judgement for every tab (BoxTrouble).
+    static func isUnreachable(_ error: Error) -> Bool { BoxTrouble.isTransient(error) }
 
     func update(_ film: inout Film, _ index: Int, _ state: Shot.State) {
         film.shots[index].state = state

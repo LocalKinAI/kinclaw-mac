@@ -105,6 +105,8 @@ final class PixelleStudio: ObservableObject {
     @Published private(set) var voices: String?
     @Published private(set) var boxJobs: [BoxJob] = []
     @Published private(set) var checked: Date?
+    /// The last look at the box did not get everything (slow, no answer): what is shown is older.
+    @Published private(set) var lookTrouble: String?
     @Published private(set) var runs: [Run] = []
     @Published private(set) var job: Job?
     @Published private(set) var note: String?
@@ -168,21 +170,31 @@ final class PixelleStudio: ObservableObject {
 
     // MARK: The service
 
-    /// Is the API up, is ComfyUI busy, are the voices there, what is running.
+    /// Is the API up, is ComfyUI busy, are the voices there, what is running — within what the
+    /// asker can wait (a tool's patience).
     func refresh() async {
+        let budget = min(150, max(25, PanelTools.patience - 10))
         // One look at a time; a second asker waits for the one under way.
         guard !checking else {
-            for _ in 0..<800 where checking { try? await Task.sleep(nanoseconds: 200_000_000) }
+            let until = Date().addingTimeInterval(budget)
+            while checking, Date() < until { try? await Task.sleep(nanoseconds: 200_000_000) }
             return
         }
         checking = true
         defer { checking = false }
-        let result = await pv(["status"], timeout: 150)
+        let result = await pv(["status"], timeout: budget)
         checked = Date()
         guard let report = Self.lastJSON(result.out) as? [String: Any] else {
-            service = .down(Self.complaint(result))
+            // No answer in time, or none from the box this time, is not "the API is down": what
+            // was seen last stands, and says how old it is.
+            if result.code == 124 || result.code == 3 {
+                lookTrouble = "这次没看清盒子（\(Self.complaint(result).prefix(160))）；下面是上次看到的"
+            } else {
+                service = .down(Self.complaint(result))
+            }
             return
         }
+        lookTrouble = nil
         let api = (report["pixelle_api"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         service = api.hasPrefix("running") ? .up
             : .down(api.hasPrefix("not running") ? "没在跑" : String(api.split(separator: "\n").first ?? "没应答"))
@@ -196,9 +208,15 @@ final class PixelleStudio: ObservableObject {
             let health = report["tts_" + port] as? [String: Any]
             return port + ((health?["status"] as? String) == "healthy" ? " ✓" : " ✗")
         }.joined(separator: " · ")
-        boxJobs = (report["jobs"] as? [[String: Any]] ?? []).map {
-            BoxJob(id: $0["task_id"] as? String ?? "", status: $0["status"] as? String ?? "",
-                   progress: $0["progress"] as? String, percent: FilmTools.number($0["percent"]))
+        if let jobs = report["jobs"] as? [[String: Any]] {
+            boxJobs = jobs.map {
+                BoxJob(id: $0["task_id"] as? String ?? "", status: $0["status"] as? String ?? "",
+                       progress: $0["progress"] as? String, percent: FilmTools.number($0["percent"]))
+            }
+        } else if let trouble = report["jobs_error"] as? String {
+            // The list could not be read this time — not "no jobs" (2026-10-10: a slow box read as
+            // nothing running, and a job still going showed as 「上一个没做成」).
+            lookTrouble = "盒子上的任务列表这次没读到（\(trouble.prefix(160))）；上次看到的还算数"
         }
         // A job on the box that nobody here follows — the app restarted in the
         // middle of one, or a terminal started it: followed from now on.
@@ -299,13 +317,27 @@ final class PixelleStudio: ObservableObject {
         if result.ok, result.out.contains("still ") {
             return ((Array(progress) + ["task \(task) 还在盒子上做。再调 pixelle_wait（带 task）接着等"]).joined(separator: "\n"), false)
         }
-        return ((Array(progress) + ["task \(task)：\(Self.complaint(result))"]).joined(separator: "\n"), true)
+        // pv.py's exit code says which: no answer from the box (3; 124 is pv.py out of time) and
+        // files not copied back (4) are not a failed job.
+        switch result.code {
+        case 3, 124:
+            return ((Array(progress) + ["task \(task)：这次没联系上盒子（\(Self.complaint(result).prefix(200))）；任务应该还在盒子上做。"
+                                        + "再调 pixelle_wait（带 task）接着等"]).joined(separator: "\n"), false)
+        case 4:
+            return ((Array(progress) + ["task \(task) 在盒子上做好了，取回时出错：\(Self.complaint(result).prefix(300))。"
+                                        + "再调 pixelle_wait（带 task）会再取"]).joined(separator: "\n"), false)
+        default:
+            return ((Array(progress) + ["task \(task)：\(Self.complaint(result))"]).joined(separator: "\n"), true)
+        }
     }
 
     private func followLoop(_ task: String) async {
         defer {
             if following == task { following = nil; follower = nil }
         }
+        // Rounds of following that heard nothing from the box, one after another (each up to nine
+        // minutes), and tries at copying back a job done there.
+        var silent = 0, fetches = 0
         while !Task.isCancelled {
             let result = await pv(["wait", task, "--timeout", "540", "--every", "6"], timeout: 720) { [weak self] line in
                 Task { @MainActor in self?.heard(line, from: task) }
@@ -315,11 +347,37 @@ final class PixelleStudio: ObservableObject {
                 finished(task, answer)
                 return
             }
+            // Only pv.py's exit code decides (2026-10-10: one slow look, "box call failed (rc 28)",
+            // read as the job failing — " failed" was in the words — while it ran on for an hour).
+            let why = Self.complaint(result)
+            let quiet = result.code == 3 || result.code == 124 || (result.ok && result.out.contains("no answer from the box for"))
+            silent = quiet ? silent + 1 : 0
+            if silent >= 20 {
+                // About three hours without a word from the box: stop following, without a verdict.
+                job?.state = .failed("三个钟头联系不上盒子，不再跟了：\(why.prefix(200))（盒子好了，刷新或 pixelle_wait 会接着跟）")
+                job?.waiting = nil
+                return
+            }
             // Nine minutes up and the job still going: wait again.
             if result.ok, result.out.contains("still ") { continue }
-            let why = Self.complaint(result)
-            let settled = why.contains(" failed") || why.contains(" cancelled") || why.contains("job \(task)")
-            job?.state = .failed(settled ? why : "跟丢了：\(why)（盒子上的任务可能还在跑：pixelle_wait 或刷新会接着跟）")
+            switch result.code {
+            case 3, 124:
+                // No answer from the box for a while — not news about the job, which goes on there.
+                job?.waiting = "这阵子联系不上盒子（\(why.prefix(160))）；任务应该还在那边做，一分钟后接着跟"
+                try? await Task.sleep(nanoseconds: 60_000_000_000)
+                continue
+            case 4 where fetches < 3:
+                // Done on the box, its files not back yet: fetched again in a minute.
+                fetches += 1
+                job?.waiting = "在盒子上做好了，取回时出错（\(why.prefix(160))）；一分钟后再取（第 \(fetches) 次）"
+                try? await Task.sleep(nanoseconds: 60_000_000_000)
+                continue
+            case 4:
+                job?.state = .failed("在盒子上做好了，但取不回来：\(why)（pixelle_wait 带 task 会再取）")
+            default:
+                // pv.py's own verdict: the job failed or was cancelled on the box, or the request was bad.
+                job?.state = .failed(why)
+            }
             job?.waiting = nil
             return
         }
@@ -336,6 +394,15 @@ final class PixelleStudio: ObservableObject {
         var rest = text[text.index(after: close)...].trimmingCharacters(in: .whitespaces)
         if rest.hasPrefix("still on") {
             job?.waiting = rest
+            return
+        }
+        // pv.py looked and the box did not answer this time; and then it did again.
+        if rest.hasPrefix("no answer from the box") {
+            job?.waiting = "这次没联系上盒子，任务在那边接着做，还在跟"
+            return
+        }
+        if rest.hasPrefix("the box answers again") {
+            job?.waiting = nil
             return
         }
         if let at = rest.range(of: #"\s\d+%$"#, options: .regularExpression) {
@@ -479,13 +546,15 @@ final class PixelleStudio: ObservableObject {
     // MARK: For the panel's tools
 
     var serviceLine: String {
+        let line: String
         switch service {
-        case .unknown: return "Pixelle API：还没看过"
-        case .up: return "Pixelle API：在跑（盒子的 127.0.0.1:8190）"
-        case .down(let why): return "Pixelle API：没在跑 —— \(why)"
-        case .starting: return "Pixelle API：在起"
-        case .stopping: return "Pixelle API：在停"
+        case .unknown: line = "Pixelle API：还没看过"
+        case .up: line = "Pixelle API：在跑（盒子的 127.0.0.1:8190）"
+        case .down(let why): line = "Pixelle API：没在跑 —— \(why)"
+        case .starting: line = "Pixelle API：在起"
+        case .stopping: line = "Pixelle API：在停"
         }
+        return line + (lookTrouble.map { "\n\($0)" } ?? "")
     }
 
     var jobLines: [String] {
@@ -724,8 +793,11 @@ enum PixelleTools {
 
         case "pixelle_wait":
             let wanted = (args["task"] as? String)?.trimmingCharacters(in: .whitespaces)
+            // Nothing followed here yet — the app was restarted, say — is not "nothing running": the
+            // box is asked first, and a job going on there is followed.
+            if wanted?.isEmpty != false, studio.job == nil { await studio.refresh() }
             guard let task = (wanted?.isEmpty == false ? wanted : nil) ?? studio.job?.id else {
-                return ("没有在做的视频", false)
+                return ("没有在做的视频" + (studio.lookTrouble.map { "（\($0)）" } ?? ""), false)
             }
             let limit = min(540, max(20, PanelTools.patience - 20))
             // A task the tab has moved on from — another was started since — is waited for on the box,

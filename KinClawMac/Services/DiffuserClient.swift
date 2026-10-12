@@ -641,7 +641,11 @@ final class DiffuserClient: ObservableObject {
                                             seed: seed, mode: mode, from: image)
                 finish(file, error: nil)
             } catch {
-                finish(file, error: error.localizedDescription)
+                // The clip comes back in the answer to one long request: a connection lost on the
+                // way is not the box failing to film it, but the clip is out of reach all the same.
+                finish(file, error: BoxTrouble.isTransient(error)
+                       ? "和盒子的连接断了（\(error.localizedDescription)），不是拍失败；这一段拿不回来，再拍一次"
+                       : error.localizedDescription)
             }
         }
         return file

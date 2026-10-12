@@ -202,10 +202,12 @@ final class LiveMachine: ObservableObject {
                                     shots: Self.work(id).appendingPathComponent("check"), lineEnds: lineEnds)
         var lines = out.lines
         lines.append(out.problems == 0 ? "没有发现问题" : "问题：\(out.problems)")
-        if out.pictures.count > 6 {
-            lines.append("图多于六张，后面的在这里，要看就 Read：" + out.pictures.dropFirst(6).map(\.path).joined(separator: "、"))
+        // Four pictures come back as images: each is read again at every later turn of the
+        // conversation, so the rest are named, to Read only if they matter.
+        if out.pictures.count > 4 {
+            lines.append("图多于四张，后面的在这里，要看就 Read：" + out.pictures.dropFirst(4).map(\.path).joined(separator: "、"))
         }
-        lines += out.pictures.prefix(6).map { "image://" + $0.path }
+        lines += out.pictures.prefix(4).map { "image://" + $0.path }
         return (lines.joined(separator: "\n"), false)
     }
 
@@ -240,11 +242,12 @@ final class LiveMachine: ObservableObject {
 
         Where things are
         - The working directory is this machine, id "\(id)". Write only here.
-        - anatomy, to read and never to change: \(skill). Read \(skill)/SKILL.md first and follow its workflow; then \
-        references/craft.md before you design, references/kit.md for the API, references/motion.md for the live part, \
-        references/verify.md for the checklist, and the closest example's build.mjs (examples/dial-indicator is the \
-        smallest; desk-computer and arcade-cabinet are framework-free too). Don't build the examples: that folder is \
-        read-only.
+        - anatomy, to read and never to change: \(skill). Its SKILL.md is the method: read it first. Then build from \
+        examples/dial-indicator/build.mjs — the smallest whole figure — and look up only what you call: Grep \
+        kit/iso-kit.mjs (or lathe.mjs, tube.mjs) for a function's signature, and read the one section of \
+        references/craft.md, kit.md or motion.md you need, not whole files. Everything you read is read again at every \
+        later turn: read little, and work in few, large steps — write a file whole, fix several things in one edit. \
+        Don't build the examples: that folder is read-only.
 
         The size: always a Figure — one mechanism, 40–80 parts, SVG only: no WebGL layer and no 3D mode. Have a \
         working page within the first ten minutes, then deepen it; about half an hour in all.
@@ -269,20 +272,21 @@ final class LiveMachine: ObservableObject {
         scripts that drive Chrome — capture.mjs, drive.mjs, lines.mjs — are not used here: machine_check does what \
         they do, in the WebKit the person will use.
 
-        Check, then fix: call machine_check with id "\(id)". It loads index.html in that WebKit and runs `steps`, \
-        drive.mjs's actions with a picture's name instead of its path: ["wait", ms], ["scroll", sel], ["move", sel, \
-        fx, fy], ["click", sel, fx?, fy?], ["drag", sel, fx0, fy0, fx1, fy1, steps?], ["key", key, sel?, code?], \
-        ["slow", factor], ["until", js, ms?], ["eval", js], ["shot", name, sel?, scale?, [x, y, w, h]?], ["sheet", \
-        name, every, count, sel?, scale?, [x, y, w, h]?, columns?], ["lines", name?, sel?, { tolerance }?]; `width` \
-        1440 (default) or 390 for a phone; `nowebgl`, `reduced`, `preload` as drive.mjs's flags. Without steps: a \
-        picture of the card and the line check. It answers with the readout after each picture, the line ends that \
-        float, the console's errors, whether the page scrolls sideways, and the pictures — the first six as images, \
-        the rest in check/ to Read. Its events are the page's own (PointerEvent, KeyboardEvent), so CSS :hover does \
-        not follow them. Do what verify.md asks, with machine_check: the card at 1440 and at 390; 4× close-ups of the \
-        subject and the mechanism (["shot", "joint", null, 4, [x, y, w, h]]); every control pressed and its readout \
-        read; the idle tour caught in a sheet; line ends at 0 in every pose it rests in; `node build.mjs --audit` \
-        passing when it has pipes, cables or round parts; the console clean. Look at every picture as the critic who \
-        zooms in. Fix, build again, check again.
+        Check, then fix: call machine_check with id "\(id)" — four times at most, each call doing many steps. It \
+        loads index.html in that WebKit and runs `steps`, drive.mjs's actions with a picture's name instead of its \
+        path: ["wait", ms], ["scroll", sel], ["move", sel, fx, fy], ["click", sel, fx?, fy?], ["drag", sel, fx0, fy0, \
+        fx1, fy1, steps?], ["key", key, sel?, code?], ["slow", factor], ["until", js, ms?], ["eval", js], ["shot", \
+        name, sel?, scale?, [x, y, w, h]?], ["sheet", name, every, count, sel?, scale?, [x, y, w, h]?, columns?], \
+        ["lines", name?, sel?, { tolerance }?]; `width` 1440 (default) or 390 for a phone; `nowebgl`, `reduced`, \
+        `preload` as drive.mjs's flags. Without steps: a picture of the card and the line check. It answers with the \
+        readout after each picture, the line ends that float, the console's errors, whether the page scrolls \
+        sideways, and the pictures — the first four as images, the rest in check/ to Read. Its events are the page's \
+        own (PointerEvent, KeyboardEvent), so CSS :hover does not follow them. A good order: first, once it builds — \
+        the card at 1440, the line check, each control pressed and its readout read; then, after fixing — the same \
+        again with 390 wide; the last calls only for what is still wrong, with 4× close-ups (["shot", "joint", null, \
+        4, [x, y, w, h]]) only where something looks off. Before you finish: line ends at 0, the console clean, \
+        `node build.mjs --audit` passing when it has pipes, cables or round parts. Look at every picture as the critic \
+        who zooms in.
 
         Then answer with one line: the title.
         """

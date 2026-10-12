@@ -363,6 +363,22 @@ enum PanelTools {
             ],
         ],
         [
+            "name": "panel_result",
+            "description": """
+                The answer of a panel tool call that ran longer than this call could wait: such a call answers \
+                「…还在做…用 panel_result（id: "…"）取」 and goes on working. `id`: that id; `wait`: seconds to \
+                wait for it to finish (default 0: say at once whether it is done).
+                """,
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "id": ["type": "string", "description": "The id the call answered with."],
+                    "wait": ["type": "number", "description": "Seconds to wait for it (default 0)."],
+                ],
+                "required": ["id"],
+            ],
+        ],
+        [
             "name": "panel_show",
             "description": "Show the LocalKin panel, optionally on one of its tabs: chat, cowork, code (Claude Code and Codex sessions), film, motion, pixelle, montage, comfy, social (the Easel tab — social-media drafts; it was called 社媒), jev — or web / shell, which open the browser (on the right) or the shell (along the bottom) beside whichever tab is up; or make it full screen. With film, motion, pixelle, montage, comfy or social, `ask` hands a request to the agent on that tab's left. Use it when the user asks to see the panel or to go to a tab (\"打开片场\" → film). With mode film, `film` selects a film and `shot` opens that shot's words for rewriting (\"我想改第三个镜头\").",
             "inputSchema": [
@@ -596,7 +612,7 @@ enum PanelTools {
                 sel?, scale?, [x, y, w, h]?, columns?], ["lines", name?, sel?, {tolerance}?]. A null selector is \
                 the card (.iso-plate). Without steps: a picture of the card and the line check. Answers with the \
                 readout after each picture, the line ends that float, the console's errors and exceptions, \
-                whether the page scrolls sideways, and the pictures — the first six as images, the rest named. \
+                whether the page scrolls sideways, and the pictures — the first four as images, the rest named. \
                 The events are the page's own (PointerEvent, KeyboardEvent), so CSS :hover does not follow them.
                 """,
             "inputSchema": [
@@ -1891,6 +1907,11 @@ enum PanelTools {
         case "video_generate": return film(args)
         case "video_status": return (DiffuserClient.shared.videoReport, false)
         case "avatar_desktop": return desktop(args)
+        case "panel_result":
+            guard let id = (args["id"] as? String)?.trimmingCharacters(in: .whitespaces), !id.isEmpty else {
+                return ("panel_result 要 id（那次调用答的 id）", true)
+            }
+            return await LateCalls.result(id, wait: FilmTools.number(args["wait"]) ?? 0)
         case "panel_show":
             var info: [String: Any] = [:]
             if let mode = args["mode"] as? String, !mode.isEmpty { info["mode"] = mode }

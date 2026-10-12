@@ -23,7 +23,9 @@ final class LiveDraw: ObservableObject {
     /// Where it lives on the box: one of OpenMontage's skills.
     static let boxSkill = "~/OpenMontage/.agents/skills/huashu-art-motion"
 
-    struct Job: Identifiable {
+    /// One drawing or machine of an answer — kept in its folder as job.json, so it is under that answer
+    /// again after a relaunch (「先做1和2」, 2026-10-11).
+    struct Job: Identifiable, Codable {
         let id: String
         var message: UUID?
         let question: String
@@ -44,13 +46,25 @@ final class LiveDraw: ObservableObject {
         var scoring: String?
         /// huashu's moving painting, or a machine to touch (LiveMachine).
         var style = Style.painting
+        /// Cut off by the app going away in the middle: 「接着做」 goes on in its Claude conversation.
+        var cut = false
+        /// What its Claude runs cost so far, in US dollars at API prices (Claude Code's own count).
+        var cost: Double?
 
-        enum State { case drawing, ready, failed }
+        /// "$1.15 · 5:36": what it cost and how long its last run took — shown on its card.
+        var spent: String? {
+            let money = cost.map { String(format: "$%.2f", $0) }
+            let time = finished.map { Int($0.timeIntervalSince(started)) }.map { String(format: "%d:%02d", $0 / 60, $0 % 60) }
+            let parts = [money, time].compactMap { $0 }
+            return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        }
+
+        enum State: String, Codable { case drawing, ready, failed }
     }
 
     /// The two ways 画给我看 draws: 「画给我看」 — huashu, a few seconds of moving painting with knobs, in
     /// minutes — and 「做成一台机器」 — anatomy, an isometric machine to press and turn, in half an hour.
-    enum Style: String {
+    enum Style: String, Codable {
         case painting, machine
     }
 
@@ -62,6 +76,8 @@ final class LiveDraw: ObservableObject {
     /// The player the check draws in, off screen.
     private let checker = LivePlayer()
     private var processes: [String: Process] = [:]
+    /// Stopped with 「停」: its Claude ending is that, not something gone wrong.
+    private var stopping: Set<String> = []
 
     private init() {}
 
@@ -76,6 +92,7 @@ final class LiveDraw: ObservableObject {
         job.narrate = narrate && style == .painting
         job.style = style
         jobs[id] = job
+        save(job)
         if let message { byMessage[message] = id }
         Task { style == .machine ? await make(id, note: nil) : await run(id, note: nil) }
         return id
@@ -97,19 +114,77 @@ final class LiveDraw: ObservableObject {
     }
 
     func stop(_ id: String) {
-        processes[id]?.terminate()
+        guard let process = processes[id] else { return }
+        stopping.insert(id)
+        process.terminate()
+    }
+
+    /// 「接着做」: one cut off by a relaunch goes on in the same Claude conversation, from what is
+    /// already in its folder — not drawn again from nothing.
+    func resume(_ id: String) {
+        guard let job = jobs[id], job.state == .failed, job.cut, job.session != nil else { return }
+        let words = "app 重启打断了你刚才的工作。先看看文件夹里已经做好的部分，接着把它做完；做完照样检查一遍，再答一行标题。"
+        Task { job.style == .machine ? await make(id, note: "接着做", words: words) : await run(id, note: "接着做", words: words) }
     }
 
     private func update(_ id: String, _ change: (inout Job) -> Void) {
         guard var job = jobs[id] else { return }
         change(&job)
         jobs[id] = job
+        save(job)
     }
 
-    private func run(_ id: String, note: String?) async {
+    // MARK: - Across a relaunch
+
+    private static func file(_ id: String) -> URL {
+        LiveFilm.folder.appendingPathComponent(id).appendingPathComponent("job.json")
+    }
+
+    private func save(_ job: Job) {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        guard let data = try? encoder.encode(job) else { return }
+        try? FileManager.default.createDirectory(at: Self.file(job.id).deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: Self.file(job.id), options: .atomic)
+    }
+
+    /// The app is going away: every job as it stands is on disk already; written once more.
+    func rememberForQuit() {
+        jobs.values.forEach(save)
+    }
+
+    /// At launch: the last two weeks' drawings and machines come back, each under the answer it was
+    /// made for. One the app cut off in the middle can go on (「接着做」) where it was.
+    func restore() {
+        let folders = (try? FileManager.default.contentsOfDirectory(at: LiveFilm.folder, includingPropertiesForKeys: nil)) ?? []
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let since = Date().addingTimeInterval(-14 * 86_400)
+        for folder in folders {
+            guard jobs[folder.lastPathComponent] == nil,
+                  let data = try? Data(contentsOf: folder.appendingPathComponent("job.json")),
+                  var job = try? decoder.decode(Job.self, from: data), job.started > since else { continue }
+            if job.state == .drawing {
+                job.state = .failed
+                job.cut = job.session != nil
+                job.error = job.style == .machine ? "做到一半 app 重启了" : "画到一半 app 重启了"
+                job.finished = Date()
+            }
+            job.scoring = nil
+            jobs[job.id] = job
+            if let message = job.message { byMessage[message] = job.id }
+            save(job)
+        }
+    }
+
+    private func run(_ id: String, note: String?, words told: String? = nil) async {
         guard let job = jobs[id] else { return }
         func fail(_ text: String) { update(id) { $0.state = .failed; $0.error = text; $0.finished = Date() } }
-        update(id) { $0.state = .drawing; $0.error = nil; $0.finished = nil; $0.started = Date(); $0.step = note == nil ? "想怎么画" : "照你说的改" }
+        update(id) {
+            $0.state = .drawing; $0.error = nil; $0.finished = nil; $0.started = Date(); $0.cut = false
+            $0.step = told != nil ? "接着画" : note == nil ? "想怎么画" : "照你说的改"
+        }
         guard let binary = AgentHarness.claude.binary else { fail("这台 Mac 上没有 Claude Code"); return }
         if !FileManager.default.fileExists(atPath: Self.engine.appendingPathComponent("engine.js").path) {
             update(id) { $0.step = "从盒子拿 huashu 的画法（只这一次，25 MB）" }
@@ -120,7 +195,7 @@ final class LiveDraw: ObservableObject {
         }
         let folder = LiveFilm.folder.appendingPathComponent(id).appendingPathComponent("engine")
         try? FileManager.default.createDirectory(at: folder.appendingPathComponent("scenes"), withIntermediateDirectories: true)
-        let words = note.map { "改一下：\($0)\n\n改完照样用 live_check 看一遍，再答一行标题。" } ?? Self.ask(job)
+        let words = told ?? note.map { "改一下：\($0)\n\n改完照样用 live_check 看一遍，再答一行标题。" } ?? Self.ask(job)
         let route = Route(check: "live_check", allowed: "Read,Glob,Grep,Write,Edit,mcp__panel__live_check",
                           disallowed: "Bash,WebFetch,WebSearch,Task,NotebookEdit",
                           brief: Self.brief(id: id, skill: Self.skill.path), skill: Self.skill, minutes: 15)
@@ -180,10 +255,13 @@ final class LiveDraw: ObservableObject {
 
     /// 「做成一台机器」: Claude builds it with anatomy in its own folder and looks at it with machine_check,
     /// for up to fifty minutes; then its still is taken, it is kept, and the person is told.
-    private func make(_ id: String, note: String?) async {
+    private func make(_ id: String, note: String?, words told: String? = nil) async {
         guard let job = jobs[id] else { return }
         func fail(_ text: String) { update(id) { $0.state = .failed; $0.error = text; $0.finished = Date() } }
-        update(id) { $0.state = .drawing; $0.error = nil; $0.finished = nil; $0.started = Date(); $0.step = note == nil ? "想做成一台什么机器" : "照你说的改" }
+        update(id) {
+            $0.state = .drawing; $0.error = nil; $0.finished = nil; $0.started = Date(); $0.cut = false
+            $0.step = told != nil ? "接着做" : note == nil ? "想做成一台什么机器" : "照你说的改"
+        }
         guard let binary = AgentHarness.claude.binary else { fail("这台 Mac 上没有 Claude Code"); return }
         if case .failure(let why) = await LiveMachine.shared.node(on: AgentLauncher.childPath(for: binary)) {
             fail(why.localizedDescription)
@@ -193,11 +271,11 @@ final class LiveDraw: ObservableObject {
         do { skill = try LiveMachine.skill() } catch { fail("anatomy 放不好：\(error.localizedDescription)"); return }
         let folder = LiveMachine.work(id)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let words = note.map { "改一下：\($0)\n\n改完照样 node build.mjs 搭一遍、用 machine_check 看过，再答一行标题。" }
+        let words = told ?? note.map { "改一下：\($0)\n\n改完照样 node build.mjs 搭一遍、用 machine_check 看过，再答一行标题。" }
             ?? LiveMachine.ask(question: job.question, answer: job.answer)
         let route = Route(check: "machine_check", allowed: "Read,Glob,Grep,Write,Edit,Bash(node build.mjs:*),mcp__panel__machine_check",
                           disallowed: "WebFetch,WebSearch,Task,NotebookEdit",
-                          brief: LiveMachine.brief(id: id, skill: skill.path), skill: skill, minutes: 50)
+                          brief: LiveMachine.brief(id: id, skill: skill.path), skill: skill, minutes: 50, turns: 40)
         if let trouble = await claude(binary, id: id, folder: folder, words: words, resume: note == nil ? nil : job.session, route: route) {
             fail(trouble)
             return
@@ -238,6 +316,9 @@ final class LiveDraw: ObservableObject {
         let brief: String
         let skill: URL
         let minutes: Double
+        /// Turns at most (each re-reads the whole conversation: the turns are most of what it costs);
+        /// run out with its page built, the page is kept.
+        var turns: Int? = nil
     }
 
     /// One `claude -p` in the drawing's folder, its steps shown as it goes; nil when it finished well,
@@ -253,6 +334,7 @@ final class LiveDraw: ObservableObject {
                     "--allowedTools", route.allowed,
                     "--disallowedTools", route.disallowed,
                     "--append-system-prompt", route.brief]
+        if let turns = route.turns { args += ["--max-turns", String(turns)] }
         if let resume { args += ["--resume", resume] }
         args.append(words)
         var env = ProcessInfo.processInfo.environment.filter { !$0.key.hasPrefix("CLAUDE") && !$0.key.hasPrefix("ANTHROPIC") }
@@ -287,8 +369,14 @@ final class LiveDraw: ObservableObject {
                     update(id) { $0.step = step }
                 }
             case "result":
+                // What Claude Code says the run cost, at API prices — on a subscription it is the use
+                // counted against the plan. Added up over the drawing's runs (改一下 included).
+                if let usd = event["total_cost_usd"] as? Double { update(id) { $0.cost = ($0.cost ?? 0) + usd } }
                 let said = event["result"] as? String ?? ""
-                if event["is_error"] as? Bool == true || (event["subtype"] as? String ?? "success") != "success" {
+                if route.turns != nil, event["subtype"] as? String == "error_max_turns" {
+                    // Out of turns: whatever it has built is kept — the caller looks for the page.
+                    outcome = nil
+                } else if event["is_error"] as? Bool == true || (event["subtype"] as? String ?? "success") != "success" {
                     outcome = "Claude：" + (said.isEmpty ? (event["subtype"] as? String ?? "出错了") : String(said.prefix(300)))
                 } else {
                     outcome = nil
@@ -298,6 +386,9 @@ final class LiveDraw: ObservableObject {
             }
         }
         process.waitUntilExit()
+        // 「停」: Claude Code takes the signal and exits as if on its own, so the asking is what says it.
+        let asked = stopping.remove(id) != nil
+        if asked, outcome != nil { return "停了" }
         if process.terminationReason == .uncaughtSignal, outcome != nil { return "停了" }
         return outcome
     }
@@ -477,6 +568,7 @@ final class LiveDraw: ObservableObject {
             switch job.state {
             case .drawing: return "「\(job.question.prefix(30))」（\(job.id)）：在\(machine ? "做成机器" : "画")，\(job.step)"
             case .ready: return "「\(job.title ?? job.id)」（\(job.id)）：" + (machine ? "做好了，在对话里能摸（live_draw open 开它的窗口）" : "画好了，在活画里")
+                + (job.spent.map { "（\($0)）" } ?? "")
             case .failed: return "「\(job.question.prefix(30))」（\(job.id)）：没\(machine ? "做" : "画")成，\(job.error ?? "")"
             }
         }.joined(separator: "\n")

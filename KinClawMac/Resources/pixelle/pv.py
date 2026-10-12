@@ -51,6 +51,24 @@ class Failure(Exception):
     pass
 
 
+class Unreachable(Failure):
+    """The box, ssh or the API did not answer this time: a job there may well still be running."""
+    pass
+
+
+class FetchFailed(Failure):
+    """The job is done on the box; copying its files to this Mac did not work."""
+    pass
+
+
+# Exit codes the app tells apart: a real failure, no answer from the box, files not copied back.
+EXIT_FAILED, EXIT_UNREACHABLE, EXIT_FETCH = 1, 3, 4
+
+# curl's "could not get through" codes (resolve, connect, timeout, TLS, empty reply, send, receive) and
+# ssh's own failure: the call did not reach the API, it says nothing about the job.
+TRANSPORT = {5, 6, 7, 28, 35, 52, 55, 56, 255}
+
+
 # ---------------------------------------------------------------- transport
 
 def ssh(cmd, stdin=None, timeout=120, binary=False):
@@ -59,7 +77,7 @@ def ssh(cmd, stdin=None, timeout=120, binary=False):
         r = subprocess.run(SSH + [PATHX + cmd], input=stdin, capture_output=True,
                            timeout=timeout, text=not binary)
     except subprocess.TimeoutExpired:
-        raise Failure("the box did not answer within %d s (ssh %s)" % (timeout, BOX))
+        raise Unreachable("the box did not answer within %d s (ssh %s)" % (timeout, BOX))
     return r.returncode, r.stdout, r.stderr
 
 
@@ -74,8 +92,9 @@ def api(method, path, body=None, timeout=120):
     rc, out, err = ssh(cmd, stdin=data, timeout=timeout + 30)
     if rc != 0:
         if rc == 7 or "Failed to connect" in (err or ""):
-            raise Failure("Pixelle API is not running on the box (port %d). Start it: pv.py start" % PORT)
-        raise Failure("box call failed (rc %d): %s" % (rc, (err or out).strip()[:400]))
+            raise Unreachable("Pixelle API is not running on the box (port %d). Start it: pv.py start" % PORT)
+        kind = Unreachable if rc in TRANSPORT else Failure
+        raise kind("box call failed (rc %d): %s" % (rc, (err or out).strip()[:400]))
     text, _, code = out.rstrip("\n").rpartition("\n")
     try:
         status = int(code)
@@ -87,7 +106,9 @@ def api(method, path, body=None, timeout=120):
         payload = {"raw": text[:2000]}
     if status >= 400:
         detail = payload.get("detail") if isinstance(payload, dict) else None
-        raise Failure("API %s %s -> HTTP %d: %s" % (method, path, status, detail or text[:800]))
+        # A 5xx is the server busy or restarting, not an answer about the job.
+        kind = Unreachable if status >= 500 else Failure
+        raise kind("API %s %s -> HTTP %d: %s" % (method, path, status, detail or text[:800]))
     return payload
 
 
@@ -184,7 +205,8 @@ echo "LTX $(curl -s -m 5 http://127.0.0.1:8001/api/health)"
                            "percent": (t.get("progress") or {}).get("percentage"),
                            "created": t.get("created_at")} for t in tasks]
     except Failure as e:
-        report["jobs"] = str(e)
+        # Not "no jobs": the list could not be read this time.
+        report["jobs_error"] = str(e)
     out(report)
 
 
@@ -531,8 +553,31 @@ def comfy_queue():
 def cmd_wait(args):
     t0 = time.time()
     last_msg, last_change = None, time.time()
+    lost_since, lost_said = None, None
     while True:
-        task = api("GET", "/api/tasks/%s" % args.task, timeout=20)
+        # A look that gets no answer is not news about the job: it is said, and the next look is
+        # tried — only a long silence ends the wait, and then as "lost contact", never as "failed".
+        try:
+            task = api("GET", "/api/tasks/%s" % args.task, timeout=20)
+        except Unreachable as e:
+            now = time.time()
+            lost_since = lost_since or now
+            if lost_said is None or now - lost_said >= 60:
+                print("[%4ds] no answer from the box this time (%s); the job goes on there, still following"
+                      % (now - t0, str(e)[:160]), flush=True)
+                lost_said = now
+            if now - lost_since > args.lost:
+                raise Unreachable("lost contact with the box for %d min while following task %s; "
+                                  "it may still be running there: %s" % ((now - lost_since) // 60, args.task, e))
+            if now - t0 > args.timeout:
+                print("still following %s after %d s — no answer from the box for %d s; "
+                      "run `pv.py wait %s` again" % (args.task, args.timeout, now - lost_since, args.task))
+                return
+            time.sleep(args.every)
+            continue
+        if lost_since is not None:
+            print("[%4ds] the box answers again" % (time.time() - t0), flush=True)
+            lost_since, lost_said = None, None
         status = task["status"]
         prog = task.get("progress") or {}
         msg = "%s %s%%" % (prog.get("message") or status, int(prog.get("percentage") or 0))
@@ -550,7 +595,10 @@ def cmd_wait(args):
             fetch_result(result, task.get("request_params"))
             return
         if status in ("failed", "cancelled"):
-            rc, text, err = ssh("grep -E 'ERROR|Error|error' %s | tail -n 8" % LOG, timeout=30)
+            try:
+                rc, text, err = ssh("grep -E 'ERROR|Error|error' %s | tail -n 8" % LOG, timeout=30)
+            except Unreachable:
+                text = "(the log could not be read)"
             raise Failure("job %s %s: %s\nlog:\n%s" % (args.task, status, task.get("error"), text.strip()))
         if time.time() - t0 > args.timeout:
             print("still %s after %d s — run `pv.py wait %s` again (the job keeps going on the box)"
@@ -580,7 +628,7 @@ def fetch_result(result, request=None):
         r = subprocess.run(["scp", "-q", "-r", "-o", "BatchMode=yes", src.rstrip("/") + "/.", local],
                            capture_output=True, text=True)
         if r.returncode != 0:
-            raise Failure("copy from the box failed: %s" % (r.stderr.strip()[:400]))
+            raise FetchFailed("copy from the box failed: %s" % (r.stderr.strip()[:400]))
     with open(os.path.join(local, "result.json"), "w") as f:
         json.dump({"result": result, "request": request}, f, ensure_ascii=False, indent=2)
     final = os.path.join(local, "final.mp4")
@@ -664,7 +712,9 @@ def main():
     s = sub.add_parser("make"); s.add_argument("--file"); s.set_defaults(fn=cmd_make)
     s = sub.add_parser("rework"); s.add_argument("--file"); s.set_defaults(fn=cmd_rework)
     s = sub.add_parser("wait"); s.add_argument("task"); s.add_argument("--timeout", type=int, default=540)
-    s.add_argument("--every", type=int, default=10); s.set_defaults(fn=cmd_wait)
+    s.add_argument("--every", type=int, default=10)
+    s.add_argument("--lost", type=int, default=900, help="seconds without an answer before giving up (exit 3)")
+    s.set_defaults(fn=cmd_wait)
     s = sub.add_parser("fetch"); s.add_argument("ref"); s.set_defaults(fn=cmd_fetch)
     sub.add_parser("tasks").set_defaults(fn=cmd_tasks)
     s = sub.add_parser("cancel"); s.add_argument("task"); s.set_defaults(fn=cmd_cancel)
@@ -674,7 +724,7 @@ def main():
         args.fn(args)
     except Failure as e:
         print("error: %s" % e, file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_UNREACHABLE if isinstance(e, Unreachable) else EXIT_FETCH if isinstance(e, FetchFailed) else EXIT_FAILED)
 
 
 if __name__ == "__main__":

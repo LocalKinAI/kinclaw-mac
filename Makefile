@@ -172,8 +172,30 @@ sign-app: ## Sign the built .app with stable identifier (assumes build ran)
 	$(REPO_ROOT)/scripts/sign-app.sh "$$APP"
 
 .PHONY: sign
-sign: kill bootstrap build bundle-kernel sign-helpers sign-app ## Full sign loop: bootstrap kinclaw + kill + build + bundle the kernel + sign all
+sign: kill-app bootstrap build bundle-kernel sign-helpers sign-app ## Full sign loop: quit the app + bootstrap kinclaw + build + bundle the kernel + sign all
 	@printf "\n✓ Signed everything. Launch with: \033[33mmake run\033[0m\n"
+
+# The app alone, not the processes that outlive it well (「重启不打断」, 2026-10-11).
+# SIGTERM is a quit for the app: it remembers which agents and Code sessions were
+# running and resumes them at the next launch. Its panel relays are the same
+# binary run with --mcp-stdio — a pattern anchored at the bare binary path misses
+# them, and they reach the next app by themselves (they read ~/.localkin/panel.json
+# on every call). The kernel is left to start-helpers, which restarts it only when
+# it changed. `make kill` still stops everything.
+APP_PROC := /KinClawMac\.app/Contents/MacOS/KinClawMac$$
+
+.PHONY: kill-app
+kill-app: ## Quit the KinClawMac app only (its relays and the kernel stay)
+	@pids="$$(pgrep -f '$(APP_PROC)' || true)"; \
+	if [[ -n "$$pids" ]]; then \
+	  echo "  → quitting KinClawMac ($$pids)"; \
+	  kill -TERM $$pids 2>/dev/null || true; \
+	  for i in $$(seq 1 40); do pgrep -f '$(APP_PROC)' >/dev/null || break; sleep 0.25; done; \
+	  if pgrep -f '$(APP_PROC)' >/dev/null; then \
+	    echo "  ⚠ still up after 10 s — killing it"; \
+	    pkill -9 -f '$(APP_PROC)' || true; \
+	  fi; \
+	fi
 
 .PHONY: start-helpers
 start-helpers: ## Start kinclaw as a detached daemon (PPID=1, survives shell exit)
@@ -252,9 +274,18 @@ print(",".join(parts).rstrip(","))' 2>/dev/null); \
 	else \
 	  printf "  → SearXNG :8080 not reachable — web_search will degrade to web_scrape\n"; \
 	fi; \
+	KERNEL_PRINT="$$( { shasum -a 256 "$(LOCALKIN_BIN)/kinclaw"; \
+	  find "$(KINCLAW_REPO)/souls" -type f -name '*.md' -exec shasum -a 256 {} + ; } 2>/dev/null | shasum -a 256 | cut -c1-16 )"; \
+	if pgrep -x kinclaw >/dev/null 2>&1 && \
+	   [[ "$$(cat $(LOG_DIR)/kinclaw.fingerprint 2>/dev/null)" != "$$KERNEL_PRINT" ]]; then \
+	  echo "  → kinclaw changed since it started (its binary or souls) — restarting it"; \
+	  pkill -x kinclaw 2>/dev/null || true; \
+	  for i in $$(seq 1 20); do pgrep -x kinclaw >/dev/null || break; sleep 0.25; done; \
+	fi; \
 	if pgrep -x kinclaw >/dev/null 2>&1; then \
-	  echo "  → kinclaw already running on :5001 (skipping)"; \
+	  echo "  → kinclaw running on :5001, unchanged — kept (its conversations and brain stay)"; \
 	else \
+	  echo "$$KERNEL_PRINT" > $(LOG_DIR)/kinclaw.fingerprint; \
 	  echo "  → starting kinclaw on :5001 (log: $(LOG_DIR)/kinclaw.log)"; \
 	  if [[ -f "$(PILOT_SOUL)" ]]; then \
 	    ( KINCLAW_SKILL_DIRS="$$KINCLAW_SKILL_PATH" \
@@ -292,7 +323,7 @@ print(",".join(parts).rstrip(","))' 2>/dev/null); \
 	printf "\n  ⚠ the kernel didn't bind within 15s — check $(LOG_DIR)/kinclaw.log\n"
 
 .PHONY: run
-run: sign start-helpers ## kill + sign + start the kernel detached + launch app
+run: sign start-helpers ## quit the app + sign + start the kernel (or keep it, unchanged) + launch app
 	@# Kernel-first ordering: by the time KinClawMac launches, kinclaw
 	@# is already serving. The supervisor's adoption path picks it up
 	@# immediately (state = .adoptedExternal). No spawn race, no
@@ -318,6 +349,12 @@ kill: ## Stop KinClawMac + the kernel (kinclaw)
 	@# Give them a moment to drop ports / file handles before re-signing.
 	@sleep 1
 	@echo "✓ Stopped"
+
+.PHONY: test
+test: ## Tests that need neither the app nor the box: pv.py's waits, the Montage bridge's jobs, the machine check in WebKit
+	@python3 -I scripts/tests/test_pv.py
+	@python3 -I scripts/tests/test_om_bridge.py
+	@scripts/tests/machinecheck/run.sh
 
 .PHONY: doctor
 doctor: ## Show signing state + running processes (diagnostic)

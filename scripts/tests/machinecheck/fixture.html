@@ -1,0 +1,18 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>测试机</title>
+<style>body{margin:0;background:#f2f2ef}figure{margin:0}.iso-page{width:650px;margin:64px auto}.iso-plate{position:relative;height:300px;background:#fbfbfa}
+button{position:absolute;left:20px;top:250px}[data-readout]{position:absolute;right:20px;top:258px}</style></head>
+<body><main class="iso-page"><figure class="iso-figure"><div class="iso-plate">
+<svg width="600" height="240" viewBox="0 0 600 240">
+  <rect x="100" y="60" width="200" height="120" fill="#ddd" stroke="#333"/>
+  <path class="iso-line" d="M100 100 L300 100" stroke="#333"/>
+  <path class="iso-line" d="M350 100 L420 100" stroke="#333"/>
+</svg>
+<span data-readout>按了 0 次</span><button data-ctl="press">按</button>
+</div></figure></main>
+<script type="module">
+let presses = 0, frames = 0;
+const readout = document.querySelector('[data-readout]');
+document.querySelector('[data-ctl=press]').addEventListener('click', () => { readout.textContent = `按了 ${++presses} 次`; });
+(function tick() { frames++; requestAnimationFrame(tick); })();
+window.__frames = () => frames;
+</script></body></html>

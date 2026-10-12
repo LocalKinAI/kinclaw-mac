@@ -4057,7 +4057,9 @@ struct SpotlightContentView: View {
                               messages: apiMessages)
     }
 
-    private func sendLocal(text: String, assistantIndex: Int) {
+    /// `fellBack`: sent again after the cloud brain ran out of quota and the kernel was switched to
+    /// the box's model (BrainFallback) — once; a second quota error is shown as it is.
+    private func sendLocal(text: String, assistantIndex: Int, fellBack: Bool = false) {
         guard let agent = selectedAgent else { return }
         localStreamTask?.cancel()
         let task = Task { @MainActor in
@@ -4080,9 +4082,15 @@ struct SpotlightContentView: View {
                 isStreaming = false
                 return
             }
+            var outOfQuota = false
             do {
                 for try await event in stream {
                     if Task.isCancelled { break }
+                    // The cloud brain out of quota: not an error to show, but a switch to make.
+                    if event.kind == .error, !fellBack, BrainFallback.isQuota(event.message ?? "") {
+                        outOfQuota = true
+                        break
+                    }
                     handleLocalEvent(event, assistantIndex: assistantIndex)
                     if event.kind == .turnDone || event.kind == .error { break }
                 }
@@ -4092,6 +4100,20 @@ struct SpotlightContentView: View {
                 {
                     messages[assistantIndex].content =
                         "stream error: \(error.localizedDescription)"
+                }
+            }
+            if outOfQuota, !Task.isCancelled {
+                if let said = await BrainFallback.switchFromCloud(current: coworkActiveModel),
+                   messages.indices.contains(assistantIndex) {
+                    coworkActiveProvider = "ollama"
+                    coworkActiveModel = BrainFallback.model
+                    messages[assistantIndex].content = "> ⚠︎ \(said)\n\n"
+                    // The same words again, to the new brain — once.
+                    sendLocal(text: text, assistantIndex: assistantIndex, fellBack: true)
+                    return
+                }
+                if messages.indices.contains(assistantIndex) {
+                    messages[assistantIndex].content += "**Error:** 云端模型的额度用完了，盒子上也没有可以换的模型（\(BrainFallback.model)）：在模型菜单里换一个"
                 }
             }
             // Interrupted (barge-in, Stop, a new send): the reply that was

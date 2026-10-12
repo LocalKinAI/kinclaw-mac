@@ -142,58 +142,16 @@ enum MotionWhole {
         _ = try await FilmStudio.upload(depth, as: depthName, to: base)
     }
 
-    /// Queue a graph and bring back the first file each of `nodes` saved.
+    /// Queue a graph — or take up the same one already queued — and bring back the first file each
+    /// of `nodes` saved (ComfyJob).
     static func outputs(_ graph: [String: Any], nodes: [String], base: String, what: String,
                         deadline seconds: TimeInterval) async throws -> [String: Data] {
-        guard let url = URL(string: base + "/prompt") else { throw FilmStudio.Failure.message("ComfyUI 地址不对") }
-        var request = URLRequest(url: url, timeoutInterval: 30)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: ["prompt": graph, "client_id": "kinclaw-motion"])
-        let (data, response) = try await URLSession.shared.data(for: request)
-        let answer = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
-        guard (response as? HTTPURLResponse)?.statusCode == 200, let id = answer["prompt_id"] as? String else {
-            throw FilmStudio.Failure.message("ComfyUI 不接这个\(what)：\(String(data: data, encoding: .utf8)?.prefix(300) ?? "")")
+        let done = try await ComfyJob.run(graph, base: base, what: what, client: "kinclaw-motion", deadline: seconds)
+        var found: [String: Data] = [:]
+        for node in nodes {
+            if let bytes = try await ComfyJob.file(done, node: node, base: base, what: what), bytes.count > 1000 { found[node] = bytes }
         }
-        ComfyWatch.shared.began(id, what: what, base: base)
-        defer { ComfyWatch.shared.ended(id) }
-        do {
-            let deadline = Date().addingTimeInterval(seconds)
-            while Date() < deadline {
-                try await Task.sleep(nanoseconds: 4_000_000_000)
-                guard let hurl = URL(string: base + "/history/\(id)"),
-                      let (hdata, _) = try? await URLSession.shared.data(from: hurl),
-                      let history = (try? JSONSerialization.jsonObject(with: hdata)) as? [String: Any],
-                      let entry = history[id] as? [String: Any] else { continue }
-                let status = entry["status"] as? [String: Any]
-                if status?["status_str"] as? String == "error" {
-                    let raw = status?["messages"] as? [[Any]] ?? []
-                    if raw.contains(where: { $0.first as? String == "execution_interrupted" }) {
-                        throw FilmStudio.Failure.message(await ComfyWatch.reason(id, what: what, base: base) ?? "\(what)在盒子上被打断了")
-                    }
-                    let messages = raw.compactMap { $0.count > 1 ? $0[1] as? [String: Any] : nil }
-                    throw FilmStudio.Failure.message("\(what)出错：" + (messages.compactMap { $0["exception_message"] as? String }.first ?? "看盒子上的 comfy.log").prefix(300))
-                }
-                guard status?["completed"] as? Bool == true else { continue }
-                var found: [String: Data] = [:]
-                for node in nodes {
-                    let saved = ((entry["outputs"] as? [String: Any])?[node] as? [String: Any])?["images"] as? [[String: Any]] ?? []
-                    guard let file = saved.first, let name = file["filename"] as? String else { continue }
-                    var parts = URLComponents(string: base + "/view")
-                    parts?.queryItems = [URLQueryItem(name: "filename", value: name),
-                                         URLQueryItem(name: "subfolder", value: file["subfolder"] as? String ?? ""),
-                                         URLQueryItem(name: "type", value: "output")]
-                    guard let view = parts?.url else { continue }
-                    let (bytes, _) = try await URLSession.shared.data(from: view)
-                    if bytes.count > 1000 { found[node] = bytes }
-                }
-                return found
-            }
-            throw FilmStudio.Failure.message("\(what)跑了 \(Int(seconds / 60)) 分钟还没好")
-        } catch {
-            if Task.isCancelled { await ComfyWatch.interrupt(id, base: base, by: "KinClaw Motion（\(what)）", why: "在 app 里停下了") }
-            throw error
-        }
+        return found
     }
 
     // MARK: Clay

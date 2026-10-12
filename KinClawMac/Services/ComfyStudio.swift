@@ -172,7 +172,8 @@ final class ComfyStudio: NSObject, ObservableObject {
     private var loadedBase: String?
     private var work: Task<Void, Never>?
     private var promptID: String?
-    private let client = UUID().uuidString
+    /// Its own client id for ComfyUI's websocket, named so the box's progress desk says whose job it is.
+    private let client = "kinclaw-comfy-" + UUID().uuidString
 
     override init() {
         let config = WKWebViewConfiguration()
@@ -926,17 +927,21 @@ final class ComfyStudio: NSObject, ObservableObject {
         working = "交给 ComfyUI"
         guard let prompt = try? await js("const p = await window.app.graphToPrompt(); return JSON.stringify(p.output);"),
               let graph = try? await js("return JSON.stringify(window.app.graph.serialize());"),
-              let output = try? JSONSerialization.jsonObject(with: Data(prompt.utf8)),
-              let url = URL(string: Self.base + "/prompt") else { note = "工作流转不成 ComfyUI 能跑的样子"; return }
-        let sent = await Self.onGPU(output, base: Self.base)
-        var request = URLRequest(url: url, timeoutInterval: 30)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["prompt": sent, "client_id": client])
-        guard let (data, response) = try? await URLSession.shared.data(for: request) else { note = "ComfyUI 没应答"; return }
-        let answer = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
-        guard (response as? HTTPURLResponse)?.statusCode == 200, let id = answer["prompt_id"] as? String else {
+              let output = try? JSONSerialization.jsonObject(with: Data(prompt.utf8)) as? [String: Any] else {
+            note = "工作流转不成 ComfyUI 能跑的样子"
+            return
+        }
+        let sent = (await Self.onGPU(output, base: Self.base)) as? [String: Any] ?? output
+        // Queued once (ComfyJob): an answer lost on the way does not queue it twice. A run asked for
+        // again is run again — a template with a kept seed is not taken from the history.
+        let id: String
+        do {
+            id = try await ComfyJob.submit(sent, base: Self.base, what: template.title, client: client, reuseDone: false)
+        } catch ComfyJob.Trouble.refused(_, let answer) {
             note = "ComfyUI 不接：" + Self.explain(answer)
+            return
+        } catch {
+            note = "ComfyUI 没应答：\(error.localizedDescription)"
             return
         }
         promptID = id
@@ -945,36 +950,27 @@ final class ComfyStudio: NSObject, ObservableObject {
         defer { socket?.cancel(with: .normalClosure, reason: nil) }
         ComfyWatch.shared.began(id, what: template.title, base: Self.base)
         defer { ComfyWatch.shared.ended(id) }
-        // Done when the history has it. Video workflows run for many minutes.
-        var outputs: [[String: Any]] = []
-        var status = ""
-        while !Task.isCancelled {
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            guard let hurl = URL(string: Self.base + "/history/\(id)"),
-                  let (hdata, _) = try? await URLSession.shared.data(from: hurl),
-                  let history = (try? JSONSerialization.jsonObject(with: hdata)) as? [String: Any],
-                  let entry = history[id] as? [String: Any] else { continue }
-            let state = entry["status"] as? [String: Any]
-            status = state?["status_str"] as? String ?? ""
-            guard state?["completed"] as? Bool == true || status == "error" else { continue }
-            for (_, node) in entry["outputs"] as? [String: Any] ?? [:] {
-                for (_, list) in node as? [String: Any] ?? [:] {
-                    for item in list as? [[String: Any]] ?? [] where item["filename"] != nil { outputs.append(item) }
-                }
-            }
-            if status == "error" {
-                let raw = state?["messages"] as? [[Any]] ?? []
-                let messages = raw.compactMap { $0.count > 1 ? $0[1] as? [String: Any] : nil }
-                let error = messages.compactMap { $0["exception_message"] as? String }.first ?? "看盒子上的 ~/Library/Logs/kinclaw/comfy.log"
-                if raw.contains(where: { $0.first as? String == "execution_interrupted" }) {
-                    note = await ComfyWatch.reason(id, what: "这个工作流", base: Self.base) ?? "在盒子上被打断了"
-                } else {
-                    note = "ComfyUI 跑出错了：" + error.prefix(300)
-                }
-            }
-            break
+        // Done when the history has it. Video workflows run for many minutes — no time limit here;
+        // a job that vanished from the box, or a box out of reach for half an hour, is said.
+        let done: ComfyJob.Done
+        do {
+            done = try await ComfyJob.finish(id, base: Self.base, what: template.title, deadline: nil, by: "KinClaw Comfy 标签")
+        } catch {
+            note = Task.isCancelled ? "停下了" : error.localizedDescription
+            return
         }
-        if Task.isCancelled { note = "停下了"; return }
+        var outputs: [[String: Any]] = []
+        for (_, node) in done.outputs {
+            for (_, list) in node as? [String: Any] ?? [:] {
+                for item in list as? [[String: Any]] ?? [] where item["filename"] != nil { outputs.append(item) }
+            }
+        }
+        let status = done.failed ? "error" : "success"
+        if done.interrupted {
+            note = await ComfyWatch.reason(id, what: "这个工作流", base: Self.base) ?? "在盒子上被打断了"
+        } else if done.failed {
+            note = "ComfyUI 跑出错了：" + (done.error ?? "看盒子上的 ~/Library/Logs/kinclaw/comfy.log").prefix(300)
+        }
         // What was saved, not the previews along the way — unless previews are all there is.
         let saved = outputs.filter { $0["type"] as? String == "output" }
         let keep = saved.isEmpty ? outputs : saved
@@ -985,16 +981,16 @@ final class ComfyStudio: NSObject, ObservableObject {
         try? Data(graph.utf8).write(to: folder.appendingPathComponent("workflow.json"))
         try? Data(prompt.utf8).write(to: folder.appendingPathComponent("prompt.json"))
         var files: [URL] = []
+        var lost: [String] = []
         for item in keep {
             guard let name = item["filename"] as? String else { continue }
-            var parts = URLComponents(string: Self.base + "/view")
-            parts?.queryItems = [URLQueryItem(name: "filename", value: name),
-                                 URLQueryItem(name: "subfolder", value: item["subfolder"] as? String ?? ""),
-                                 URLQueryItem(name: "type", value: item["type"] as? String ?? "output")]
-            guard let url = parts?.url, let (bytes, response) = try? await URLSession.shared.data(from: url),
-                  (response as? HTTPURLResponse)?.statusCode == 200, !bytes.isEmpty else { continue }
+            // Fetched again when the fetch fails on the way; one that still won't come is said.
+            guard let bytes = try? await ComfyJob.fetch(item, base: Self.base, what: name), !bytes.isEmpty else {
+                lost.append(name)
+                continue
+            }
             let file = folder.appendingPathComponent((name as NSString).lastPathComponent)
-            if (try? bytes.write(to: file)) != nil { files.append(file) }
+            if (try? bytes.write(to: file)) != nil { files.append(file) } else { lost.append(name) }
         }
         let seconds = Int(Date().timeIntervalSince(since ?? Date()))
         let meta: [String: Any] = ["template": template.name, "title": template.title, "seconds": seconds, "status": status,
@@ -1002,11 +998,14 @@ final class ComfyStudio: NSObject, ObservableObject {
         if let json = try? JSONSerialization.data(withJSONObject: meta, options: [.prettyPrinted, .sortedKeys]) {
             try? json.write(to: folder.appendingPathComponent("run.json"))
         }
+        let missing = lost.isEmpty ? "" : "；\(lost.count) 个文件在盒子上、没取回来（\(lost.prefix(3).joined(separator: "、"))），在盒子的 ComfyUI output 文件夹里"
         if files.isEmpty {
-            if note == nil { note = "跑完了，但没有拿到输出（这个工作流可能只预览不保存）" }
+            if note == nil {
+                note = lost.isEmpty ? "跑完了，但没有拿到输出（这个工作流可能只预览不保存）" : "跑完了" + missing
+            }
             try? FileManager.default.removeItem(at: folder.appendingPathComponent("prompt.json"))
         } else {
-            note = "好了：\(files.count) 个文件，\(seconds) 秒"
+            note = "好了：\(files.count) 个文件，\(seconds) 秒" + missing
         }
         loadRuns()
     }

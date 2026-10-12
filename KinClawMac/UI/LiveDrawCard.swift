@@ -26,11 +26,16 @@ struct LiveDrawCard: View {
                 }
                 .buttonStyle(.quiet)
                 .help("让 Claude 用 huashu 的画法，把这个回答画成一段会动、能拧旋钮去试的讲解（8–15 秒），就在这里实时播。一两分钟到几分钟")
-                Button { draw.start(question: question, answer: message.content, message: message.id, style: .machine) } label: {
-                    Label("做成一台机器", systemImage: "gearshape.2")
+                // A machine is half an hour and a dollar or two of Claude: for an answer that explains
+                // something, not a greeting (two were made for 「你好」, 2026-10-10).
+                if Self.explains(message.content) {
+                    Button { draw.start(question: question, answer: message.content, message: message.id, style: .machine) } label: {
+                        Label("做成一台机器", systemImage: "gearshape.2")
+                    }
+                    .buttonStyle(.quiet)
+                    .help("让 Claude 用 anatomy 的做法，把这个道理做成一台能摸的小机器：等轴测、几十个精细的零件、读数是真的，能按、能拧、能拖。"
+                          + "在后台做，几分钟到半小时，做好了通知你，就在这里摸。一台约 $1–2.5 的 Claude 用量（按 API 价折算）")
                 }
-                .buttonStyle(.quiet)
-                .help("让 Claude 用 anatomy 的做法，把这个道理做成一台能摸的小机器：等轴测、几十个精细的零件、读数是真的，能按、能拧、能拖。在后台做，一刻钟到半小时，做好了通知你，就在这里摸")
             }
         }
     }
@@ -58,8 +63,16 @@ struct LiveDrawCard: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("没\(machine ? "做" : "画")成：\(job.error ?? "不知道为什么")")
                     .font(.kinCaption).foregroundStyle(Theme.notice).lineLimit(4).textSelection(.enabled)
-                Button { draw.retry(job.id) } label: { Label(machine ? "再做一次" : "再画一次", systemImage: "arrow.clockwise") }
-                    .buttonStyle(.quiet)
+                HStack(spacing: 14) {
+                    // Cut off by a relaunch: on from where it was, in the same Claude conversation.
+                    if job.cut, job.session != nil {
+                        Button { draw.resume(job.id) } label: { Label("接着做", systemImage: "play.fill") }
+                            .buttonStyle(.quiet)
+                            .help("接着刚才那段 Claude 对话，从文件夹里已经做好的部分往下做，不从头再来")
+                    }
+                    Button { draw.retry(job.id) } label: { Label(machine ? "再做一次" : "再画一次", systemImage: "arrow.clockwise") }
+                        .buttonStyle(.quiet)
+                }
             }
             .frame(maxWidth: 640, alignment: .leading)
         case .ready:
@@ -98,6 +111,7 @@ struct LiveDrawCard: View {
             .clipShape(RoundedRectangle(cornerRadius: 8))
             HStack(spacing: 10) {
                 Text(job.title ?? "").font(.kinCaption.weight(.semibold)).lineLimit(1)
+                Self.spent(job)
                 Spacer(minLength: 8)
                 Button { revising.toggle() } label: { Label("改一下", systemImage: "pencil") }
                     .buttonStyle(.quiet)
@@ -156,6 +170,7 @@ struct LiveDrawCard: View {
             }
             HStack(spacing: 10) {
                 Text(job.title ?? "").font(.kinCaption.weight(.semibold)).lineLimit(1)
+                Self.spent(job)
                 Spacer(minLength: 8)
                 LiveOutButtons(id: job.id, player: draw.inline)
                 Button { revising.toggle() } label: { Label("改一下", systemImage: "pencil") }
@@ -185,6 +200,23 @@ struct LiveDrawCard: View {
         draw.revise(id, note: note)
         note = ""
         revising = false
+    }
+
+    /// An answer that explains something — long enough to have an idea in it — rather than a greeting
+    /// or a one-line reply.
+    static func explains(_ answer: String) -> Bool {
+        answer.filter { !$0.isWhitespace }.count >= 200
+    }
+
+    /// What it cost and how long it took, quietly beside its title.
+    @ViewBuilder
+    static func spent(_ job: LiveDraw.Job) -> some View {
+        if let spent = job.spent {
+            Text(spent)
+                .font(.kinCaption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .help("Claude Code 报的花费（按 API 价折算；用订阅时算在订阅的用量里），和最后一次画用了多久")
+        }
     }
 
     static func elapsed(_ seconds: TimeInterval) -> String {

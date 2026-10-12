@@ -61,6 +61,10 @@ final class MachineCheck: NSObject {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
         config.mediaTypesRequiringUserActionForPlayback = []
+        // A file page is an origin of its own otherwise, and an exception thrown in a callback (a
+        // timer, an animation frame, a click) comes back as "Script error." with nothing in it —
+        // anatomy's Chrome checks run with --allow-file-access-from-files for the same reason.
+        config.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
         let frame = NSRect(x: 0, y: 0, width: 1440, height: 1100)
         view = WKWebView(frame: frame, configuration: config)
         window = NSWindow(contentRect: frame.offsetBy(dx: -20000, dy: -20000), styleMask: [.borderless],

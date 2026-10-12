@@ -198,57 +198,21 @@ extension FilmStudio {
             "8": node("VAEDecodeAudio", ["samples": ["7", 0], "vae": ["3", 0]]),
             "9": node("SaveAudioAdvanced", ["audio": ["8", 0], "filename_prefix": "audio/kinclaw-score", "format": "flac"]),
         ]
-        guard let url = URL(string: base + "/prompt") else { throw Failure.message("ComfyUI 地址不对") }
-        var request = URLRequest(url: url, timeoutInterval: 30)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: ["prompt": graph, "client_id": "kinclaw-film"])
-        let (data, response) = try await URLSession.shared.data(for: request)
-        let answer = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
-        guard (response as? HTTPURLResponse)?.statusCode == 200, let id = answer["prompt_id"] as? String else {
-            throw Failure.message("ComfyUI 不接配乐：\(String(data: data, encoding: .utf8)?.prefix(300) ?? "")")
-        }
-        ComfyWatch.shared.began(id, what: "配乐", base: base)
-        defer { ComfyWatch.shared.ended(id) }
         // MiniMax Music 3's text stage is ~2.7 s a token on the box's CPU and a
         // 45 s piece is over a thousand tokens: fifty minutes (thirty was too
-        // few). On the GPU it is minutes, but the deadline is the CPU's.
-        let deadline = Date().addingTimeInterval(3 * 3600)
-        while Date() < deadline {
-            do {
-                try await Task.sleep(nanoseconds: 4_000_000_000)
-            } catch {
-                // Stopped here, stopped on the box: a score nobody will hear holds it for minutes.
-                await ComfyWatch.interrupt(id, base: base, by: "KinClaw Film（配乐）", why: "在 app 里停下了")
-                throw error
-            }
-            guard let hurl = URL(string: base + "/history/\(id)"),
-                  let (hdata, _) = try? await URLSession.shared.data(from: hurl),
-                  let history = (try? JSONSerialization.jsonObject(with: hdata)) as? [String: Any],
-                  let entry = history[id] as? [String: Any] else { continue }
-            let status = entry["status"] as? [String: Any]
-            if status?["status_str"] as? String == "error" {
-                throw Failure.message(await ComfyWatch.reason(id, what: "配乐", base: base) ?? "配乐出错（MiniMax Music 3）")
-            }
-            guard status?["completed"] as? Bool == true else { continue }
-            let saved = ((entry["outputs"] as? [String: Any])?["9"] as? [String: Any]).flatMap { $0["audio"] as? [[String: Any]] ?? $0["images"] as? [[String: Any]] } ?? []
-            guard let file = saved.first, let name = file["filename"] as? String else { throw Failure.message("配乐跑完了但没存下来") }
-            var parts = URLComponents(string: base + "/view")
-            parts?.queryItems = [URLQueryItem(name: "filename", value: name),
-                                 URLQueryItem(name: "subfolder", value: file["subfolder"] as? String ?? ""),
-                                 URLQueryItem(name: "type", value: "output")]
-            guard let view = parts?.url else { throw Failure.message("取不回配乐") }
-            let (bytes, _) = try await URLSession.shared.data(from: view)
-            guard bytes.count > 1000 else { throw Failure.message("取回来的配乐是空的") }
-            // FLAC from ComfyUI, WAV for the cut: decoded here with AVAudioFile
-            // rather than trusting a mixer to sniff FLAC inside a .wav name.
-            let flac = out.deletingPathExtension().appendingPathExtension("flac")
-            try? FileManager.default.removeItem(at: flac)
-            try bytes.write(to: flac)
-            try flacToWAV(flac, out)
-            return
+        // few). On the GPU it is minutes, but the deadline is the CPU's — from
+        // when it starts running, not from when it was queued (ComfyJob).
+        let done = try await ComfyJob.run(graph, base: base, what: "配乐", client: "kinclaw-score", deadline: 3 * 3600)
+        guard let bytes = try await ComfyJob.file(done, node: "9", base: base, what: "配乐") else {
+            throw Failure.message("配乐跑完了但没存下来")
         }
-        throw Failure.message("配乐三个小时还没好")
+        guard bytes.count > 1000 else { throw Failure.message("取回来的配乐是空的") }
+        // FLAC from ComfyUI, WAV for the cut: decoded here with AVAudioFile
+        // rather than trusting a mixer to sniff FLAC inside a .wav name.
+        let flac = out.deletingPathExtension().appendingPathExtension("flac")
+        try? FileManager.default.removeItem(at: flac)
+        try bytes.write(to: flac)
+        try flacToWAV(flac, out)
     }
 
     /// ACE-Step 1.5 XL Turbo on the box's ComfyUI (its official template, written
@@ -289,7 +253,9 @@ extension FilmStudio {
             "9": node("VAEDecodeAudio", ["samples": ["8", 0], "vae": ["4", 0]]),
             "10": node("SaveAudioAdvanced", ["audio": ["9", 0], "filename_prefix": "audio/kinclaw-score-ace", "format": "flac"]),
         ]
-        let bytes = try await comfyResult(graph, node: "10", base: base, what: "配乐", deadline: 3600)
+        // A drawing's music (LiveDraw asks for "live-<id>") is named for what it is on the box's desk.
+        let bytes = try await comfyResult(graph, node: "10", base: base, what: "配乐", deadline: 3600,
+                                          client: film.hasPrefix("live-") ? "kinclaw-live" : "kinclaw-score")
         let flac = out.deletingPathExtension().appendingPathExtension("flac")
         try? FileManager.default.removeItem(at: flac)
         try bytes.write(to: flac)

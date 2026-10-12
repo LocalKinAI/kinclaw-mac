@@ -77,7 +77,17 @@ final class TalkingVideo: ObservableObject {
     @Published private(set) var jobs: [Job] = []
     private var working: String?
 
-    private init() { load() }
+    private init() {
+        load()
+        // One cut off by the app going away, its speech already made, goes on by itself from the
+        // first piece not filmed — as a film does — instead of waiting for talking_video_continue.
+        // A piece still rendering on the box is taken up there (ComfyJob), not filmed twice.
+        if let cut = jobs.first(where: { $0.state == "failed" && $0.note?.hasPrefix(Self.cutNote) == true && !$0.pieces.isEmpty }) {
+            _ = resume(cut.id)
+        }
+    }
+
+    private static let cutNote = "app 重启时还没做完"
 
     // MARK: - Asking
 
@@ -482,7 +492,7 @@ final class TalkingVideo: ObservableObject {
                                                   "sigmas": ["9", 0], "latent_image": ["6", 1]])
         let what = "说话视频 \(index + 1)/\(job.pieces.count)"
         let video = try await FilmStudio.comfyResult(graph, node: "15", base: base, what: what,
-                                                     deadline: full ? 7200 : 3600)
+                                                     deadline: full ? 7200 : 3600, client: "kinclaw-talking")
         try? FileManager.default.removeItem(at: out)
         try video.write(to: out)
     }
@@ -749,7 +759,8 @@ final class TalkingVideo: ObservableObject {
                   var job = try? decoder.decode(Job.self, from: data) else { return nil }
             if ["speaking", "filming", "joining"].contains(job.state) {
                 job.state = "failed"
-                job.note = "app 重启时还没做完；talking_video_continue 从没拍的那段接着拍"
+                job.note = job.pieces.isEmpty ? Self.cutNote + "（说的那步被打断了，要重新做）"
+                                              : Self.cutNote + "：接着拍没拍完的那几段"
             }
             return job
         }.sorted { $0.started > $1.started }

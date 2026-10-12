@@ -337,64 +337,24 @@ extension FilmStudio {
         // A full shot is twenty steps of minutes each: ten seconds ran 80 minutes, and an hour's
         // deadline failed it with the picture nearly made (Motion's notebook, 2026-09-28).
         let deadline = max(3600, Double(steps * h3Frames(seconds)) * 1.2 + 900)
-        let video = try await comfyResult(graph, node: "15", base: base, what: "H3 镜头", deadline: deadline)
+        // Motion's takes render here too: the box's progress desk names the tab by the client id.
+        let video = try await comfyResult(graph, node: "15", base: base, what: "H3 镜头", deadline: deadline,
+                                          client: film.hasPrefix("motion-") ? "kinclaw-motion" : "kinclaw-film")
         try? FileManager.default.removeItem(at: out)
         try video.write(to: out)
     }
 
-    /// Queue a graph on the box's ComfyUI and bring back the first file its
-    /// `node` saved. Stopped here, it is stopped there too, or the box keeps
-    /// rendering something nobody will see for another few minutes.
+    /// Queue a graph on the box's ComfyUI — or take up the same graph already queued there, after a
+    /// relaunch or a lost answer — and bring back the first file its `node` saved (ComfyJob). The
+    /// deadline counts from when it starts running; stopped here, it is stopped there too.
     static func comfyResult(_ graph: [String: Any], node: String, base: String, what: String,
-                            deadline seconds: TimeInterval) async throws -> Data {
-        guard let url = URL(string: base + "/prompt") else { throw Failure.message("ComfyUI 地址不对") }
-        var request = URLRequest(url: url, timeoutInterval: 30)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: ["prompt": graph, "client_id": "kinclaw-film"])
-        let (data, response) = try await URLSession.shared.data(for: request)
-        let answer = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
-        guard (response as? HTTPURLResponse)?.statusCode == 200, let id = answer["prompt_id"] as? String else {
-            throw Failure.message("ComfyUI 不接这个\(what)：\(String(data: data, encoding: .utf8)?.prefix(300) ?? "")")
+                            deadline seconds: TimeInterval, client: String = "kinclaw-film") async throws -> Data {
+        let done = try await ComfyJob.run(graph, base: base, what: what, client: client, deadline: seconds)
+        guard let bytes = try await ComfyJob.file(done, node: node, base: base, what: what) else {
+            throw Failure.message("\(what)跑完了但没存下来")
         }
-        // Where it stands on the shared box — queue, node, step — for the tabs and the agents.
-        ComfyWatch.shared.began(id, what: what, base: base)
-        defer { ComfyWatch.shared.ended(id) }
-        do {
-            let deadline = Date().addingTimeInterval(seconds)
-            while Date() < deadline {
-                try await Task.sleep(nanoseconds: 4_000_000_000)
-                guard let hurl = URL(string: base + "/history/\(id)"),
-                      let (hdata, _) = try? await URLSession.shared.data(from: hurl),
-                      let history = (try? JSONSerialization.jsonObject(with: hdata)) as? [String: Any],
-                      let entry = history[id] as? [String: Any] else { continue }
-                let status = entry["status"] as? [String: Any]
-                if status?["status_str"] as? String == "error" {
-                    let raw = status?["messages"] as? [[Any]] ?? []
-                    if raw.contains(where: { $0.first as? String == "execution_interrupted" }) {
-                        throw Failure.message(await ComfyWatch.reason(id, what: what, base: base) ?? "\(what)在盒子上被打断了")
-                    }
-                    let messages = raw.compactMap { $0.count > 1 ? $0[1] as? [String: Any] : nil }
-                    throw Failure.message("\(what)出错：" + (messages.compactMap { $0["exception_message"] as? String }.first ?? "看盒子上的 comfy.log").prefix(300))
-                }
-                guard status?["completed"] as? Bool == true else { continue }
-                let outputs = ((entry["outputs"] as? [String: Any])?[node] as? [String: Any]) ?? [:]
-                let saved = outputs["images"] as? [[String: Any]] ?? outputs["audio"] as? [[String: Any]] ?? []
-                guard let file = saved.first, let name = file["filename"] as? String else { throw Failure.message("\(what)跑完了但没存下来") }
-                var parts = URLComponents(string: base + "/view")
-                parts?.queryItems = [URLQueryItem(name: "filename", value: name),
-                                     URLQueryItem(name: "subfolder", value: file["subfolder"] as? String ?? ""),
-                                     URLQueryItem(name: "type", value: "output")]
-                guard let view = parts?.url else { throw Failure.message("取不回\(what)") }
-                let (bytes, _) = try await URLSession.shared.data(from: view)
-                guard bytes.count > 1000 else { throw Failure.message("取回来的\(what)是空的") }
-                return bytes
-            }
-            throw Failure.message("\(what)跑了 \(Int(seconds / 60)) 分钟还没好")
-        } catch {
-            if Task.isCancelled { await ComfyWatch.interrupt(id, base: base, by: "KinClaw（\(what)）", why: "在 app 里停下了") }
-            throw error
-        }
+        guard bytes.count > 1000 else { throw Failure.message("取回来的\(what)是空的") }
+        return bytes
     }
 
     /// 快速出图: Qwen-Image 2.1 in eight steps instead of twenty-five, with

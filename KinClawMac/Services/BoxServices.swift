@@ -199,8 +199,41 @@ final class BoxServices: ObservableObject {
             await shared.setBlocked(false)
             return (response as? HTTPURLResponse)?.statusCode == 200
         } catch {
-            if localNetworkBlocked(error) { await shared.setBlocked(true) }
+            if localNetworkBlocked(error) { await shared.setBlocked(true); return false }
+            // No answer within three seconds is not "off" when something is listening there: a
+            // server busy generating or loading a model. Read as off, the next `ensure` would start
+            // a second copy of it beside the first.
+            if (error as? URLError)?.code == .timedOut, let host = url.host, let port = url.port {
+                return await listening(host: host, port: port)
+            }
             return false
+        }
+    }
+
+    /// Whether anything takes a TCP connection at host:port within `seconds`.
+    nonisolated static func listening(host: String, port: Int, seconds: Double = 2) async -> Bool {
+        guard let endpoint = NWEndpoint.Port(rawValue: UInt16(clamping: port)) else { return false }
+        let connection = NWConnection(host: NWEndpoint.Host(host), port: endpoint, using: .tcp)
+        return await withCheckedContinuation { (done: CheckedContinuation<Bool, Never>) in
+            let lock = NSLock()
+            var answered = false
+            func finish(_ value: Bool) {
+                lock.lock()
+                defer { lock.unlock() }
+                guard !answered else { return }
+                answered = true
+                connection.cancel()
+                done.resume(returning: value)
+            }
+            connection.stateUpdateHandler = { state in
+                switch state {
+                case .ready: finish(true)
+                case .failed, .waiting, .cancelled: finish(false)
+                default: break
+                }
+            }
+            connection.start(queue: .global(qos: .utility))
+            DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { finish(false) }
         }
     }
 

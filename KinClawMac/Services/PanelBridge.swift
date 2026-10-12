@@ -251,7 +251,10 @@ final class PanelBridge {
         case "tools/call":
             let name = params["name"] as? String ?? ""
             let args = params["arguments"] as? [String: Any] ?? [:]
-            let (text, isError) = await PanelTools.call(name, args)
+            // Answered before the caller's relay gives up: a call still working by then says so and
+            // keeps its result for panel_result (LateCalls), rather than coming back as "can't reach
+            // the panel" while it goes on.
+            let (text, isError) = await LateCalls.answer(name, args, within: PanelTools.patience + 6)
             var content: [[String: Any]] = [["type": "text", "text": text]]
             if images { content += await Self.pictures(in: text) }
             return result(["content": content, "isError": isError])

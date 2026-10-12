@@ -74,10 +74,13 @@ struct ChatSession: Codable, Identifiable, Equatable {
 }
 
 /// Storage shape for a single chat message inside a session JSON.
-/// Slimmer than the in-memory ChatMessage — drops UUID id (regenerated
-/// on load), keeps role / content / timestamp / toolCalls /
-/// attachments. Codable round-trips cleanly.
+/// Slimmer than the in-memory ChatMessage — keeps role / content /
+/// timestamp / toolCalls / attachments, and its id: what a drawing or a
+/// machine made for an answer is filed under, so it is under that answer
+/// again after a relaunch. (Files written before the id was kept get a new
+/// one on load.) Codable round-trips cleanly.
 struct PersistedMessage: Codable, Equatable {
+    var id: String?
     let role: String
     let content: String
     let timestamp: Date
@@ -85,6 +88,7 @@ struct PersistedMessage: Codable, Equatable {
     var attachments: [PersistedAttachment] = []
 
     init(from msg: ChatMessage) {
+        self.id = msg.id.uuidString
         self.role = msg.role.rawValue
         self.content = msg.content
         self.timestamp = msg.timestamp
@@ -94,7 +98,7 @@ struct PersistedMessage: Codable, Equatable {
 
     func toMessage() -> ChatMessage {
         var m = ChatMessage(
-            id: UUID(),
+            id: id.flatMap(UUID.init(uuidString:)) ?? UUID(),
             role: ChatMessage.Role(rawValue: role) ?? .assistant,
             content: content,
             timestamp: timestamp
