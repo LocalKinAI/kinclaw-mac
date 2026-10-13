@@ -8,6 +8,28 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Changed — a reply starts speaking while its first sentence is still being made
+
+「有什么值得改进的吗……都做吧」 for localkin-service-audio (its 2.1.5); this is the KinClaw half.
+
+- **The first sentence plays as the box makes it (SentenceStream).** `/synthesize` answers once the
+  whole sentence exists, which on the box (Qwen3-TTS 0.6B, a 3–4 s sentence) was 0.7–0.8 s of nothing
+  at the start of every reply.
+  - The reply's first sentence, or any sentence spoken while nothing else plays, now comes from
+    `/v1/audio/speech` as 24 kHz PCM while it is made. The first half second arrives after 0.13–0.2 s
+    and plays gaplessly on an AVAudioPlayerNode.
+  - Later sentences are made while earlier ones play, as before.
+- **The lip sync still gets clips**: each ~0.5 s piece arrives as a WAV the moment it starts playing.
+  The silence the box pads at each end (0.25–0.45 s) is trimmed as WAVTrim trims a clip.
+- **Only where it fits**: the box's multilingual voice (Qwen3-TTS), normal speed, and no LiveFace,
+  which works on whole clips.
+  - Anything else, and any failure before the first sound, makes the sentence the old way.
+  - A server without the route isn't asked again until the next launch.
+- **Checked without the app**: a swiftc harness ran against the box, and against a fake server
+  sending the box's timing. It covered the first sound at 0.26 s and pieces handed over as they
+  start. 3.22 s was handed over for 3.0 s of sound, the extra being the 60 ms and 160 ms WAVTrim keeps.
+  It also covered stop() mid-sentence, a refused connection, and a 404.
+
 ### Changed — a relaunch no longer drops the work, and a slow box no longer reads as a failure
 
 「这个项目还有什么值得改进的吗……都做吧，先做1和2」. Two read-only surveys of the app first (what a

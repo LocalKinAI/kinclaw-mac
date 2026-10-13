@@ -41,6 +41,9 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
     /// reply that replaced it — which is how two answers ended up
     /// interleaved on the speaker.
     private var generation = 0
+    /// A reply's opening sentence, played while the box is still making it
+    /// (see `SentenceStream`). Only ever plays while no clip does.
+    private let sentenceStream = SentenceStream()
 
     /// Handed every clip just before it plays, for anything that needs
     /// the audio itself rather than the fact of it — the digital
@@ -76,6 +79,10 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         // whether its voices are multilingual decides how text is split.
         Task { @MainActor in await TTSVoices.shared.refresh() }
         synthesizer.delegate = self
+        // A streamed sentence reaches the lip sync piece by piece, each as
+        // it starts playing, the way a clip does.
+        sentenceStream.onPiece = { [weak self] wav in self?.onClip?(wav) }
+        sentenceStream.onFinished = { [weak self] in self?.streamedSentenceDidFinish() }
     }
 
     /// Open a streaming reply: sentences enqueued with `stream(_:)` are
@@ -140,11 +147,16 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
                 // even inside the next reply, which is what checking
                 // `isSpeaking` alone allowed.
                 guard self.isSpeaking, self.generation == gen else { return }
+                if let streamed = self.streamRequest(seg, isLocal: isLocal),
+                   await self.sentenceStream.play(streamed.request, base: streamed.base) {
+                    continue
+                }
                 if let data = await self.synthesizeSegment(seg, isLocal: isLocal, hostname: hostname),
                    self.generation == gen,
                    let player = self.preparedPlayer(data) {
                     self.playQueue.append((player, data))
-                    let free = self.playbackDelay > 0 ? !self.pushing : self.audioPlayer?.isPlaying != true
+                    let free = self.playbackDelay > 0 ? !self.pushing
+                        : self.audioPlayer?.isPlaying != true && !self.sentenceStream.isActive
                     if free {
                         _ = self.playNextClip()
                     }
@@ -159,11 +171,62 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
     private func finishStreamIfDrained() {
         guard !isStreamingReply, !synthesizing,
               pendingSentences.isEmpty, playQueue.isEmpty,
-              audioPlayer?.isPlaying != true, scheduled.isEmpty, !pushing else { return }
+              audioPlayer?.isPlaying != true, scheduled.isEmpty, !pushing,
+              !sentenceStream.isActive else { return }
         isSpeaking = false
         let done = completion
         completion = nil
         done?()
+    }
+
+    /// The request that streams `segment`, or nil to make it whole.
+    ///
+    /// Only while nothing is playing: that is the reply's first sentence (or
+    /// one the model was slow to write), the one someone is waiting on.
+    /// Later sentences are made while earlier ones play, so streaming them
+    /// gains nothing. Only from a server with one voice for every language —
+    /// the box's Qwen3-TTS — at normal speed, and never for a face made from
+    /// the voice: LiveFace works on whole clips.
+    private func streamRequest(_ segment: TextSegmenter.Segment, isLocal: Bool) -> (request: URLRequest, base: String)? {
+        guard isLocal, TTSVoices.multilingual, playbackDelay == 0,
+              playQueue.isEmpty, audioPlayer?.isPlaying != true, !sentenceStream.isActive,
+              !MediaPlacement.place(.voice).isCloud else { return nil }
+        let speed = UserDefaults.standard.double(forKey: "kinclaw.voice.tts.speed")
+        guard speed <= 0 || speed == 1 else { return nil }
+        let base = Self.localTTSBase
+        guard SentenceStream.supported(base),
+              let url = URL(string: "\(base)/v1/audio/speech") else { return nil }
+
+        // OpenAI's speech request; `pcm` is 16-bit mono at 24 kHz.
+        struct SpeechRequest: Codable {
+            let input: String
+            let voice: String
+            let response_format: String
+            let stream_format: String
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+        request.httpBody = try? JSONEncoder().encode(SpeechRequest(
+            input: segment.text, voice: segment.voice,
+            response_format: "pcm", stream_format: "audio"))
+        return (request, base)
+    }
+
+    /// A streamed sentence has been heard to the end: on to the next clip,
+    /// as when a clip's player finishes.
+    private func streamedSentenceDidFinish() {
+        if !playQueue.isEmpty, playNextClip() { return }
+        finishStreamIfDrained()
+    }
+
+    /// The local TTS server (Settings → Backend → TTS).
+    private static var localTTSBase: String {
+        let pref = UserDefaults.standard.string(forKey: "kinclaw.backend.tts") ?? ""
+        return pref.isEmpty
+            ? "http://localhost:8001"
+            : pref.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     }
 
     /// Speak text: try server TTS first, fallback to iOS native
@@ -327,12 +390,7 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
             // http://localhost:8001).
             let url: URL
             if isLocal {
-                let prefBase = UserDefaults.standard.string(
-                    forKey: "kinclaw.backend.tts") ?? ""
-                let base = prefBase.isEmpty
-                    ? "http://localhost:8001"
-                    : prefBase.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-                url = URL(string: "\(base)/synthesize")!
+                url = URL(string: "\(Self.localTTSBase)/synthesize")!
             } else {
                 url = URL(string: "https://\(hostname)/v1/tts")!
             }
@@ -494,6 +552,7 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         pushTimer = nil
         pushUntil = .distantPast
         playQueue.removeAll()   // else a barged-in reply resumes mid-sentence
+        sentenceStream.stop()
         onStopped?()
         isStreamingReply = false
         pendingSentences.removeAll()
@@ -623,5 +682,259 @@ extension SpeechSynthesizer: AVAudioPlayerDelegate {
             self.completion?()
             self.completion = nil
         }
+    }
+}
+
+// MARK: - A sentence played while it is made
+
+/// Plays one sentence while the TTS server is still making it.
+///
+/// `/synthesize` answers once the whole sentence exists: measured on the box
+/// (Qwen3-TTS 0.6B, a 3-4 s sentence), 0.7-0.8 s of silence at the start of
+/// every reply. `/v1/audio/speech` with `stream_format: audio` sends the same
+/// speech as 16-bit 24 kHz PCM while it is made, the first half second after
+/// 0.13-0.2 s. The pieces go to an AVAudioPlayerNode, which plays buffers back
+/// to back without a gap; an AVAudioPlayer per piece would leave a hole at
+/// every join.
+///
+/// The lip sync still gets clips: each piece goes to `onPiece` as a WAV the
+/// moment it starts playing. Silence is trimmed as `WAVTrim` trims a clip (the
+/// box pads 0.25-0.45 s at each end) by holding back trailing silence until
+/// sound follows it or the sentence ends. Sound itself is never held back.
+///
+/// Main thread, apart from the download loop in `play`.
+final class SentenceStream {
+    static let rate = 24_000
+    private static let leadKeep = rate * 60 / 1000      // as WAVTrim keeps
+    private static let trailKeep = rate * 160 / 1000
+    private static let pieceBytes = rate                // half a second at 16 bits
+    private static let threshold = Int16(0.01 * 32767)
+    /// Servers that turned `/v1/audio/speech` streaming down (an older
+    /// LocalKin, another TTS server): not asked again this run.
+    private static var unsupported = Set<String>()
+
+    var onPiece: ((Data) -> Void)?
+    var onFinished: (() -> Void)?
+
+    private let engine = AVAudioEngine()
+    private let node = AVAudioPlayerNode()
+    private let format = AVAudioFormat(standardFormatWithSampleRate: Double(SentenceStream.rate), channels: 1)!
+    private var session = 0
+    private var task: URLSessionDataTask?
+    private var downloading = false
+    private var playing = 0             // buffers scheduled and not yet heard
+    private var waiting: [Data] = []    // their WAVs, after the one playing
+    private var heardSound = false      // past the leading silence
+    private var lead: [Int16] = []      // the end of the leading silence
+    private var held: [Int16] = []      // silence that may be the closing one
+    private var endsAt = Date.distantPast
+    private var watchdog: Timer?
+    private var observer: NSObjectProtocol?
+
+    init() {
+        engine.attach(node)
+        engine.connect(node, to: engine.mainMixerNode, format: format)
+        engine.prepare()
+        // A change of output device stops the engine, and with it the
+        // callbacks that say a buffer was heard: end the sentence rather
+        // than wait on them.
+        observer = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
+        ) { [weak self] _ in self?.abandon() }
+    }
+
+    deinit {
+        if let observer { NotificationCenter.default.removeObserver(observer) }
+    }
+
+    /// Downloading, or still playing what it downloaded.
+    var isActive: Bool { downloading || playing > 0 }
+
+    static func supported(_ base: String) -> Bool { !unsupported.contains(base) }
+
+    /// Play the answer to `request` as it arrives. True when the sentence was
+    /// dealt with, heard or stopped on purpose; false when nothing could be
+    /// played and the caller should make it whole instead.
+    func play(_ request: URLRequest, base: String) async -> Bool {
+        guard let mine = await MainActor.run(body: { self.begin() }) else { return false }
+        var completed = false
+        do {
+            let (bytes, response) = try await URLSession.shared.bytes(for: request)
+            let dataTask = bytes.task
+            guard await MainActor.run(body: { self.attach(dataTask, mine) }) else { return true }
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            let type = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type") ?? ""
+            if status == 200, type.hasPrefix("audio/pcm") {
+                var chunk = Data()
+                chunk.reserveCapacity(Self.pieceBytes)
+                for try await byte in bytes {
+                    chunk.append(byte)
+                    guard chunk.count >= Self.pieceBytes else { continue }
+                    let piece = chunk
+                    chunk.removeAll(keepingCapacity: true)
+                    guard await MainActor.run(body: { self.take(piece, mine) }) else { return true }
+                }
+                let rest = chunk
+                completed = await MainActor.run { self.take(rest, mine) }
+            } else if status == 200 || (400..<500).contains(status) {
+                // Answered, but not with a stream: it doesn't do this one.
+                await MainActor.run { _ = Self.unsupported.insert(base) }
+            }
+        } catch {}
+        let done = completed
+        return await MainActor.run { self.end(mine, completed: done) }
+    }
+
+    /// Stop now: drop what is scheduled and cancel the download.
+    func stop() {
+        session += 1
+        task?.cancel()
+        task = nil
+        watchdog?.invalidate()
+        watchdog = nil
+        node.stop()
+        if engine.isRunning { engine.stop() }
+        downloading = false
+        playing = 0
+        waiting.removeAll()
+        lead.removeAll()
+        held.removeAll()
+    }
+
+    private func begin() -> Int? {
+        stop()
+        do {
+            try engine.start()
+        } catch {
+            return nil
+        }
+        node.play()
+        heardSound = false
+        endsAt = .distantPast
+        downloading = true
+        return session
+    }
+
+    private func attach(_ task: URLSessionDataTask, _ mine: Int) -> Bool {
+        guard mine == session else {
+            task.cancel()
+            return false
+        }
+        self.task = task
+        return true
+    }
+
+    /// Audio from the download: schedule what is sound, hold what may be the
+    /// closing silence. False once the sentence has been stopped.
+    private func take(_ data: Data, _ mine: Int) -> Bool {
+        guard mine == session else { return false }
+        var samples = Self.samples(data)
+        if !heardSound {
+            guard let first = samples.firstIndex(where: Self.loud) else {
+                lead = Array((lead + samples).suffix(Self.leadKeep))
+                return true
+            }
+            samples = Array((lead + samples[..<first]).suffix(Self.leadKeep)) + samples[first...]
+            lead.removeAll()
+            heardSound = true
+        }
+        let all = held + samples
+        if let last = all.lastIndex(where: Self.loud) {
+            schedule(Array(all[...last]), mine)
+            held = Array(all[(last + 1)...])
+        } else {
+            held = all
+        }
+        return true
+    }
+
+    private func end(_ mine: Int, completed: Bool) -> Bool {
+        guard mine == session else { return true }
+        task = nil
+        downloading = false
+        // Nothing was ever heard: a failure to fall back from, or silence.
+        guard heardSound else {
+            stop()
+            return completed
+        }
+        if completed {
+            schedule(Array(held.prefix(Self.trailKeep)), mine)
+        }
+        held.removeAll()
+        // The callbacks that say a buffer was heard stop if the engine does;
+        // don't let a reply wait on them past the end of its audio.
+        watchdog = Timer.scheduledTimer(
+            withTimeInterval: max(0, endsAt.timeIntervalSinceNow) + 1.5, repeats: false
+        ) { [weak self] _ in
+            guard let self, mine == self.session, self.playing > 0 else { return }
+            self.abandon()
+        }
+        finishIfDone(mine)
+        return true
+    }
+
+    private func schedule(_ samples: [Int16], _ mine: Int) {
+        guard !samples.isEmpty,
+              let buffer = AVAudioPCMBuffer(pcmFormat: format,
+                                            frameCapacity: AVAudioFrameCount(samples.count))
+        else { return }
+        buffer.frameLength = AVAudioFrameCount(samples.count)
+        let out = buffer.floatChannelData![0]
+        for i in samples.indices { out[i] = Float(samples[i]) / 32768 }
+        let wav = Self.wav(samples)
+        // An idle node plays a buffer the moment it is scheduled.
+        if playing == 0 { onPiece?(wav) } else { waiting.append(wav) }
+        playing += 1
+        endsAt = max(endsAt, Date()).addingTimeInterval(Double(samples.count) / Double(Self.rate))
+        node.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
+            guard let self else { return }
+            DispatchQueue.main.async { self.heard(mine) }
+        }
+    }
+
+    /// A buffer has been heard, so the next one is starting.
+    private func heard(_ mine: Int) {
+        guard mine == session, playing > 0 else { return }
+        playing -= 1
+        if !waiting.isEmpty { onPiece?(waiting.removeFirst()) }
+        finishIfDone(mine)
+    }
+
+    private func finishIfDone(_ mine: Int) {
+        guard mine == session, !downloading, playing == 0 else { return }
+        stop()
+        onFinished?()
+    }
+
+    /// Playback stopped under the sentence: call it over.
+    private func abandon() {
+        guard isActive else { return }
+        stop()
+        onFinished?()
+    }
+
+    private static func loud(_ sample: Int16) -> Bool {
+        sample > threshold || sample < -threshold
+    }
+
+    private static func samples(_ data: Data) -> [Int16] {
+        data.withUnsafeBytes { raw in
+            (0..<raw.count / 2).map {
+                Int16(littleEndian: raw.loadUnaligned(fromByteOffset: $0 * 2, as: Int16.self))
+            }
+        }
+    }
+
+    /// 16-bit mono WAV, the shape the lip sync reads.
+    static func wav(_ samples: [Int16]) -> Data {
+        var out = Data(capacity: 44 + samples.count * 2)
+        func text(_ s: String) { out.append(contentsOf: Array(s.utf8)) }
+        func u32(_ v: Int) { withUnsafeBytes(of: UInt32(v).littleEndian) { out.append(contentsOf: $0) } }
+        func u16(_ v: Int) { withUnsafeBytes(of: UInt16(v).littleEndian) { out.append(contentsOf: $0) } }
+        text("RIFF"); u32(36 + samples.count * 2); text("WAVE")
+        text("fmt "); u32(16); u16(1); u16(1); u32(rate); u32(rate * 2); u16(2); u16(16)
+        text("data"); u32(samples.count * 2)
+        for s in samples { u16(Int(UInt16(bitPattern: s))) }
+        return out
     }
 }
