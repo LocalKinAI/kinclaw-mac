@@ -886,7 +886,7 @@
   "runs": "本地要下载",
   "download_gb": 21.2,
   "best_for": "4 步出写实图，中英双语文字",
-  "caution": "要下 21 GB；盒子上「画」服务现在是 Qwen-Image-2.1-Turbo（768² 约 22 秒，中文字更准），Boogu 的 MLX 版也还在 ollamadiffuser 里",
+  "caution": "要下 21 GB；盒子上「画」服务现在是 Qwen-Image-2.1-Turbo（768² 约 22 秒，中文字更准），也能选 FLUX 3；原来那份 Boogu MLX 版 2026-10-16 已删（Jacky：有更好的了）",
   "minutes": null,
   "minutes_note": null
  },
