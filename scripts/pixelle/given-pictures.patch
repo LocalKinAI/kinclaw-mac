@@ -1,0 +1,149 @@
+--- a/api/schemas/video.py
++++ b/api/schemas/video.py
+@@ -78,6 +78,12 @@
+         description="One picture description per scene, used as written (no LLM rewrite). "
+                     "prompt_prefix is added only if also given. Count must equal the number of scenes."
+     )
++    images: Optional[List[Optional[str]]] = Field(
++        None,
++        description="LocalKin: a finished picture per scene — a file under Pixelle's folder (pv.py copies the "
++                    "Mac's pictures to data/uploads/ first) — used as it is and only composed into the card; "
++                    "null draws that scene from image_prompts. Count must equal the number of scenes."
++    )
+     master_audio: Optional[bool] = Field(
+         None,
+         description="Finish the sound: loudness to loudness_lufs, 48 kHz stereo (default true)"
+@@ -197,6 +203,7 @@
+     motion_smooth: Optional[bool] = Field(None, description="ltx: RIFE twice the frames (default true)")
+     redraw: Optional[List[int]] = Field(None, description="LocalKin: scenes (1-based) whose picture is drawn again; the rest keep theirs")
+     image_prompts: Optional[Dict[str, str]] = Field(None, description="LocalKin: new picture words for scenes in redraw, by scene number ('6': '...'); left out, the same words with a new seed")
++    images: Optional[Dict[str, str]] = Field(None, description="LocalKin: finished pictures for chosen scenes, by scene number ('6': a file under Pixelle's folder), used as they are and their cards composed again; the rest keep theirs")
+     bgm_path: Optional[str] = Field(None, description="Music (default: the source's); '' for none")
+     bgm_volume: Optional[float] = Field(None, ge=0.0, le=1.0, description="Music volume (default: the source's)")
+     bgm_mode: Optional[Literal["loop", "once"]] = Field(None, description="default: the source's")
+--- a/api/routers/video.py
++++ b/api/routers/video.py
+@@ -137,7 +137,7 @@
+ 
+     # LocalKin additions: passed only when given, so config fills the rest
+     for key in ("tts_inference_mode", "tts_voice", "tts_speed", "tts_instruct",
+-                "tts_language", "tts_url", "split_mode", "image_prompts",
++                "tts_language", "tts_url", "split_mode", "image_prompts", "images",
+                 "master_audio", "loudness_lufs", "bgm_mode",
+                 "tts_one_take", "scene_motion", "motion_prompts", "motion_smooth"):
+         value = getattr(request_body, key, None)
+--- a/pixelle_video/pipelines/standard.py
++++ b/pixelle_video/pipelines/standard.py
+@@ -169,6 +169,12 @@
+             logger.info(f"   💡 Benefits: Faster generation + Lower cost + No ComfyUI dependency")
+         
+         given_prompts = ctx.params.get("image_prompts")
++        given_images = ctx.params.get("images")
++        if given_images is not None and len(given_images) != len(ctx.narrations):
++            raise ValueError(
++                f"images has {len(given_images)} entries but the script has {len(ctx.narrations)} "
++                f"scenes; give one per scene (null draws that scene from image_prompts)"
++            )
+         if template_requires_media and given_prompts:
+             # LocalKin: the caller wrote the picture for every scene. Used as written;
+             # prompt_prefix is added only when the caller also passed one.
+@@ -184,6 +190,11 @@
+             ]
+             self._report_progress(ctx.progress_callback, "image_prompts_given", 0.3)
+             logger.info(f"✅ Using {len(ctx.image_prompts)} image prompts as given")
++        elif template_requires_media and given_images and all(given_images):
++            # LocalKin: every scene's picture was given — nothing to draw, no words to write.
++            ctx.image_prompts = [None] * len(ctx.narrations)
++            self._report_progress(ctx.progress_callback, "images_given", 0.3)
++            logger.info(f"✅ Using {len(given_images)} pictures as given")
+         # Only generate image prompts if template requires media
+         elif template_requires_media:
+             self._report_progress(ctx.progress_callback, "generating_image_prompts", 0.15)
+@@ -342,6 +353,16 @@
+             )
+             ctx.storyboard.frames.append(frame)
+ 
++        # LocalKin: a scene given a finished picture uses it as it is, copied into this task's
++        # folder; the frame processor then only composes its card.
++        given_images = ctx.params.get("images")
++        if given_images:
++            from pixelle_video.services.localkin_motion import given_picture
++            for frame, picture in zip(ctx.storyboard.frames, given_images):
++                if picture:
++                    frame.image_path = given_picture(picture, ctx.task_id, frame.index)
++                    frame.media_type = "image"
++
+     async def produce_assets(self, ctx: PipelineContext):
+         """Step 6: Generate audio, images, and render frames (Core processing)."""
+         storyboard = ctx.storyboard
+--- a/pixelle_video/services/frame_processor.py
++++ b/pixelle_video/services/frame_processor.py
+@@ -75,7 +75,8 @@
+         # Determine if this frame needs image generation
+         # If image_path or video_path is already set (e.g. asset-based pipeline), we consider it "has existing media" but skip generation
+         has_existing_media = frame.image_path is not None or frame.video_path is not None
+-        needs_generation = frame.image_prompt is not None
++        # LocalKin: a picture already there (given for the scene) is used, not drawn again
++        needs_generation = frame.image_prompt is not None and not has_existing_media
+         
+         try:
+             # Step 1: Generate audio (TTS)
+--- a/pixelle_video/services/localkin_motion.py
++++ b/pixelle_video/services/localkin_motion.py
+@@ -486,8 +486,33 @@
+     except Exception as e:
+         logger.warning(f"Scene {frame.index + 1} stays still: {e}")
+         return still_segment(frame.composed_image_path, frame.audio_path, output_path, fps), f"still ({e})"
++
++
++# ---------------------------------------------------------------- pictures made elsewhere
++
++PICTURE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
++
++
++def given_picture(path: str, task_id: str, index: int) -> str:
++    """A finished picture handed in for a scene — drawn and fixed elsewhere (the app's 画 and 改,
++    Qwen-Image-2.1-Turbo), copied to the box by pv.py — taken into the task as frames/NN_image.png.
++    Only a picture file under Pixelle's own folder is taken: the API reads whatever it is pointed at."""
++    from PIL import Image
+ 
++    from pixelle_video.utils.os_util import get_pixelle_video_root_path, get_task_frame_path
+ 
++    root = Path(get_pixelle_video_root_path()).resolve()
++    source = Path(path).expanduser()
++    source = (source if source.is_absolute() else root / source).resolve()
++    if root not in source.parents or not source.is_file() or source.suffix.lower() not in PICTURE_SUFFIXES:
++        raise ValueError(f"images: {path} is not a picture file under {root}")
++    target = Path(get_task_frame_path(task_id, index, "image"))
++    target.parent.mkdir(parents=True, exist_ok=True)
++    with Image.open(source) as picture:
++        picture.convert("RGB").save(target, "PNG")
++    return str(target)
++
++
+ # ---------------------------------------------------------------- remaking a finished video
+ 
+ async def rework(core, request, progress=None):
+@@ -559,6 +584,22 @@
+     words = {int(k): v for k, v in (getattr(request, "image_prompts", None) or {}).items() if v}
+     if any(k not in redraw for k in words):
+         raise ValueError("image_prompts are for the scenes in redraw")
++    # Scenes given a finished picture (drawn and fixed elsewhere): used as they are, their cards
++    # composed again; the rest keep theirs.
++    pictures = {int(k): v for k, v in (getattr(request, "images", None) or {}).items() if v}
++    if any(not 1 <= s <= n for s in pictures):
++        raise ValueError(f"images: scenes are numbered 1..{n}")
++    if set(pictures) & set(redraw):
++        raise ValueError(f"a scene is redrawn or given a picture, not both: {sorted(set(pictures) & set(redraw))}")
++    for k, (number, picture) in enumerate(sorted(pictures.items())):
++        frame = sb.frames[number - 1]
++        report("processing_frame", 0.02 + 0.06 * k / len(pictures), frame_current=number, frame_total=n,
++               action="picture")
++        frame.image_path = given_picture(picture, task_id, frame.index)
++        frame.media_type = "image"
++        frame.composed_image_path = None
++        await core.frame_processor._step_compose_frame(frame, sb, sb.config)
++        kept.pop(frame.index, None)                # a kept moving clip showed the old picture
+     if redraw:
+         import random
+         media = core.media

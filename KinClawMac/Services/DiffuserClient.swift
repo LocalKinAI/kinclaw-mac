@@ -85,6 +85,25 @@ final class DiffuserClient: ObservableObject {
         }
     }
 
+    /// FLUX 3 Image Klein, the box's second picture model (MediaPlace.boxFlux):
+    /// one server that both draws and edits, on the same machine as the video
+    /// server, port 8004 (scripts/flux3/flux3_server.py, the OllamaDiffuser API).
+    /// It wants a whole scene described; a short request is written out into
+    /// one there, by the box's own vision model, before it draws.
+    static var fluxHost: String {
+        guard var parts = URLComponents(string: videoHost) else { return "http://192.168.0.21:8004" }
+        parts.port = 8004
+        return parts.string ?? "http://192.168.0.21:8004"
+    }
+
+    /// The caption FLUX 3 actually drew from, which its server sends back as
+    /// base64 in X-Flux-Caption: kept beside the picture with what was asked.
+    private static func fluxCaption(_ response: URLResponse) -> String? {
+        guard let value = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "X-Flux-Caption"),
+              let data = Data(base64Encoded: value) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
     // MARK: - Multipart
 
     /// One multipart body. Text parts and file parts, in the order given.
@@ -158,22 +177,27 @@ final class DiffuserClient: ObservableObject {
     ///
     /// An editor wants an instruction rather than a caption: "change her coat to
     /// a red one", not "a woman in a red coat".
+    ///
+    /// `place` picks the editor for this one picture (an agent's choice);
+    /// left out, the one in Settings → 画·改·拍·声音.
     @discardableResult
     func edit(prompt: String, from source: URL, also references: [URL] = [], into folder: URL,
               steps: Int? = nil, guidance: Double? = nil, seed: Int? = nil,
-              timeout: TimeInterval = 900) async throws -> URL {
-        guard let url = Self.url("api/generate/img2img", on: Self.editHost) else {
-            throw Failure.message("改图服务地址不对：\(Self.editHost)")
+              timeout: TimeInterval = 900, on chosen: MediaPlace? = nil) async throws -> URL {
+        let place = chosen ?? MediaPlacement.place(.edit)
+        let flux = place == .boxFlux
+        let host = flux ? Self.fluxHost : Self.editHost
+        guard let url = Self.url("api/generate/img2img", on: host) else {
+            throw Failure.message("改图服务地址不对：\(host)")
         }
         let cleaned = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { throw Failure.message("要改成什么样？指令是空的") }
-        let place = MediaPlacement.place(.edit)
         if place.isCloud {
             return try await editInCloud(cleaned, from: source, also: references, into: folder, seed: seed, on: place)
         }
         await takeTurn()
         defer { endTurn() }
-        _ = await BoxServices.shared.ensure(.edit)
+        _ = await BoxServices.shared.ensure(flux ? .flux : .edit)
         guard FileManager.default.fileExists(atPath: source.path) else {
             throw Failure.message("找不到要改的那张图：\(source.path)")
         }
@@ -213,7 +237,7 @@ final class DiffuserClient: ObservableObject {
         let (data, response) = try await URLSession.shared.data(for: request)
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard code == 200 else {
-            throw Failure.message("改图失败（HTTP \(code)）：\(Self.editHost)" + Self.refusal(data))
+            throw Failure.message("改图失败（HTTP \(code)）：\(host)" + Self.refusal(data))
         }
         guard data.count > 20_000, NSImage(data: data) != nil else {
             throw Failure.message("改图服务返回的不是一张正常的图（\(data.count) 字节），看它的日志")
@@ -223,8 +247,9 @@ final class DiffuserClient: ObservableObject {
         let file = folder.appendingPathComponent(Self.fileName(for: cleaned))
         try data.write(to: file)
         if let sent { Self.stretch(file, to: sent.size) }
-        try? cleaned.write(to: file.appendingPathExtension("txt"),
-                           atomically: true, encoding: .utf8)
+        let caption = Self.fluxCaption(response).map { "\n\n— FLUX 3 照这段画面描述改的 —\n" + $0 } ?? ""
+        try? (cleaned + caption).write(to: file.appendingPathExtension("txt"),
+                                       atomically: true, encoding: .utf8)
         lastImage = file
         return file
     }
@@ -370,19 +395,23 @@ final class DiffuserClient: ObservableObject {
     /// Qwen asked for four steps draws a smudge.
     func generate(prompt: String, into folder: URL, steps: Int? = nil,
                   width: Int = 768, height: Int = 768,
-                  seed: Int? = nil, timeout: TimeInterval = 600) async throws -> URL {
-        guard let url = Self.url("api/generate") else {
-            throw Failure.message("出图服务地址不对：\(Self.host)")
+                  seed: Int? = nil, timeout: TimeInterval = 600, on chosen: MediaPlace? = nil) async throws -> URL {
+        // `chosen` picks the model for this one picture (an agent's choice);
+        // left out, the one in Settings → 画·改·拍·声音.
+        let place = chosen ?? MediaPlacement.place(.draw)
+        let flux = place == .boxFlux
+        let host = flux ? Self.fluxHost : Self.host
+        guard let url = Self.url("api/generate", on: host) else {
+            throw Failure.message("出图服务地址不对：\(host)")
         }
         let cleaned = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { throw Failure.message("要画什么？提示词是空的") }
-        let place = MediaPlacement.place(.draw)
         if place.isCloud {
             return try await drawInCloud(cleaned, into: folder, width: width, height: height, seed: seed, on: place)
         }
         await takeTurn()
         defer { endTurn() }
-        _ = await BoxServices.shared.ensure(.draw)
+        _ = await BoxServices.shared.ensure(flux ? .flux : .draw)
 
         busy = true
         defer { busy = false }
@@ -403,7 +432,7 @@ final class DiffuserClient: ObservableObject {
         let (data, response) = try await URLSession.shared.data(for: request)
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard code == 200 else {
-            throw Failure.message("出图失败（HTTP \(code)）：\(Self.host)" + Self.refusal(data))
+            throw Failure.message("出图失败（HTTP \(code)）：\(host)" + Self.refusal(data))
         }
         // Before OllamaDiffuser 2.3.0 a model that failed mid-generation still
         // answered 200 with a small error image drawn by the server, so the
@@ -421,8 +450,9 @@ final class DiffuserClient: ObservableObject {
         if drawn != asked { Self.stretch(file, to: asked) }
         // The prompt is the picture's description, and the companion's art
         // matcher reads these sidecars when it picks by subject.
-        try? cleaned.write(to: file.appendingPathExtension("txt"),
-                           atomically: true, encoding: .utf8)
+        let caption = Self.fluxCaption(response).map { "\n\n— FLUX 3 照这段画面描述画的 —\n" + $0 } ?? ""
+        try? (cleaned + caption).write(to: file.appendingPathExtension("txt"),
+                                       atomically: true, encoding: .utf8)
         lastImage = file
         return file
     }

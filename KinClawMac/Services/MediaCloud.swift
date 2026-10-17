@@ -141,7 +141,7 @@ enum MediaCloud {
         case .openai:  return try await OpenAIImages.draw(prompt: prompt, width: width, height: height)
         case .google:  return try await GoogleImages.draw(prompt: prompt, width: width, height: height)
         case .xai:     return try await XAIImages.draw(prompt: prompt, width: width, height: height)
-        case .box:     throw MediaCloudError.message("盒子不走这里")
+        case .box, .boxFlux: throw MediaCloudError.message("盒子不走这里")
         }
     }
 
@@ -153,7 +153,7 @@ enum MediaCloud {
         case .openai:  return try await OpenAIImages.edit(prompt: prompt, images: images)
         case .google:  return try await GoogleImages.edit(prompt: prompt, images: images)
         case .xai:     return try await XAIImages.edit(prompt: prompt, images: images)
-        case .box:     throw MediaCloudError.message("盒子不走这里")
+        case .box, .boxFlux: throw MediaCloudError.message("盒子不走这里")
         }
     }
 
@@ -190,7 +190,7 @@ enum MediaCloud {
         case .bailian: return try await BailianClient.check()
         case .google:  return try await GoogleImages.check()
         case .xai:     return try await XAIImages.check()
-        case .box:     return "盒子不用 key"
+        case .box, .boxFlux: return "盒子不用 key"
         }
     }
 

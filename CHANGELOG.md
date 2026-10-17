@@ -8,6 +8,53 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Added — FLUX 3 Image Klein, the box's second picture model (画 · 改)
+
+「看看这个吧」 → tested on the box beside Qwen-Image-2.1-Turbo → 「接进 App 吧，画和改都能选 FLUX 3」.
+
+- **Settings → 画·改·拍·声音 has 「盒子·FLUX 3」** for 画 and for 改. `image_generate` and `image_edit` also take
+  `model: qwen | flux3` for one picture, so an agent can mix them: Qwen for lettered pictures, FLUX for photographic
+  scenes, or FLUX for the scene and Qwen's 改 to write the words in. Each answer says which model made it.
+- **On the box**: `scripts/flux3/flux3_server.py` runs mflux 0.23 in its own virtualenv and speaks the OllamaDiffuser
+  API on port 8004. One model does both drawing and editing (up to 10 references).
+  - BoxServices starts it on demand. It takes turns with Qwen's two servers: about 37 GB while it works, let go
+    after 10 idle minutes.
+- **Short requests become whole scenes**: FLUX 3 draws generic pictures from short prompts. Before it draws, the
+  server has the box's ornith write a full scene caption with Black Forest Labs' own upsampler instructions. Every
+  edit is expanded too, with the pictures attached. The caption used is kept in the picture's sidecar.
+  - A Chinese instruction first arrived garbled: form fields were read as ASCII, and the caption invented an edit.
+    They are read as UTF-8 now.
+- **Measured** (M3 Ultra): 1024×768 in 50 s with the caption, 1664×928 in 65–75 s. An edit with one picture takes
+  about 70 s, with two references about 190 s.
+  - Against Qwen: more photographic, boxes placed exactly, references composed well.
+  - Chinese lettering is wrong 4 times in 7, so Qwen stays the default.
+- **Licence**: FLUX Kommunity v1.0 — commercial output allowed under US$5M revenue (Qwen-Image 2.1 is research-only).
+
+### Added — a Pixelle video from pictures drawn and fixed first (画 · 改)
+
+「都做吧，先做人造太阳，要细致的讲解啊，此外我们最近更新了画图（Qwen-Image-2.1-Turbo）和改图啊」. Pixelle drew every
+scene itself on ComfyUI (Qwen-Image 2.1 int8 with an 8-step LoRA), unseen until the video was made — and an
+explainer's pictures carry lettering, numbers and charts. Now they can be made first with the app's own 画 and 改,
+looked at, fixed, and handed in:
+
+- **`image_generate` takes `folder`.** A video's pictures go to its own folder. Before, every drawing landed in the
+  companion's art and joined her rotation.
+- **`image_edit` (new): 改 for any picture.** Qwen-Image-2.1-Turbo's editor on the box, or the cloud editor chosen
+  in Settings. The result is a new file beside the old one. Every Studio agent has it.
+- **`pixelle_make` `images`**: a finished picture per scene ("" draws that scene). **`pixelle_rework` `images`**
+  `{"6": file}` swaps one scene's picture.
+- **`audios`, the same for the narration** (make: one per scene; rework: `{"6": file}`, not with revoice).
+  Jacky: 「配音我有专门配音啊，用好听的女生」. The box's VoiceDesign narrator makes a new voice every call, so a
+  long video was either one risky take or a different voice per line. Now a voice designed once (8102) can be
+  cloned line by line (8103), each line heard back by the box's ASR and read again when a word or a number is
+  off, and handed in as it is (`scripts/pixelle/given-voiceovers.patch`).
+  - pv.py checks them all before copying any, then copies them to the box in one tar stream.
+  - The box uses them as they are (`scripts/pixelle/given-pictures.patch`): no ComfyUI, a scene costs only its
+    voice and its card.
+  - The Pixelle agent's brief says when: pictures with words, numbers or a chart.
+- **Tested**: `make test` covers pv.py's checks (counts, missing files, a scene both redrawn and given). On the box,
+  a two-scene video from two given pictures took about a minute.
+
 ### Changed — a reply starts speaking while its first sentence is still being made
 
 「有什么值得改进的吗……都做吧」 for localkin-service-audio (its 2.1.5); this is the KinClaw half.

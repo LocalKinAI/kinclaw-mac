@@ -755,6 +755,27 @@ enum PixelleTools {
             } else if let words = args["image_prompts"] as? [Any] {
                 spec["image_prompts"] = words.map(FilmTools.text)
             }
+            // Finished pictures for some scenes (one fixed with image_edit, say), by scene number.
+            if let pictures = args["images"] as? [String: Any], !pictures.isEmpty {
+                var given: [String: String] = [:]
+                for (scene, item) in pictures {
+                    let path = (FilmTools.text(item).trimmingCharacters(in: .whitespaces) as NSString).expandingTildeInPath
+                    guard FileManager.default.fileExists(atPath: path) else { return ("images 里第 \(scene) 场的图找不到：\(path)", true) }
+                    given[scene] = path
+                }
+                spec["images"] = given
+            }
+            // Finished voice-overs for some scenes (a line read again), by scene number.
+            if let sounds = args["audios"] as? [String: Any], !sounds.isEmpty {
+                guard !revoice else { return ("audios 和 revoice 只能选一个：revoice 会把每一场都重新念一遍", true) }
+                var given: [String: String] = [:]
+                for (scene, item) in sounds {
+                    let path = (FilmTools.text(item).trimmingCharacters(in: .whitespaces) as NSString).expandingTildeInPath
+                    guard FileManager.default.fileExists(atPath: path) else { return ("audios 里第 \(scene) 场的声音找不到：\(path)", true) }
+                    given[scene] = path
+                }
+                spec["audios"] = given
+            }
             if let bgm = args["bgm_path"] as? String {
                 if (bgm as NSString).lastPathComponent == PixelleStudio.forbiddenMusic {
                     return ("default.mp3 不能用：它是 OC ReMix 改编的《最终幻想 IX》Melodies of Life，有版权", true)
@@ -762,8 +783,9 @@ enum PixelleTools {
                 spec["bgm_path"] = bgm
             }
             if let volume = FilmTools.number(args["bgm_volume"]) { spec["bgm_volume"] = volume }
-            guard revoice || motion != nil || spec["bgm_path"] != nil || !((spec["redraw"] as? [Int]) ?? []).isEmpty else {
-                return ("没什么可重做的：revoice true（整篇一次念完、一个人）、motion none|pan|ltx、redraw 重画哪几场，或者换一首 bgm_path", true)
+            guard revoice || motion != nil || spec["bgm_path"] != nil || !((spec["redraw"] as? [Int]) ?? []).isEmpty
+                    || spec["images"] != nil || spec["audios"] != nil else {
+                return ("没什么可重做的：revoice true（整篇一次念完、一个人）、motion none|pan|ltx、redraw 重画哪几场、images 换上做好的图、audios 换上念好的声音，或者换一首 bgm_path", true)
             }
             if studio.job?.state == .running, let busy = studio.job {
                 return ("已经有一个在做：「\(busy.title)」task \(busy.id)（\(busy.progress)）。等它做完（pixelle_wait），或者 pixelle_cancel", true)
@@ -780,11 +802,15 @@ enum PixelleTools {
                 }
                 let moving = (answer["moving"] as? [Any] ?? []).compactMap(FilmTools.int)
                 let redrawn = (answer["redrawn"] as? [Any] ?? []).compactMap(FilmTools.int)
+                let swapped = (answer["given_pictures"] as? [Any] ?? []).compactMap(FilmTools.int)
+                let revoiced = (answer["given_voiceovers"] as? [Any] ?? []).compactMap(FilmTools.int)
                 var lines = ["开始重做「\(run.title)」（\(run.boxFolder)）：task \(answer["task_id"] as? String ?? "")，"
                              + (revoice ? "整篇重新一次念完（一个人）" : "旁白不变")
                              + (moving.isEmpty ? (motion == nil ? "，画面照原来的样子" : "，全部静止")
                                                 : "，第 \(moving.map(String.init).joined(separator: "、")) 场会动（\(motion ?? "")）")
                              + (redrawn.isEmpty ? "" : "，重画第 \(redrawn.map(String.init).joined(separator: "、")) 场的图")
+                             + (swapped.isEmpty ? "" : "，第 \(swapped.map(String.init).joined(separator: "、")) 场换上给的图")
+                             + (revoiced.isEmpty ? "" : "，第 \(revoiced.map(String.init).joined(separator: "、")) 场换上给的声音")
                              + ((spec["bgm_path"] as? String).map { "，配乐换成 \(($0 as NSString).lastPathComponent)" } ?? "")
                              + "。\(answer["estimate"] as? String ?? "")"]
                 lines.append("原来那支不动，做好的是一支新的。跟着看：pixelle_wait。")
@@ -940,9 +966,40 @@ enum PixelleTools {
         for key in ["title", "split_mode", "prompt_prefix", "tts_instruct", "tts_voice", "tts_language", "bgm_mode"] {
             if let value = args[key] as? String { spec[key] = value }
         }
+        // Finished pictures (画 / 改, or any picture), one per scene; "" draws that scene. pv.py copies
+        // them to the box, where they are used as they are.
+        var everyPictureGiven = false
+        if let pictures = args["images"] as? [Any] {
+            guard mode == "fixed" else { return .failure(Failure("images 要和你写的场景一一对上：用 mode fixed")) }
+            var given: [Any] = []
+            for item in pictures {
+                let path = item is NSNull ? "" : (FilmTools.text(item).trimmingCharacters(in: .whitespaces) as NSString).expandingTildeInPath
+                if path.isEmpty { given.append(NSNull()); continue }
+                guard FileManager.default.fileExists(atPath: path) else {
+                    return .failure(Failure("images 里这张图找不到：\(path)"))
+                }
+                given.append(path)
+            }
+            spec["images"] = given
+            everyPictureGiven = !given.contains { $0 is NSNull }
+        }
+        // Finished voice-overs, one per scene; "" voices that scene as usual.
+        if let sounds = args["audios"] as? [Any] {
+            guard mode == "fixed" else { return .failure(Failure("audios 要和你写的场景一一对上：用 mode fixed")) }
+            var given: [Any] = []
+            for item in sounds {
+                let path = item is NSNull ? "" : (FilmTools.text(item).trimmingCharacters(in: .whitespaces) as NSString).expandingTildeInPath
+                if path.isEmpty { given.append(NSNull()); continue }
+                guard FileManager.default.fileExists(atPath: path) else {
+                    return .failure(Failure("audios 里这段声音找不到：\(path)"))
+                }
+                given.append(path)
+            }
+            spec["audios"] = given
+        }
         if let prompts = args["image_prompts"] as? [Any] {
             spec["image_prompts"] = prompts.map(FilmTools.text)
-        } else if mode == "fixed" {
+        } else if mode == "fixed" && !everyPictureGiven {
             notes.append("没给 image_prompts：盒子上的模型会照稿子自己写画面描述（又长又花哨，比喻会被照字面画出来）。最好自己写")
         }
         if let n = FilmTools.int(args["n_scenes"]) { spec["n_scenes"] = n }

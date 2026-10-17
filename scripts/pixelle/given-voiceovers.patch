@@ -1,0 +1,125 @@
+--- a/api/schemas/video.py
++++ b/api/schemas/video.py
+@@ -84,6 +84,12 @@
+                     "Mac's pictures to data/uploads/ first) — used as it is and only composed into the card; "
+                     "null draws that scene from image_prompts. Count must equal the number of scenes."
+     )
++    audios: Optional[List[Optional[str]]] = Field(
++        None,
++        description="LocalKin: a finished voice-over per scene — a sound file under Pixelle's folder (pv.py copies "
++                    "the Mac's files to data/uploads/ first) — used as it is, the scene as long as it; null voices "
++                    "that scene as usual. Count must equal the number of scenes."
++    )
+     master_audio: Optional[bool] = Field(
+         None,
+         description="Finish the sound: loudness to loudness_lufs, 48 kHz stereo (default true)"
+@@ -204,6 +210,7 @@
+     redraw: Optional[List[int]] = Field(None, description="LocalKin: scenes (1-based) whose picture is drawn again; the rest keep theirs")
+     image_prompts: Optional[Dict[str, str]] = Field(None, description="LocalKin: new picture words for scenes in redraw, by scene number ('6': '...'); left out, the same words with a new seed")
+     images: Optional[Dict[str, str]] = Field(None, description="LocalKin: finished pictures for chosen scenes, by scene number ('6': a file under Pixelle's folder), used as they are and their cards composed again; the rest keep theirs")
++    audios: Optional[Dict[str, str]] = Field(None, description="LocalKin: finished voice-overs for chosen scenes, by scene number ('6': a sound file under Pixelle's folder), used as they are; the rest keep theirs. Not with revoice")
+     bgm_path: Optional[str] = Field(None, description="Music (default: the source's); '' for none")
+     bgm_volume: Optional[float] = Field(None, ge=0.0, le=1.0, description="Music volume (default: the source's)")
+     bgm_mode: Optional[Literal["loop", "once"]] = Field(None, description="default: the source's")
+--- a/api/routers/video.py
++++ b/api/routers/video.py
+@@ -137,7 +137,7 @@
+ 
+     # LocalKin additions: passed only when given, so config fills the rest
+     for key in ("tts_inference_mode", "tts_voice", "tts_speed", "tts_instruct",
+-                "tts_language", "tts_url", "split_mode", "image_prompts", "images",
++                "tts_language", "tts_url", "split_mode", "image_prompts", "images", "audios",
+                 "master_audio", "loudness_lufs", "bgm_mode",
+                 "tts_one_take", "scene_motion", "motion_prompts", "motion_smooth"):
+         value = getattr(request_body, key, None)
+--- a/pixelle_video/pipelines/standard.py
++++ b/pixelle_video/pipelines/standard.py
+@@ -362,6 +362,17 @@
+                 if picture:
+                     frame.image_path = given_picture(picture, ctx.task_id, frame.index)
+                     frame.media_type = "image"
++        # LocalKin: a scene given a finished voice-over is as long as it; nothing is voiced for it.
++        given_audios = ctx.params.get("audios")
++        if given_audios is not None and len(given_audios) != len(ctx.storyboard.frames):
++            raise ValueError(f"audios has {len(given_audios)} entries but the script has "
++                             f"{len(ctx.storyboard.frames)} scenes; give one per scene (null voices that scene)")
++        if given_audios:
++            from pixelle_video.services.localkin_motion import given_sound, media_duration
++            for frame, sound in zip(ctx.storyboard.frames, given_audios):
++                if sound:
++                    frame.audio_path = given_sound(sound, ctx.task_id, frame.index)
++                    frame.duration = media_duration(frame.audio_path)
+ 
+     async def produce_assets(self, ctx: PipelineContext):
+         """Step 6: Generate audio, images, and render frames (Core processing)."""
+@@ -372,7 +383,12 @@
+         # call, so the whole script is read in one take and cut at the pauses
+         # between lines (localkin_motion). If the take cannot be cut cleanly the
+         # lines are voiced one by one, as before, and the result says so.
+-        if config.tts_inference_mode == "localkin":
++        given = [f.index + 1 for f in storyboard.frames if f.audio_path]
++        if given:
++            # LocalKin: voice-overs handed in (audios) are used as they are; a scene without one is voiced
++            # line by line by the frame processor.
++            storyboard.voice = {"mode": "given", "scenes": given}
++        elif config.tts_inference_mode == "localkin":
+             if config.tts_one_take and len(storyboard.frames) > 1 and not any(f.audio_path for f in storyboard.frames):
+                 self._report_progress(ctx.progress_callback, "voicing_one_take", 0.18)
+                 from pixelle_video.services.localkin_motion import voice_in_one_take
+--- a/pixelle_video/services/localkin_motion.py
++++ b/pixelle_video/services/localkin_motion.py
+@@ -510,6 +510,26 @@
+     target.parent.mkdir(parents=True, exist_ok=True)
+     with Image.open(source) as picture:
+         picture.convert("RGB").save(target, "PNG")
++    return str(target)
++
++
++SOUND_SUFFIXES = (".wav", ".mp3", ".flac", ".m4a")
++
++
++def given_sound(path: str, task_id: str, index: int) -> str:
++    """A finished voice-over handed in for a scene — read by the narrator chosen elsewhere (a designed voice cloned
++    line by line, each line heard back) — taken into the task as frames/NN_audio.<ext>. As with pictures, only a
++    sound file under Pixelle's own folder is taken."""
++    from pixelle_video.utils.os_util import get_pixelle_video_root_path, get_task_frame_path
++
++    root = Path(get_pixelle_video_root_path()).resolve()
++    source = Path(path).expanduser()
++    source = (source if source.is_absolute() else root / source).resolve()
++    if root not in source.parents or not source.is_file() or source.suffix.lower() not in SOUND_SUFFIXES:
++        raise ValueError(f"audios: {path} is not a sound file under {root}")
++    target = Path(get_task_frame_path(task_id, index, "audio")).with_suffix(source.suffix.lower())
++    target.parent.mkdir(parents=True, exist_ok=True)
++    shutil.copy2(source, target)
+     return str(target)
+ 
+ 
+@@ -600,6 +620,18 @@
+         frame.composed_image_path = None
+         await core.frame_processor._step_compose_frame(frame, sb, sb.config)
+         kept.pop(frame.index, None)                # a kept moving clip showed the old picture
++    # Scenes given a finished voice-over (a narrator read and checked elsewhere): used as they are; a kept
++    # moving clip is fitted to the new length the way a revoiced scene's is.
++    sounds = {int(k): v for k, v in (getattr(request, "audios", None) or {}).items() if v}
++    if sounds and request.revoice:
++        raise ValueError("audios or revoice, not both: revoice reads every scene again")
++    if any(not 1 <= s <= n for s in sounds):
++        raise ValueError(f"audios: scenes are numbered 1..{n}")
++    for number, sound in sorted(sounds.items()):
++        frame = sb.frames[number - 1]
++        frame.audio_path = given_sound(sound, task_id, frame.index)
++    if sounds:
++        sb.voice = {"mode": "given", "scenes": sorted(sounds), "was": getattr(old, "voice", None)}
+     if redraw:
+         import random
+         media = core.media
+@@ -639,7 +671,7 @@
+             frame.audio_path = None
+         report("voicing_one_take", 0.05)
+         sb.voice = await voice_in_one_take(core.tts, sb.frames, sb.config)
+-    else:
++    elif not sounds:
+         sb.voice = {"mode": f"kept from {source}", "was": getattr(old, "voice", None)}
+ 
+     for i, frame in enumerate(sb.frames):

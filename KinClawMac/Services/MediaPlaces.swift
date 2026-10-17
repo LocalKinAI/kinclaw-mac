@@ -40,7 +40,7 @@ enum MediaCapability: String, CaseIterable, Identifiable {
     /// The places that can do it.
     var places: [MediaPlace] {
         switch self {
-        case .draw, .edit: return [.box, .openai, .google, .xai, .fal, .bailian]
+        case .draw, .edit: return [.box, .boxFlux, .openai, .google, .xai, .fal, .bailian]
         case .film:        return [.box, .fal]
         case .voice:       return [.box, .bailian, .openai]
         }
@@ -48,13 +48,17 @@ enum MediaCapability: String, CaseIterable, Identifiable {
 }
 
 enum MediaPlace: String, CaseIterable, Identifiable {
-    case box, fal, bailian, openai, google, xai
+    /// The box with its default model (Qwen-Image-2.1-Turbo for 画 and 改), and
+    /// the box with FLUX 3 Image Klein instead — a second picture model there,
+    /// not another provider: no key, nothing leaves the LAN.
+    case box, boxFlux, fal, bailian, openai, google, xai
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .box:     return "盒子"
+        case .boxFlux: return "盒子·FLUX 3"
         case .fal:     return "fal.ai"
         case .bailian: return "百炼"
         case .openai:  return "OpenAI"
@@ -63,7 +67,7 @@ enum MediaPlace: String, CaseIterable, Identifiable {
         }
     }
 
-    var isCloud: Bool { self != .box }
+    var isCloud: Bool { self != .box && self != .boxFlux }
 }
 
 /// The choice for each capability, kept in UserDefaults. A value that is not
@@ -104,7 +108,7 @@ enum CloudKey {
 
     static func environmentName(_ place: MediaPlace) -> String? {
         switch place {
-        case .box:     return nil
+        case .box, .boxFlux: return nil
         case .fal:     return "FAL_KEY"
         case .bailian: return "DASHSCOPE_API_KEY"
         case .openai:  return "OPENAI_API_KEY"

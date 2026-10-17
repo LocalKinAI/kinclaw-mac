@@ -790,7 +790,7 @@ final class StudioAgent: ObservableObject {
     /// (`--mcp-stdio --tools`). Montage's work is the bridge's; the Comfy
     /// tools are there for YuE2 songs, as they are for Pixelle's and Easel's.
     var panelTools: [String] {
-        let studio = ["panel_show", "box_services", "image_generate", "video_generate", "video_status",
+        let studio = ["panel_show", "box_services", "image_generate", "image_edit", "video_generate", "video_status",
                       // A photograph saying a script (TalkingVideo): a presenter, a greeting, a 口播.
                       "talking_video", "talking_video_status", "talking_video_continue",
                       // A lyric video for a song (JIZURA in the app).
@@ -1070,6 +1070,12 @@ final class StudioAgent: ObservableObject {
                 （几秒一个场景），场景比片段长、要放慢时也不卡；ComfyUI 被别的标签占着时那几场不补，结果里的 motion 会写明。以前逐句配音的片子每句像换了个人：\
                 pixelle_rework revoice true 重配成一个人。某几场的图坏了：pixelle_rework redraw [场号] 只重画这几场（约 50 秒一场，\
                 image_prompts 可以给新的英文画面描述），别的场景照旧；pixelle_wait 带 task 等的就是那个任务，别处又开了新任务也不会跟丢。\
+                画面里要有字、数字、图表的（讲解片常常是），先自己做图再交给 Pixelle：image_generate 一场一张（Qwen-Image-2.1-Turbo，中文字写得对；\
+                要写进画面的字放在「」里，字要短；folder 用这支片子自己的文件夹；1920x1080/image_full 是满屏 16:9，画 1664×928，约 55 秒一张），\
+                每张都看一眼，错字、错数、多余的东西用 image_edit 改（只说要改什么，约 50 秒，原图留着）；同一张图的几个变体（比如三把尺子各点亮一把）\
+                也用 image_edit 从一张改出来，画风才一致。然后 pixelle_make 的 images 一场一个文件（照用，不重画，不占 ComfyUI）；\
+                做好之后哪一场还要换：pixelle_rework images {"场号": 文件}。旁白也能这样给：audios 一场一个声音文件\
+                （别处念好、逐句听写核对过的，前后各留一点静音），照用，不再配音；哪一句要重念：pixelle_rework audios {"场号": 文件}。\
                 模板只有 image_*（每个场景一张 AI 图）\
                 和 static_*（纯文字，不用 ComfyUI）能在盒子上跑；大多数模板的页脚默认是 Pixelle 自己的署名（@Pixelle.AI），用 template_params\
                 （author / brand / describe / signature，"" 隐藏）换成对方的。音乐：盒子上的 localkin-wonder-33s.wav 可以用（bgm_volume 约 0.45，\

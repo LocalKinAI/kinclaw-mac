@@ -110,28 +110,68 @@ enum PanelTools {
             "name": "image_generate",
             "description": """
                 Draw a picture from a description and save it where the \
-                KinClaw companion keeps her art — on the user's box \
-                (Qwen-Image-2.1-Turbo: about 25 seconds at 768², 40 at 1024², 8 s \
-                more right after an edit) or on the cloud model chosen in \
-                Settings → 画·改·拍·声音 (GPT Image 2.5, Nano Banana 2.1, Grok \
-                Imagine 2.0, Qwen-Image on fal.ai or Bailian), paid with the \
-                user's own key. Use it when they ask for an image — a scene, a \
-                portrait, a background, a poster — rather than describing one in \
-                words. The answer is where the file landed.
+                KinClaw companion keeps her art — on the user's box, with \
+                Qwen-Image-2.1-Turbo (about 25 seconds at 768², 40 at 1024², 8 s \
+                more right after an edit; writes Chinese lettering right) or FLUX 3 \
+                Image Klein (`model: flux3`: more photographic, places elements by \
+                box, about 35–50 s at 1024², 65–75 s at 1664×928; its Chinese \
+                lettering often goes wrong — draw lettered pictures with Qwen, or \
+                draw the scene with FLUX and write the words in with image_edit on \
+                Qwen) — or on the cloud model chosen in Settings → 画·改·拍·声音 \
+                (GPT Image 2.5, Nano Banana 2.1, Grok Imagine 2.0, Qwen-Image on \
+                fal.ai or Bailian), paid with the user's own key. Use it when they \
+                ask for an image — a scene, a portrait, a background, a poster — \
+                rather than describing one in words, and for the pictures of a video \
+                (`folder`). The answer is where the file landed and which model drew it.
                 """,
             "inputSchema": [
                 "type": "object",
                 "properties": [
                     "prompt": ["type": "string",
-                               "description": "What to draw, in English or Chinese. Words that should appear in the picture go in quotes, e.g. 「月满中秋」 — the model writes Chinese and English lettering correctly."],
+                               "description": "What to draw, in English or Chinese. Words that should appear in the picture go in quotes, e.g. 「月满中秋」. FLUX 3 draws from a whole scene described — subject, colours, materials, where each thing is, light, camera: a short request is written out into one on the box first (about 5–15 s); for a layout, append a JSON list of boxes, [{\"id\": \"title_1\", \"bbox\": [top, left, bottom, right] on a 0–1000 grid, \"desc\": \"…\"}], tag each element <id> in the text, and it is drawn as written."],
+                    "model": ["type": "string",
+                              "description": "qwen (the box's Qwen-Image-2.1-Turbo) | flux3 (the box's FLUX 3 Image Klein) — for this one picture. Left out: the one chosen in Settings → 画·改·拍·声音."],
                     "mood": ["type": "string",
                              "description": "Save it under one of the companion's moods (开心/温柔/好奇/困/担心) or states (idle/listening/thinking/speaking) so she shows it then. Default: the rotating pool."],
-                    "width": ["type": "integer", "description": "Pixels wide (default 768)."],
+                    "folder": ["type": "string",
+                               "description": "Save it in this folder on this Mac instead of the companion's art — the pictures of a Pixelle video, say. Made if missing."],
+                    "width": ["type": "integer", "description": "Pixels wide (default 768). 16:9 for a 1920×1080 video: 1664×928."],
                     "height": ["type": "integer", "description": "Pixels tall (default 768)."],
                     "steps": ["type": "integer", "description": "Denoising steps. Leave it out: the server uses the model's own (Qwen-Image-2.1-Turbo always runs its 8-step schedule)."],
                     "seed": ["type": "integer", "description": "Fixed seed, to repeat a picture."],
                 ],
                 "required": ["prompt"],
+            ],
+        ],
+        [
+            "name": "image_edit",
+            "description": """
+                Change a picture by an instruction (改) and save the result as a \
+                new file — on the user's box, with Qwen-Image-2.1-Turbo's editor \
+                (about 40–60 seconds, 8 s more right after a drawing; the one for \
+                lettering and small fixes) or FLUX 3 Image Klein (`model: flux3`: \
+                about 70 s for one picture, 3 minutes with references; up to 10 \
+                references composed into one scene — a person, a place, an object \
+                kept as they look; the instruction and the pictures are written into \
+                a whole-scene caption on the box first; it can redraw more than was \
+                asked and mangles Chinese lettering) — or on the cloud editor chosen \
+                in Settings → 画·改·拍·声音. What the instruction does not mention \
+                stays as it was, so fix a picture with it rather than drawing it \
+                again: wrong lettering or a number, a colour, an object added, moved \
+                or taken out, the light. The original is kept. The answer is where \
+                the new file landed — look at it.
+                """,
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "image": ["type": "string", "description": "The picture to change: a file on this Mac. The result has its size."],
+                    "prompt": ["type": "string", "description": "What to change, as an instruction, in English or Chinese — 把标签改成「1337 秒」, \"make the left ruler glow amber and dim the other two\" — not a description of the whole picture. Lettering to write goes in quotes."],
+                    "references": ["type": "array", "items": ["type": "string"], "description": "Other pictures to take something from — a face, a place, an object — as image 2, 3… in the instruction. Optional."],
+                    "model": ["type": "string", "description": "qwen (the box's Qwen-Image-2.1-Turbo editor) | flux3 (the box's FLUX 3 Image Klein) — for this one edit. Left out: the one chosen in Settings → 画·改·拍·声音."],
+                    "folder": ["type": "string", "description": "Where to save the result. Default: beside the picture."],
+                    "seed": ["type": "integer", "description": "Fixed seed, to repeat an edit."],
+                ],
+                "required": ["image", "prompt"],
             ],
         ],
         [
@@ -1274,8 +1314,10 @@ enum PanelTools {
                 cards unless `motion`: pan (a slow push or drift, seconds a scene) or ltx (LTX-2 on the box animates \
                 each picture — real motion, about 3 minutes a scene; the card, title and subtitle stay on top). A \
                 still version first and then pixelle_rework with motion is the way to show the pictures before \
-                spending the minutes. There is no redoing one scene's picture: change its line or prompt and make the \
-                video again (unchanged prompts give the same pictures).
+                spending the minutes. A scene's picture is remade later with pixelle_rework (redraw, or images). \
+                Pictures that carry lettering, numbers or a chart are best made first and checked: draw each with \
+                image_generate (Qwen-Image-2.1-Turbo writes Chinese right; folder: the video's own), look at it, fix \
+                what is wrong with image_edit, then give them here in `images` — used as they are, nothing drawn again.
                 """,
             "inputSchema": [
                 "type": "object",
@@ -1284,6 +1326,8 @@ enum PanelTools {
                     "mode": ["type": "string", "description": "fixed (default: the script as written) | generate (text is a topic and the box's model writes the lines — vaguer and longer than asked)."],
                     "title": ["type": "string", "description": "Shown on every card."],
                     "image_prompts": ["type": "array", "items": ["type": "string"], "description": "One per scene, in English, used exactly as written: what is literally in the frame, no metaphors (a metaphor is drawn literally). As many as the scenes. Left out, the box's model writes them from the narration."],
+                    "images": ["type": "array", "items": ["type": "string"], "description": "Finished pictures, one per scene in order: a file on this Mac (made with image_generate / image_edit, or any picture), \"\" to draw that scene from image_prompts. Used as they are — copied to the box, put on the card, nothing drawn. Make them the shape the template shows: 1920x1080/image_full shows the picture full-bleed (1664×928). With a picture for every scene image_prompts may be left out; give them anyway as the record of what each shows."],
+                    "audios": ["type": "array", "items": ["type": "string"], "description": "Finished voice-overs, one per scene in order: a sound file on this Mac (wav, mp3, flac, m4a) — a narrator read and checked elsewhere, line by line — \"\" to voice that scene as usual. Used as they are: each scene lasts as long as its sound, and the tts_* fields are not used for it. Leave a little silence at each end (about 0.25 s before, 0.5 s after) or the lines run into each other."],
                     "prompt_prefix": ["type": "string", "description": "A style put in front of every picture prompt, e.g. \"Cinematic space-science illustration, photoreal, deep navy and amber palette\"."],
                     "split_mode": ["type": "string", "description": "How the script is cut into scenes: paragraph (default) | line | sentence."],
                     "frame_template": ["type": "string", "description": "Layout and video size (pixelle_templates). Default 1080x1920/image_default.html, vertical. On the box only image_* (an AI picture per scene) and static_* (text on a background, no ComfyUI) run."],
@@ -1316,7 +1360,8 @@ enum PanelTools {
                 video: `revoice` reads the whole narration again in one take (one narrator; a video made line by \
                 line has a different voice in every scene), `motion` makes the scenes move (pan: seconds; ltx: about \
                 3 minutes a scene), and `redraw` draws only the scenes whose picture is wrong again (about 50 s \
-                each), with new picture words in `image_prompts` when given — every other scene keeps its picture. \
+                each), with new picture words in `image_prompts` when given, or `images` puts a finished picture \
+                in a scene (one fixed with image_edit, say) — every other scene keeps its picture. \
                 Say how long before calling it and wait for a yes. Answers at once with a task id; follow it with \
                 pixelle_wait.
                 """,
@@ -1335,6 +1380,8 @@ enum PanelTools {
                 "bgm_volume": ["type": "number", "description": "Default: as before."],
                 "redraw": ["type": "array", "items": ["type": "integer"], "description": "Scenes (1-based) whose picture is drawn again and its card composed again; the rest keep theirs."],
                 "image_prompts": ["type": "object", "description": "New picture words for scenes in redraw, by scene number: {\"6\": \"…\"} (English, as pixelle_make's). Left out, a scene is drawn again from the same words with a new seed."],
+                "images": ["type": "object", "description": "Finished pictures for some scenes, by scene number: {\"6\": \"/path/on/this/Mac.png\"} — used as they are, those cards composed again, the rest kept. A scene is either here or in redraw."],
+                "audios": ["type": "object", "description": "Finished voice-overs for some scenes, by scene number: {\"6\": \"/path/on/this/Mac.wav\"} — a line read again, say — used as they are, the rest kept. Not with revoice."],
             ] as [String: Any]],
         ],
         [
@@ -1899,6 +1946,7 @@ enum PanelTools {
         case "avatar_outfits": return (wardrobe(), false)
         case "avatar_wear":  return wear(args)
         case "image_generate": return await draw(args)
+        case "image_edit": return await editPicture(args)
         case "film_frames": return await filmFrames(args)
         case "film_count": return await filmCount(args)
         case "film_fix_picture": return await filmFixPicture(args)
@@ -2861,9 +2909,21 @@ enum PanelTools {
         }
         // A mood or state name puts it in that folder, which is what makes the
         // companion show it at the right moment rather than in the rotation.
+        // A folder of the caller's own keeps a video's pictures out of her art.
         let mood = (args["mood"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let folder = mood.isEmpty ? CompanionArt.folder
-                                  : CompanionArt.folder.appendingPathComponent(mood)
+        let own: URL?
+        switch pictureFolder(args["folder"]) {
+        case .failure(let why): return (why.text, true)
+        case .success(let named): own = named
+        }
+        let folder = own ?? (mood.isEmpty ? CompanionArt.folder
+                                           : CompanionArt.folder.appendingPathComponent(mood))
+        let chosen: MediaPlace?
+        switch boxModel(args["model"]) {
+        case .failure(let why): return (why.text, true)
+        case .success(let place): chosen = place
+        }
+        let place = chosen ?? MediaPlacement.place(.draw)
         let client = DiffuserClient.shared
         do {
             let file = try await client.generate(
@@ -2871,14 +2931,89 @@ enum PanelTools {
                 steps: args["steps"] as? Int,
                 width: args["width"] as? Int ?? 768,
                 height: args["height"] as? Int ?? 768,
-                seed: args["seed"] as? Int
+                seed: args["seed"] as? Int,
+                on: chosen
             )
-            let where_ = mood.isEmpty ? "陪伴模式的图片池" : "「\(mood)」那一组"
-            return ("画好了，存到\(where_)：\(file.path)", false)
+            let where_ = own != nil ? folder.path : mood.isEmpty ? "陪伴模式的图片池" : "「\(mood)」那一组"
+            return ("画好了（\(drawnBy(place, editing: false))），存到\(where_)：\(file.path)", false)
         } catch {
             let status = await client.refresh()
-            let hint = status.reachable ? "" : "（出图服务在 \(DiffuserClient.host)，看看它在不在）"
+            let host = place == .boxFlux ? DiffuserClient.fluxHost : DiffuserClient.host
+            let hint = status.reachable || place.isCloud ? "" : "（出图服务在 \(host)，看看它在不在）"
             return ("画不出来：\(error.localizedDescription)\(hint)", true)
+        }
+    }
+
+    /// A model named for one picture: qwen or flux3, both on the box; nil when none was named.
+    private static func boxModel(_ value: Any?) -> Result<MediaPlace?, Refusal> {
+        let named = ((value as? String) ?? "").lowercased().filter { !$0.isWhitespace && $0 != "-" && $0 != "_" && $0 != "." }
+        switch named {
+        case "": return .success(nil)
+        case "qwen", "qwenimage", "qwenimage21", "qwenimage21turbo": return .success(.box)
+        case "flux3", "flux", "flux3klein", "flux3imageklein": return .success(.boxFlux)
+        default: return .failure(Refusal(text: "model 是 qwen（盒子上的 Qwen-Image-2.1-Turbo）或 flux3（盒子上的 FLUX 3 Image Klein），不写就按设置里选的"))
+        }
+    }
+
+    /// Which model made it, for the answer: the agent reading it should know whose lettering to check.
+    private static func drawnBy(_ place: MediaPlace, editing: Bool) -> String {
+        switch place {
+        case .box:     return "盒子 · Qwen-Image-2.1-Turbo"
+        case .boxFlux: return "盒子 · FLUX 3 Image Klein"
+        default:       return place.title + (editing ? " 的改图模型" : " 的画图模型")
+        }
+    }
+
+    struct Refusal: Error { let text: String }
+
+    /// A folder named for a picture: a full path on this Mac (~ allowed); nil when none was given.
+    private static func pictureFolder(_ value: Any?) -> Result<URL?, Refusal> {
+        let named = (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if named.isEmpty { return .success(nil) }
+        let path = (named as NSString).expandingTildeInPath
+        guard path.hasPrefix("/") else { return .failure(Refusal(text: "folder 要写这台 Mac 上的完整路径：\(named)")) }
+        return .success(URL(fileURLWithPath: path, isDirectory: true))
+    }
+
+    /// 改 for any picture: the result is a new file beside the old one (or in
+    /// `folder`), the old one untouched — a picture with one thing wrong is
+    /// fixed rather than drawn again, and the rest of it stays.
+    private static func editPicture(_ args: [String: Any]) async -> (String, Bool) {
+        guard let prompt = (args["prompt"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !prompt.isEmpty else {
+            return ("image_edit 需要 prompt：要怎么改", true)
+        }
+        guard let path = (args["image"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !path.isEmpty else {
+            return ("image_edit 需要 image：要改的那张图", true)
+        }
+        let source = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+        guard FileManager.default.fileExists(atPath: source.path) else {
+            return ("找不到要改的那张图：\(source.path)", true)
+        }
+        let references = (args["references"] as? [Any] ?? []).map {
+            URL(fileURLWithPath: (FilmTools.text($0) as NSString).expandingTildeInPath)
+        }
+        if let missing = references.first(where: { !FileManager.default.fileExists(atPath: $0.path) }) {
+            return ("找不到这张参考图：\(missing.path)", true)
+        }
+        let folder: URL
+        switch pictureFolder(args["folder"]) {
+        case .failure(let why): return (why.text, true)
+        case .success(let named): folder = named ?? source.deletingLastPathComponent()
+        }
+        let chosen: MediaPlace?
+        switch boxModel(args["model"]) {
+        case .failure(let why): return (why.text, true)
+        case .success(let place): chosen = place
+        }
+        let place = chosen ?? MediaPlacement.place(.edit)
+        do {
+            let file = try await DiffuserClient.shared.edit(prompt: prompt, from: source, also: references,
+                                                            into: folder, seed: args["seed"] as? Int, on: chosen)
+            return ("改好了（\(drawnBy(place, editing: true))），存成新的一张（原图没动）：\(file.path)", false)
+        } catch {
+            return ("改不了：\(error.localizedDescription)", true)
         }
     }
 

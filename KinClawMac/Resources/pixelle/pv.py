@@ -14,9 +14,13 @@ Commands (JSON bodies on stdin where noted):
   prompts   < ["narration", ...]                 picture prompts from the box's LLM
   image PROMPT [--size WxH] [--full] [--prefix P]  one test picture (~45 s, --full ~2 min)
   voice TEXT [--instruct D] [--speaker S] [--url 8101|8102|URL] [--speed X] [--check]
-  make [--file job.json] < job                   submit a video job, returns at once
+  make [--file job.json] < job                   submit a video job, returns at once; "images": [a picture
+                                                 file on this Mac per scene, or null] uses finished
+                                                 pictures (the app's 画/改) instead of drawing them;
+                                                 "audios": [a voice-over file per scene, or null] likewise
   rework [--file job.json] < job                 remake a finished video from its own pictures:
-                                                 {"source": OUTPUT_DIR, "revoice": true, "scene_motion": "ltx", ...}
+                                                 {"source": OUTPUT_DIR, "revoice": true, "scene_motion": "ltx", ...};
+                                                 "images" / "audios": {"6": file on this Mac} swaps scene 6's
   wait TASK [--timeout 540]                      follow a job; fetches the result when done
   fetch TASK|OUTPUT_DIR                          copy a finished job's files to this Mac
   tasks | cancel TASK | log [N]
@@ -32,6 +36,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 BOX = os.environ.get("PIXELLE_BOX", "jackysub@192.168.0.21")
@@ -390,6 +395,56 @@ def upload_bgm(job):
     return "music %s copied to the box's data/bgm/ as %s" % (os.path.basename(local), name)
 
 
+PICTURE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
+SOUND_SUFFIXES = (".wav", ".mp3", ".flac", ".m4a")
+KINDS = {"images": (PICTURE_SUFFIXES, "a png, jpg or webp picture"),
+         "audios": (SOUND_SUFFIXES, "a wav, mp3, flac or m4a sound")}
+
+
+def check_files(files, what):
+    """Every file given for `what` (images | audios) is there on this Mac and of the right kind."""
+    suffixes, kind = KINDS[what]
+    for path in files:
+        local = os.path.expanduser(str(path))
+        if not os.path.isfile(local):
+            raise Failure("%s: %s is not a file on this Mac" % (what, path))
+        if os.path.splitext(local)[1].lower() not in suffixes:
+            raise Failure("%s: %s is not %s" % (what, path, kind))
+
+
+def upload_pictures(pictures):
+    return upload_files(pictures, "images")
+
+
+def upload_files(files, what):
+    """Finished pictures (the app's 画 and 改) or voice-overs (a narrator read and checked line by line) on this
+    Mac, copied in one go into the box's data/uploads/<stamp>/, where the API takes them from. `files` maps a
+    name (the scene number) to a file here; returns name -> its path under ~/Pixelle-Video."""
+    if not files:
+        return {}
+    check_files(files.values(), what)
+    folder = "data/uploads/%s-%s" % (_dt.datetime.now().strftime("%Y%m%d_%H%M%S"), os.urandom(2).hex())
+    placed = {}
+    with tempfile.TemporaryDirectory() as stage:
+        for name, path in files.items():
+            local = os.path.realpath(os.path.expanduser(str(path)))
+            file = "%s%s" % (name, os.path.splitext(local)[1].lower())
+            os.symlink(local, os.path.join(stage, file))
+            placed[name] = "%s/%s" % (folder, file)
+        # One tar stream rather than a copy per file; -h packs the files, not the links, and
+        # COPYFILE_DISABLE keeps macOS's ._ metadata files out of it.
+        packed = subprocess.run(["tar", "-c", "-h", "-C", stage, "."], capture_output=True,
+                                env=dict(os.environ, COPYFILE_DISABLE="1"))
+        if packed.returncode != 0:
+            raise Failure("packing the %s failed: %s" % (what, packed.stderr.decode(errors="replace")[:300]))
+    where = shlex.quote(remote_path(folder))
+    rc, _, err = ssh("mkdir -p %s && tar -x -C %s" % (where, where), stdin=packed.stdout, timeout=600, binary=True)
+    if rc != 0:
+        kind = Unreachable if rc in TRANSPORT else Failure
+        raise kind("copying the %s to the box failed (rc %d): %s" % (what, rc, err.decode(errors="replace")[:300]))
+    return placed
+
+
 def cmd_make(args):
     if args.file:
         with open(args.file) as f:
@@ -420,6 +475,31 @@ def cmd_make(args):
         n = job.get("n_scenes", 5)
         if job.get("image_prompts"):
             notes.append("image_prompts only line up with scenes you wrote: use mode 'fixed'")
+    # Finished pictures, one per scene (null: drawn from its image_prompt as usual).
+    pictures = job.get("images")
+    undrawn = list(range(1, n + 1))
+    if pictures is not None:
+        if mode != "fixed":
+            raise Failure("images line up with scenes you wrote: use mode 'fixed'")
+        if not isinstance(pictures, list) or len(pictures) != n:
+            raise Failure("images has %s entries but the text splits into %d scenes: one per scene, null to draw it"
+                          % (len(pictures) if isinstance(pictures, list) else "no list of", n))
+        undrawn = [i + 1 for i, p in enumerate(pictures) if not p]
+        if undrawn and prompts is None:
+            raise Failure("scenes %s have no picture: give image_prompts (one per scene) to draw them, or a "
+                          "picture for every scene" % undrawn)
+        check_files([p for p in pictures if p], "images")
+    # Finished voice-overs, one per scene (null: voiced as usual) — a narrator read and checked line by line.
+    sounds = job.get("audios")
+    unvoiced = n
+    if sounds is not None:
+        if mode != "fixed":
+            raise Failure("audios line up with scenes you wrote: use mode 'fixed'")
+        if not isinstance(sounds, list) or len(sounds) != n:
+            raise Failure("audios has %s entries but the text splits into %d scenes: one per scene, null to voice it"
+                          % (len(sounds) if isinstance(sounds, list) else "no list of", n))
+        check_files([s for s in sounds if s], "audios")
+        unvoiced = sum(1 for s in sounds if not s)
     motion = job.get("scene_motion") or "none"
     if motion not in ("none", "pan", "ltx"):
         raise Failure("scene_motion is none, pan (a slow push/drift, seconds) or ltx (real motion, ~3 min a scene)")
@@ -429,20 +509,37 @@ def cmd_make(args):
         ltx = ltx_health()
         if ltx:
             raise Failure("scene_motion ltx needs LTX on the box's :8001, which %s (the app starts it; or use pan)" % ltx)
+    if pictures is not None:
+        placed = upload_pictures({"%02d" % (i + 1): p for i, p in enumerate(pictures) if p})
+        job["images"] = [placed.get("%02d" % (i + 1)) for i in range(n)]
+        notes.append("%d finished pictures copied to the box (%s); %s"
+                     % (len(placed), os.path.dirname(next(iter(placed.values()), "")) or "none",
+                        "scenes %s drawn from image_prompts" % undrawn if undrawn else "nothing to draw"))
+    if sounds is not None:
+        placed = upload_files({"%02d" % (i + 1): s for i, s in enumerate(sounds) if s}, "audios")
+        job["audios"] = [placed.get("%02d" % (i + 1)) for i in range(n)]
+        notes.append("%d finished voice-overs copied to the box; %s"
+                     % (len(placed), "%d scenes voiced as usual" % unvoiced if unvoiced else "nothing to voice"))
     res = api("POST", "/api/video/generate/async", job, timeout=60)
     task = res["task_id"]
     folder = ensure_dir(os.path.join(LOCAL_ROOT, "jobs"))
     with open(os.path.join(folder, task + ".json"), "w") as f:
-        json.dump(job, f, ensure_ascii=False, indent=2)
+        json.dump(dict(job, images_on_mac=pictures, audios_on_mac=sounds), f, ensure_ascii=False, indent=2)
     if os.path.basename(job["frame_template"]).startswith("static_"):
         estimate = "under a minute (text-only template: no pictures, ComfyUI not used)"
     else:
-        per = 150 if "full" in (job.get("media_workflow") or "") else 60
-        per += {"ltx": 190, "pan": 5}.get(motion, 0)
-        estimate = ("about %d-%d min if ComfyUI is free (≈45-50 s picture%s per scene, the voice-over in one "
-                    "take); longer when other tabs' jobs are in ComfyUI's queue (pv.py status)"
-                    % (max(1, n * per // 60 - 1), n * per // 60 + 2,
-                       " + ≈3 min of LTX motion" if motion == "ltx" else ""))
+        draw = 150 if "full" in (job.get("media_workflow") or "") else 60
+        move = {"ltx": 190, "pan": 5}.get(motion, 0)
+        # A given picture costs its card and, unless given too, its line's voice: 5 s each.
+        seconds = len(undrawn) * draw + (n - len(undrawn)) * 5 + min(unvoiced, n - len(undrawn)) * 5 + n * move
+        lo, hi = max(1, seconds // 60 - 1), seconds // 60 + 2
+        if undrawn:
+            estimate = ("about %d-%d min if ComfyUI is free (≈45-50 s a picture drawn%s, the voice-over in one "
+                        "take); longer when other tabs' jobs are in ComfyUI's queue (pv.py status)"
+                        % (lo, hi, " + ≈3 min of LTX motion a scene" if motion == "ltx" else ""))
+        else:
+            estimate = ("about %d-%d min (every picture given: nothing drawn, ComfyUI not used for pictures%s)"
+                        % (lo, hi, "; ≈3 min of LTX motion a scene" if motion == "ltx" else ""))
     out({"task_id": task, "scenes": n, "estimate": estimate,
          "next": "pv.py wait %s" % task, "notes": notes})
 
@@ -472,9 +569,12 @@ def cmd_rework(args):
     motion = job.get("scene_motion")          # left out: every scene keeps the motion it had
     if motion is not None and motion not in ("none", "pan", "ltx"):
         raise Failure("scene_motion is none (still), pan or ltx; leave it out to keep each scene's motion")
-    if not job.get("revoice") and motion is None and not job.get("bgm_path") and not job.get("redraw"):
-        raise Failure("nothing to redo: revoice true (one narrator), scene_motion none|pan|ltx, redraw [scenes] "
-                      "and/or a new bgm_path")
+    if (not job.get("revoice") and motion is None and not job.get("bgm_path") and not job.get("redraw")
+            and not job.get("images") and not job.get("audios")):
+        raise Failure("nothing to redo: revoice true (one narrator), scene_motion none|pan|ltx, redraw [scenes], "
+                      "images {scene: picture file}, audios {scene: voice-over file} and/or a new bgm_path")
+    if job.get("audios") and job.get("revoice"):
+        raise Failure("audios or revoice, not both: revoice reads every scene again in one take")
     sb = json.loads(box_bytes("output/%s/storyboard.json" % job["source"]).decode())
     frames = sb.get("frames", [])
     n = len(frames)
@@ -497,11 +597,39 @@ def cmd_rework(args):
             raise Failure("image_prompts are for the scenes in redraw")
     if redraw:
         job["redraw"] = redraw
+    # Finished pictures for some scenes (the app's 画/改), by scene number: used as they are.
+    pictures = job.get("images") or {}
+    if not isinstance(pictures, dict):
+        raise Failure("images is {scene number: picture file on this Mac}, e.g. {\"6\": \"/path/fixed.png\"}")
+    pictures = {int(k): v for k, v in pictures.items() if v}
+    if any(not 1 <= k <= n for k in pictures):
+        raise Failure("images: scenes are numbered 1..%d" % n)
+    if set(pictures) & set(redraw):
+        raise Failure("a scene is redrawn or given a picture, not both: %s" % sorted(set(pictures) & set(redraw)))
+    check_files(pictures.values(), "images")
+    # Finished voice-overs for some scenes, by scene number: used as they are, the rest keep theirs.
+    sounds = job.get("audios") or {}
+    if not isinstance(sounds, dict):
+        raise Failure("audios is {scene number: sound file on this Mac}, e.g. {\"6\": \"/path/line06.wav\"}")
+    sounds = {int(k): v for k, v in sounds.items() if v}
+    if any(not 1 <= k <= n for k in sounds):
+        raise Failure("audios: scenes are numbered 1..%d" % n)
+    check_files(sounds.values(), "audios")
     if motion == "ltx":
         ltx = ltx_health()
         if ltx:
             raise Failure("scene_motion ltx needs LTX on the box's :8001, which %s (the app starts it; or use pan)" % ltx)
-    seconds = 20 + (45 if job.get("revoice") else 0) + 50 * len(redraw)
+    if pictures:
+        placed = upload_pictures({"%02d" % k: v for k, v in pictures.items()})
+        job["images"] = {str(k): placed["%02d" % k] for k in pictures}
+    else:
+        job.pop("images", None)
+    if sounds:
+        placed = upload_files({"%02d" % k: v for k, v in sounds.items()}, "audios")
+        job["audios"] = {str(k): placed["%02d" % k] for k in sounds}
+    else:
+        job.pop("audios", None)
+    seconds = 20 + (45 if job.get("revoice") else 0) + 50 * len(redraw) + 6 * len(pictures)
     for f in frames:
         length = float(f.get("duration") or 6.0)
         if motion == "ltx" and f["index"] + 1 in chosen:
@@ -517,7 +645,7 @@ def cmd_rework(args):
         json.dump(dict(job, title=title), f, ensure_ascii=False, indent=2)
     out({"task_id": task, "source": job["source"], "title": title, "scenes": n,
          "moving": sorted(chosen) if motion in ("pan", "ltx") else [],
-         "redrawn": redraw,
+         "redrawn": redraw, "given_pictures": sorted(pictures), "given_voiceovers": sorted(sounds),
          "motion": motion or "kept (each scene moves as it did)", "revoice": bool(job.get("revoice")),
          "estimate": "about %d min%s" % (max(1, round(seconds / 60)),
                                           " (LTX ≈3 min a scene)" if motion == "ltx" else ""),

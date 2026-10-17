@@ -25,7 +25,7 @@ final class BoxServices: ObservableObject {
     static let binaryKey = "kinclaw.box.diffuser"
     static let defaultBinary = "~/.ollamadiffuser/venv/bin/ollamadiffuser"
 
-    enum Kind: String, CaseIterable { case draw, edit, film, filmHQ, brain, laya, comfy, narrator, clone, turn, omni, face }
+    enum Kind: String, CaseIterable { case draw, edit, flux, film, filmHQ, brain, laya, comfy, narrator, clone, turn, omni, face }
 
     struct Service: Identifiable, Equatable {
         let kind: Kind
@@ -36,8 +36,9 @@ final class BoxServices: ObservableObject {
     }
 
     static let all: [Service] = [
-        Service(kind: .draw, title: "画图（Qwen-Image-2.1-Turbo）", cost: "画过一张后约 29 GB；和改图轮流，起一个先停另一个；闲 10 分钟盒子控制台会停掉它"),
-        Service(kind: .edit, title: "改图 / 换装 / 空镜（Qwen-Image-2.1-Turbo）", cost: "改过一张后约 30 GB；和画图轮流，换一次约 10 秒；闲 10 分钟盒子控制台会停掉它"),
+        Service(kind: .draw, title: "画图（Qwen-Image-2.1-Turbo）", cost: "画过一张后约 29 GB；和改图、FLUX 3 轮流，起一个先停另一个；闲 10 分钟盒子控制台会停掉它"),
+        Service(kind: .edit, title: "改图 / 换装 / 空镜（Qwen-Image-2.1-Turbo）", cost: "改过一张后约 30 GB；和画图、FLUX 3 轮流，换一次约 10 秒；闲 10 分钟盒子控制台会停掉它"),
+        Service(kind: .flux, title: "画图 + 改图（FLUX 3 Image Klein）", cost: "画或改的时候约 37 GB，闲 10 分钟自己放掉模型（进程留着，几乎不占）；和 Qwen 的画图、改图轮流。短的要求先由盒子 Ollama 的 ornith 写成整段画面描述（约 23 GB，用完 2 分钟放掉）"),
         Service(kind: .film, title: "出片", cost: "空闲不占，拍的时候约 25 GB"),
         Service(kind: .filmHQ, title: "出片 · 精修 (q8)", cost: "拍的时候约 45 GB，一个镜头 9 分钟"),
         Service(kind: .brain, title: "kinfer 大模型", cost: "模型常驻，35B 约 35 GB，不会自己卸载"),
@@ -101,6 +102,7 @@ final class BoxServices: ObservableObject {
         switch kind {
         case .draw:   return "qwen-image-2.1-turbo-mlx"       // the same weights twice: its own 8-step
         case .edit:   return "qwen-image-2.1-turbo-edit-mlx"  // schedule to draw, its editor to change
+        case .flux:   return "flux3_server.py"                // a script: FLUX 3 Image Klein on mflux, both 画 and 改
         case .film:   return "ltx-2.3-mlx-q4"
         case .filmHQ: return "ltx-2.3-mlx-q8"
         case .brain:  return "ai.localkin.kinfer"          // a launchd label, not a model
@@ -120,6 +122,7 @@ final class BoxServices: ObservableObject {
         switch kind {
         case .draw:   return DiffuserClient.host
         case .edit:   return DiffuserClient.editHost
+        case .flux:   return DiffuserClient.fluxHost
         case .film:   return DiffuserClient.videoHost
         case .filmHQ: return replacingPort(of: DiffuserClient.videoHost, with: 8003)
         case .brain:
@@ -249,24 +252,26 @@ final class BoxServices: ObservableObject {
 
     // MARK: - Doing
 
-    /// The other of the two picture servers. Each holds all of
-    /// Qwen-Image-2.1-Turbo, 29–30 GB once it has made a picture, and the box
-    /// cannot keep both beside ComfyUI and a language model (it went down once
-    /// on memory, 2026-10-09) — so they take turns.
-    private static func partner(_ kind: Kind) -> Kind? {
+    /// The other picture servers. Each of Qwen's holds all of
+    /// Qwen-Image-2.1-Turbo, 29–30 GB once it has made a picture, FLUX 3 about
+    /// 37 GB while it works, and the box cannot keep two beside ComfyUI and a
+    /// language model (it went down once on memory, 2026-10-09) — so they take
+    /// turns.
+    private static func partners(_ kind: Kind) -> [Kind] {
         switch kind {
-        case .draw: return .edit
-        case .edit: return .draw
-        default:    return nil
+        case .draw: return [.edit, .flux]
+        case .edit: return [.draw, .flux]
+        case .flux: return [.draw, .edit]
+        default:    return []
         }
     }
 
     func start(_ kind: Kind) async {
         guard !Self.ssh.isEmpty else { note = "先填盒子的 SSH（user@地址）"; return }
-        // The one not wanted is let go first: about 3 s to stop, and the next
+        // The ones not wanted are let go first: about 3 s to stop, and the next
         // picture spends about 8 s loading. DiffuserClient makes one picture at a
         // time, so the one let go is not in the middle of one of ours.
-        if let other = Self.partner(kind), await Self.answers(other) { await stop(other) }
+        for other in Self.partners(kind) where await Self.answers(other) { await stop(other) }
         states[kind] = .starting
         note = nil
         let command: String
@@ -317,6 +322,16 @@ final class BoxServices: ObservableObject {
                 PATH=/opt/homebrew/bin:/usr/local/bin:$PATH PORT=\(Self.port(.turn)) \
                 nohup .venv/bin/python ~/\(Self.model(.turn)) > ~/Library/Logs/kinclaw/turn.log 2>&1 & echo started; }
                 """
+        } else if kind == .flux {
+            // FLUX 3 Image Klein in its own virtualenv under ~/.kinclaw/flux3
+            // (mflux 0.23, set up by scripts/flux3) — not OllamaDiffuser's, whose
+            // mflux the Qwen servers run on. One process does 画 and 改.
+            command = """
+                pgrep -f "\(Self.model(.flux))" >/dev/null && echo already || { \
+                mkdir -p ~/Library/Logs/kinclaw; cd ~/.kinclaw/flux3; \
+                PATH=/opt/homebrew/bin:/usr/local/bin:$PATH \
+                nohup venv/bin/python \(Self.model(.flux)) --port \(Self.port(.flux)) > ~/Library/Logs/kinclaw/flux.log 2>&1 & echo started; }
+                """
         } else if kind == .laya {
             // Its own virtualenv under ~/.kinclaw/laya — not the diffusion
             // servers', whose torch and transformers it has no business moving.
@@ -365,6 +380,7 @@ final class BoxServices: ObservableObject {
         let command = kind == .brain
             ? "launchctl bootout gui/$(id -u)/\(Self.model(.brain)) 2>&1; true"
             : kind == .laya ? "pkill -f laya_judge.py; true"
+            : kind == .flux ? "pkill -f \"\(Self.model(.flux))\"; true"
             : kind == .comfy ? "lsof -nP -iTCP:\(Self.port(.comfy)) -sTCP:LISTEN -t | xargs kill 2>/dev/null; true"
             : kind == .narrator || kind == .clone ? "pkill -f \"kin audio serve \(Self.model(kind)) \"; true"
             : kind == .turn ? "pkill -f \"\(Self.model(.turn))\"; true"
