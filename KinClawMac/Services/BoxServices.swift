@@ -47,7 +47,7 @@ final class BoxServices: ObservableObject {
         Service(kind: .narrator, title: "电影旁白（Qwen3-TTS 1.7B VoiceDesign）", cost: "约 3 GB；一段 100 字的旁白 9 秒读完。和对话用的快速语音（8101）分开"),
         Service(kind: .clone, title: "克隆声音（Qwen3-TTS 1.7B Base）", cost: "约 3 GB；几秒录音，就用那个人的声音说任何一种语言。视频翻译、用某段录音的声音做说话视频都靠它"),
         Service(kind: .turn, title: "陪伴小回合（Smart Turn + MaAI）", cost: "约 1 GB，只用 CPU；起来要一分钟。判断你说完没有、什么时候该嗯一声"),
-        Service(kind: .face, title: "实时口型（Ditto 身体 + MuseTalk 嘴）", cost: "约 7 GB；起来要半分钟。陪伴里「真人 · 实时口型」，每秒 20 帧"),
+        Service(kind: .face, title: "实时口型（Ditto 身体 + QuickTalk 嘴）", cost: "约 10 GB；起来要半分钟多。陪伴里「真人 · 实时口型」，每秒 20 帧"),
         Service(kind: .omni, title: "MiniCPM-o 全双工（陪伴的另一个大脑）", cost: "通话时约 14 GB，开摄像头约 23 GB，挂断后仍占着；不用就在这里停掉。只听盒子本机，经 ssh 隧道连"),
     ]
 
@@ -112,7 +112,7 @@ final class BoxServices: ObservableObject {
         case .clone:  return "qwen3-tts:1.7b-base"         // a kin audio model that clones a voice
         case .turn:   return "kin-avatar/turn/server.py"   // a script, not a model
         case .omni:   return "llama-omni-server"           // llama.cpp-omni with MiniCPM-o 4.5 Q8_0
-        case .face:   return "kin-avatar/face/server.py"   // MuseTalk on MLX over a Ditto body
+        case .face:   return "kin-avatar/face/server.py"   // QuickTalk (MuseTalk before) over a Ditto body
         }
     }
 
@@ -304,8 +304,9 @@ final class BoxServices: ObservableObject {
         } else if kind == .omni {
             command = OmniCall.serveCommand
         } else if kind == .face {
-            // MuseTalk's own virtualenv, the base clip under looks/; started by
-            // its full path so pgrep can tell it from other server.py.
+            // Started with MuseTalk's python; it re-execs itself in its mouth's own
+            // virtualenv (QuickTalk's is OpenTalking's) and keeps its path, so pgrep
+            // can tell it from other server.py. The body clips are under looks/.
             command = """
                 pgrep -f "\(Self.model(.face))" >/dev/null && echo already || { \
                 mkdir -p ~/Library/Logs/kinclaw; cd ~/kin-avatar/face; \

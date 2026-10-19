@@ -118,7 +118,7 @@ struct BoxDeskView: View {
                                  detail: turnTaker.connected ? "正在听你说话" : nil)
                     companionRow("MiniCPM-o 全双工", services.states[.omni],
                                  detail: omni.state == .live ? (omni.seeing ? "通话中 · 看着你" : "通话中") : nil)
-                    companionRow("实时口型（Ditto + MuseTalk）", services.states[.face],
+                    companionRow("实时口型（Ditto + QuickTalk）", services.states[.face],
                                  detail: liveFace.connected ? (liveFace.talking ? "她在说话" : "在线，待机中") : nil)
                 }
                 section("最近结束") {

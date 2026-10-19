@@ -9,11 +9,12 @@ import os
 /// kin-face on the box (~/kin-avatar/face/server.py, :8105) streams her twenty
 /// frames a second: a body rendered once by Ditto from her photograph (two of
 /// them — one that listens, one whose head moves as she talks; the camera
-/// still), and a mouth made by MuseTalk from each sentence of her voice. A whole
-/// sentence is pushed the moment its turn comes; its frames come back 0.31 s
-/// later (0.49 at the worst, measured), so the speaker plays every clip
-/// `voiceDelay` later than it hands it over and the lips meet the sound — the
-/// mouth a frame or two ahead, as a person's is.
+/// still), and a mouth drawn by QuickTalk from each sentence of her voice
+/// (MuseTalk until 2026-10-18 — 「好太多了」). A whole sentence is pushed the
+/// moment its turn comes; its first frame is ready 0.13 s later and each frame
+/// leaves the box at its own time, `latency_s` after the push, so the speaker
+/// plays every clip `voiceDelay` later than it hands it over and the lips meet
+/// the sound.
 ///
 /// Frames are shown at the pace the box sent them, not as they come in: this
 /// Mac and the box are both on Wi-Fi, which held frames back 0.4 s and more
@@ -29,7 +30,7 @@ import os
 ///
 /// Why not the whole face from her voice (Ditto alone): it is 91 ms a frame on
 /// the box's GPU at its best, ten frames a second. H3 and LTX are a hundred
-/// times slower than speech. Those make the body; MuseTalk the mouth.
+/// times slower than speech. Those make the body; QuickTalk the mouth.
 @MainActor
 final class LiveFace: ObservableObject {
     static let shared = LiveFace()

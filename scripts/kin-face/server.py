@@ -4,11 +4,18 @@ Her body is rendered once by Ditto from her photograph, the camera still, each
 clip looped forward and back so the loop has no seam — two bodies, as HeyGen
 films its presenters: one that listens (lips closed, a tilt of the head, a
 blink: base.mp4) and one that talks (her head moving with a voice, the lips held
-as in the photograph: speak.mp4). Her mouth is MuseTalk 1.5 on MLX, made from
-her voice as it arrives, over whichever body she is in: 20 frames a second at
-full quality on the M3 Ultra, 0.31 s after a whole sentence is pushed. Measured
-2026-10-02; tuning and fixes from ~/kin-avatar/musetalk/KIN-NOTES.md (async
-submit, exact mask cache, no audio prefix, chin margin, 1 s windows).
+as in the photograph: speak.mp4). Her mouth is drawn from her voice as it
+arrives, over whichever body she is in, twenty frames a second:
+
+  quicktalk  (since 2026-10-18) OpenTalking's QuickTalk on MPS, kin_quicktalk.py — teeth and
+             lips that look photographed (Jacky: 「好太多了」); 28 frames a second on the M3
+             Ultra, a clip's first frame ready ~0.2 s after it comes, so each is handed out at its time
+  musetalk   MuseTalk 1.5 on MLX (kin_mouth.py's tuning, ~/kin-avatar/musetalk/KIN-NOTES.md):
+             22 frames a second, 0.31 s after a whole sentence is pushed
+
+FACE_ENGINE, or a word in ~/kin-avatar/face/engine, chooses (quicktalk when neither says). Each
+runs in its own virtualenv; the box services start this with MuseTalk's python and it re-execs
+itself in QuickTalk's (~/opentalking/.venv).
 
 WS /face — one viewer at a time
   server → binary   1 byte kind (1 idle, 2 speaking, 3 waiting) + float64 pts
@@ -26,53 +33,64 @@ WS /face — one viewer at a time
                     the client plays it `latency_s` later so lips and sound meet
   client → text     {"type": "end"}        no more voice for now (renders the tail)
                     {"type": "interrupt"}  she was cut off: drop what is pending
-GET /health  {"ready", "fps", "latency_s", "look", "bodies", "viewing"}
+GET /health  {"ready", "engine", "fps", "latency_s", "look", "bodies", "viewing"}
 
-MLX work stays on the session's own render thread: the I/O side only pushes
-numpy and pops finished frames (KIN-NOTES, problem 2).
+The model's GPU work stays on its own drawing thread: the I/O side only pushes
+numpy and takes finished frames (KIN-NOTES, problem 2).
 """
-import asyncio
-import json
-import logging
 import os
-import struct
-import subprocess
 import sys
-import threading
-import time
 
-os.environ.setdefault("MT_SMART_CONV", "1")
-os.environ.setdefault("FUSION_MUSETALK_GRAPH_PATTERNS", "0")
-os.environ.setdefault("MT_BG_POOL_MAX_FRAMES", "1000")
-# A 1024x1312 body is 4 MB a frame: every frame of both bodies (318 + 478) must sit in the pool
-# and be precomputed, or the ones past the default 1 GB are decoded and re-analysed as she
-# speaks and the mouth falls behind.
-os.environ.setdefault("MT_BG_POOL_BUDGET_MB", "4500")
+VENVS = {"quicktalk": "~/opentalking/.venv", "musetalk": "~/kin-avatar/musetalk/.venv"}
+
+
+def _engine():
+    name = os.environ.get("FACE_ENGINE", "").strip().lower()
+    if not name:
+        try:
+            with open(os.path.expanduser("~/kin-avatar/face/engine")) as f:
+                name = f.read().strip().lower()
+        except OSError:
+            pass
+    return name if name in VENVS else "quicktalk"
+
+
+ENGINE = _engine()
+# In the engine's own virtualenv already, or re-exec there; MuseTalk's when QuickTalk's is missing.
+for _name in dict.fromkeys((ENGINE, "musetalk")):
+    _venv = os.path.realpath(os.path.expanduser(VENVS[_name]))
+    if os.path.realpath(sys.prefix) == _venv:
+        ENGINE = _name
+        break
+    _python = os.path.join(_venv, "bin", "python")
+    if os.path.exists(_python):
+        os.environ["FACE_ENGINE"] = _name
+        os.execv(_python, [_python, os.path.abspath(__file__)] + sys.argv[1:])
+else:
+    sys.exit(f"kin-face: no virtualenv for {ENGINE} ({VENVS[ENGINE]}) nor MuseTalk's")
+
+import asyncio  # noqa: E402
+import json  # noqa: E402
+import logging  # noqa: E402
+import struct  # noqa: E402
+import subprocess  # noqa: E402
+import threading  # noqa: E402
+import time  # noqa: E402
 
 import cv2  # noqa: E402
-import imageio  # noqa: E402
 import imageio_ffmpeg  # noqa: E402
 import numpy as np  # noqa: E402
-
-sys.path.insert(0, os.path.expanduser("~/kin-avatar/musetalk/kin"))
-import kin_tuning as kt  # noqa: E402
-from musetalk_mlx import MuseTalkSession, config  # noqa: E402
-from musetalk_mlx.utils.audio import AudioWindower  # noqa: E402
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect  # noqa: E402
 
-# Her mouth: the mouth+jaw mask, the crop line and the sharper paste tuned on her face
-# (kin_mouth.py — shared with the offline lip-sync OpenMontage uses, kin_lipsync.py).
-import kin_mouth  # noqa: E402
-
-kin_mouth.install()
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 log = logging.getLogger("kin-face")
 logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(asctime)s %(message)s")
 
 FPS = 20
+# From her voice pushed to its frames leaving the box; the app plays the voice this much later.
 LATENCY = float(os.environ.get("LATENCY_S", "0.35"))
 LOOK = os.path.realpath(os.environ.get("LOOK", os.path.expanduser("~/kin-avatar/face/looks/current")))
-MLX_DIR = os.path.expanduser("~/kin-avatar/musetalk/weights-mlx-fp16")
 
 # With one body her head idled while her mouth talked, and the face read wrong without anyone
 # being able to say why (「说不上来的感觉」). A cut from one body to the other lands on the frame
@@ -86,7 +104,7 @@ CONGESTED = 0.25  # seconds a frame may go unseen before the next ones are dropp
 
 
 def bodies_clip():
-    """The clip MuseTalk measures, and how many of its frames are the listening body (None when
+    """The clip her mouth is drawn on, and how many of its frames are the listening body (None when
     the look has only that one). Both bodies go in one clip, listening first."""
     base, speak = os.path.join(LOOK, "base.mp4"), os.path.join(LOOK, "speak.mp4")
     if not os.path.exists(speak):
@@ -98,15 +116,15 @@ def bodies_clip():
                         "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0", "-an", "-c:v", "libx264",
                         "-crf", "14", "-pix_fmt", "yuv420p", part], check=True)
         os.replace(part, both)
-    reader = imageio.get_reader(base)
+    cap = cv2.VideoCapture(base)
     try:
-        return both, reader.count_frames()
+        return both, int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     finally:
-        reader.close()
+        cap.release()
 
 
 class Bodies:
-    """Which body she is in and where: the frames MuseTalk renders on and the ones shown while
+    """Which body she is in and where: the frames her mouth is drawn on and the ones shown while
     she is quiet both come from here, one walk through the pool."""
 
     def __init__(self, pool, n_idle):
@@ -143,7 +161,8 @@ class Bodies:
         return self.n_idle + (k - self.n_idle + 1) % self.n_speak
 
     def speaking(self, downscale=1):
-        """MuseTalk's renderer takes its frames here, in place of BackgroundStore.get_frame."""
+        """The body frame the next drawn frame goes on (MuseTalk's renderer takes it here, in place of
+        BackgroundStore.get_frame; QuickTalk's drawing thread asks for its index)."""
         with self.lock:
             if self.at < self.n_idle:
                 i = self.at
@@ -190,44 +209,123 @@ class Bodies:
             return cut
 
 
+class Loop:
+    """A look with one body: talking and quiet both walk it forward (it is looped there and back)."""
+
+    def __init__(self, pool):
+        self.pool, self.at, self.lock = pool, 0, threading.Lock()
+
+    def speaking(self, downscale=1):
+        with self.lock:
+            self.at = (self.at + 1) % len(self.pool)
+            return self.pool[self.at], self.at
+
+    def listening(self):
+        return self.speaking()[0], False
+
+    def take_cut(self) -> bool:
+        return False
+
+
+class MuseTalkMouth:
+    """Her mouth as MuseTalk 1.5 on MLX draws it, with kin_mouth.py's mouth+jaw mask, crop line and
+    sharper paste — kin-face's mouth until 2026-10-18."""
+
+    def __init__(self, clip):
+        os.environ.setdefault("MT_SMART_CONV", "1")
+        os.environ.setdefault("FUSION_MUSETALK_GRAPH_PATTERNS", "0")
+        os.environ.setdefault("MT_BG_POOL_MAX_FRAMES", "1000")
+        # A 1024x1312 body is 4 MB a frame: every frame of both bodies (318 + 478) must sit in the pool
+        # and be precomputed, or the ones past the default 1 GB are decoded and re-analysed as she
+        # speaks and the mouth falls behind.
+        os.environ.setdefault("MT_BG_POOL_BUDGET_MB", "4500")
+        sys.path.insert(0, os.path.expanduser("~/kin-avatar/musetalk/kin"))
+        import kin_mouth
+        import kin_tuning as kt
+        from musetalk_mlx import MuseTalkSession, config
+        from musetalk_mlx.utils.audio import AudioWindower
+
+        kin_mouth.install()
+        kt.enable_async_submit()
+        kt.enable_chin_margin(0.06)
+        s = MuseTalkSession(None, clip, fps=FPS, mlx_dir=os.path.expanduser("~/kin-avatar/musetalk/weights-mlx-fp16"),
+                            mask_provider=kt.make_exact_mask())
+        kt.disable_audio_prefix(s)
+        s._windower = AudioWindower(sr=16000, fps=FPS, window_s=1.0, overlap_s=0.2)
+        s._out_q_cap = config.RENDER_HIGH_WATER + 2 * config.BATCH
+        kt.wait_precompute(s)
+        kt.prefill_masks(s)
+        # Trace the compiled graph once, so her first sentence does not pay for it.
+        s.push_audio(np.zeros(16000, dtype=np.float32))
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            if s.get_output_frame() is None and s.idle and not s._windower.has_window():
+                break
+        s.interrupt()
+        self.s, self.kt = s, kt
+        self.fps = FPS
+        self.pool = s._bg_store._bg_pool or []
+        self.walk = None
+
+    def attach(self, walk):
+        self.walk = walk
+        self.s._bg_store.get_frame = walk.speaking
+
+    def push(self, samples):
+        self.s.push_audio(samples)
+
+    def end(self):
+        self.kt.flush_tail(self.s)
+
+    def interrupt(self):
+        self.s.interrupt()
+
+    def take(self, now):
+        return self.s._out_q.popleft() if self.s._out_q else None
+
+    @property
+    def idle(self):
+        return self.s.idle
+
+    def quiet_frame(self):
+        frame, _ = self.s._bg_store.get_frame()
+        return frame
+
+
 def build():
     t = time.time()
-    kt.enable_async_submit()
-    kt.enable_chin_margin(0.06)
     clip, n_idle = bodies_clip()
-    s = MuseTalkSession(None, clip, fps=FPS, mlx_dir=MLX_DIR, mask_provider=kt.make_exact_mask())
-    kt.disable_audio_prefix(s)
-    s._windower = AudioWindower(sr=16000, fps=FPS, window_s=1.0, overlap_s=0.2)
-    s._out_q_cap = config.RENDER_HIGH_WATER + 2 * config.BATCH
-    kt.wait_precompute(s)
-    kt.prefill_masks(s)
-    # Trace the compiled graph once, so her first sentence does not pay for it.
-    s.push_audio(np.zeros(16000, dtype=np.float32))
-    deadline = time.time() + 60
-    while time.time() < deadline:
-        if s.get_output_frame() is None and s.idle and not s._windower.has_window():
-            break
-    s.interrupt()
-    b = None
-    pool = s._bg_store._bg_pool or []
+    if ENGINE == "musetalk":
+        mouth = MuseTalkMouth(clip)
+    else:
+        from kin_quicktalk import QuickTalkMouth
+        mouth = QuickTalkMouth(clip, LATENCY)
+    pool = mouth.pool
+    walk = None
     if n_idle and len(pool) > n_idle:
-        b = Bodies(pool, n_idle)
-        s._bg_store.get_frame = b.speaking
+        walk = Bodies(pool, n_idle)
     elif n_idle:
         log.warning("only %d frames in the pool for %d listening + talking ones: one body", len(pool), n_idle)
-    log.info("face ready in %.1f s (%s)", time.time() - t, LOOK)
-    return s, b
+    if walk is None and ENGINE != "musetalk":
+        walk = Loop(pool)
+    if walk is not None:
+        if ENGINE == "musetalk":
+            mouth.attach(walk)
+        else:
+            mouth.walk = walk
+    log.info("face ready in %.1f s (%s, %s)", time.time() - t, LOOK, ENGINE)
+    return mouth, walk
 
 
-session, bodies = build()
+mouth, walk = build()
 app = FastAPI()
 viewer = None
 
 
 @app.get("/health")
 async def health():
-    return {"ready": True, "fps": FPS, "latency_s": LATENCY, "look": os.path.basename(LOOK),
-            "bodies": 2 if bodies else 1, "viewing": viewer is not None}
+    return {"ready": True, "engine": ENGINE, "fps": FPS, "latency_s": LATENCY, "look": os.path.basename(LOOK),
+            "bodies": 2 if isinstance(walk, Bodies) else 1, "viewing": viewer is not None}
 
 
 @app.websocket("/face")
@@ -240,7 +338,7 @@ async def face(ws: WebSocket):
         except Exception:
             pass
     viewer = ws
-    session.interrupt()
+    mouth.interrupt()
     last = None
     sent = {1: 0, 2: 0, 3: 0}
     slots = ws.query_params.get("v") == "2"
@@ -256,15 +354,18 @@ async def face(ws: WebSocket):
             n += 1
             await asyncio.sleep(max(0.0, start + n / FPS - time.monotonic()))
             kind, pts, cut, frame = 3, 0.0, False, None
-            if session._out_q:
-                frame, pts = session._out_q.popleft()
+            # The frame due by this tick's own time, not the clock's: a wake-up a few ms late would
+            # make two frames due at one tick (one dropped) and none at the next.
+            got = mouth.take(start + (n + 0.5) / FPS)
+            if got is not None:
+                frame, pts = got
                 kind = 2
-                cut = bodies is not None and bodies.take_cut()
-            elif session.idle:
-                if bodies is not None:
-                    frame, cut = bodies.listening()
+                cut = walk is not None and walk.take_cut()
+            elif mouth.idle:
+                if walk is not None:
+                    frame, cut = walk.listening()
                 else:
-                    frame, _ = session._bg_store.get_frame()
+                    frame = mouth.quiet_frame()
                 kind = 1
             if frame is None:
                 frame, kind = last, 3
@@ -303,7 +404,7 @@ async def face(ws: WebSocket):
                 break
             if msg.get("bytes"):
                 pcm = np.frombuffer(msg["bytes"], dtype="<i2").astype(np.float32) / 32768.0
-                session.push_audio(pcm)
+                mouth.push(pcm)
             elif msg.get("text"):
                 body = json.loads(msg["text"])
                 cmd = body.get("type")
@@ -311,14 +412,14 @@ async def face(ws: WebSocket):
                     seen = float(body.get("slot", 0))
                     unseen[:] = [u for u in unseen if u[0] > seen]
                 elif cmd == "end":
-                    kt.flush_tail(session)
+                    mouth.end()
                 elif cmd == "interrupt":
-                    session.interrupt()
+                    mouth.interrupt()
     except WebSocketDisconnect:
         pass
     finally:
         sender.cancel()
-        session.interrupt()
+        mouth.interrupt()
         if viewer is ws:
             viewer = None
         log.info("viewer gone (idle %d, speaking %d, waiting %d frames; %d dropped on a full link)",

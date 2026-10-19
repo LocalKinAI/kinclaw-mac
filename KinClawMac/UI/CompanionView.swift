@@ -602,7 +602,7 @@ struct CompanionView: View {
         if AvatarStage.source != nil {
             Menu {
                 // Her photograph made to talk on the box: a body rendered once by
-                // Ditto, the mouth by MuseTalk as she speaks (LiveFace).
+                // Ditto, the mouth by QuickTalk as she speaks (LiveFace).
                 Toggle(isOn: Binding(
                     get: { liveFaceOn },
                     set: { on in

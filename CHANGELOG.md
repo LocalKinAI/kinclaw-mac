@@ -8,6 +8,24 @@ A day and a half on two things: making the companion mode something you
 can actually talk to, and making Cowork and Code tell you what the
 agent is allowed to do.
 
+### Changed — 真人 · 实时口型: her mouth is QuickTalk now
+
+「你看看opentalking」 → OpenTalking's QuickTalk tested against MuseTalk on her own talking body and voice →
+「你真是眼瞎了吗，好太多了啊」 → 「做吧，接进去」 → 「效果非常的好啊，就是这个」.
+
+- **The mouth**: QuickTalk (OpenTalking's realtime lip-sync, TorchScript on the box's MPS) draws her teeth and
+  lips so they look photographed; MuseTalk's teeth were a white smear. The two Ditto bodies, the walk between them,
+  the 20 frames a second and the app's side are unchanged — no rebuild needed.
+- **kin-face** (`scripts/kin-face`): `kin_quicktalk.py` is the new mouth; `server.py` takes either mouth
+  (`FACE_ENGINE`, or a word in the box's `~/kin-avatar/face/engine`; QuickTalk by default) and re-execs itself in
+  that mouth's virtualenv, so Settings and the console start it as before.
+  - A sentence's first frame is ready 0.11–0.13 s after it comes; every frame is handed out at its own time
+    (push + `latency_s` 0.35 + its place), 433 of 433 on time in a four-sentence test.
+  - 10.3 GB on the box (3.1 GB on the GPU — QuickTalk as shipped keeps 31 MB a frame, 25 GB for both bodies);
+    ready in 36 s, then every body frame is drawn once in the background (30 s) so the GPU has its kernels.
+- **Licence**: OpenTalking's code is Apache-2.0; QuickTalk's weights state none and use InsightFace's
+  non-commercial face finder — for her, not for a product.
+
 ### Added — FLUX 3 Image Klein, the box's second picture model (画 · 改)
 
 「看看这个吧」 → tested on the box beside Qwen-Image-2.1-Turbo → 「接进 App 吧，画和改都能选 FLUX 3」.
